@@ -1,17 +1,20 @@
 /**
- * Browser bootstrap. Hosts the throwaway DemoScene that showcases the Phase A
- * engine (sprites, font, particles, input, fixed-step loop); later phases
- * replace it with the real title scene.
+ * Browser bootstrap. Hosts a throwaway dungeon fly-through demo that showcases
+ * the Phase B world layer (generator, tile renderer, camera); the gameplay
+ * phase replaces it with the real title scene.
  */
 
-import { VIEW_H, VIEW_W } from './constants';
-import { measureText } from './engine/font';
-import { burstSparkle, ParticleSystem } from './engine/particles';
-import { Rng } from './engine/rng';
+import { PALETTE } from './engine/sprites';
+import { dailySeed } from './engine/rng';
 import { Renderer } from './engine/renderer';
-import { PALETTE, SPRITE_NAMES, SPRITES } from './engine/sprites';
+import { VIEW_H, VIEW_W } from './constants';
 import { Game } from './game';
 import type { Scene } from './game';
+import { Camera } from './world/camera';
+import { generateDungeon } from './world/dungeon';
+import type { Dungeon } from './world/dungeon';
+import { drawTileMap } from './world/tiles';
+import { TILE } from './constants';
 
 declare global {
   interface Window {
@@ -20,81 +23,66 @@ declare global {
   }
 }
 
-class DemoScene implements Scene {
-  private readonly rng = new Rng(Date.now() >>> 0);
-  private readonly particles = new ParticleSystem();
+class DungeonDemoScene implements Scene {
+  private readonly dungeon: Dungeon;
+  private readonly camera = new Camera();
   private t = 0;
-  private ticks = 0;
-  private sparkleTimer = 0.4;
-  private frames = 0;
-  private fps = 0;
-  private lastFpsMs = 0;
+  private dir = 1;
+
+  constructor() {
+    this.dungeon = generateDungeon({ seed: dailySeed(), level: 2 });
+    const { spawn } = this.dungeon;
+    this.camera.snapTo(spawn.tx * TILE, spawn.ty * TILE);
+  }
 
   update(dt: number, _game: Game): void {
     this.t += dt;
-    this.ticks++;
-    this.sparkleTimer -= dt;
-    if (this.sparkleTimer <= 0) {
-      this.sparkleTimer = 0.55;
-      burstSparkle(
-        this.particles,
-        this.rng.float(16, VIEW_W - 16),
-        this.rng.float(24, VIEW_H - 24),
-      );
+    // Ping-pong pan across the whole dungeon.
+    const speed = 90; // px/s
+    this.camera.x += speed * dt * this.dir;
+    const maxX = this.dungeon.map.widthPx - VIEW_W;
+    if (this.camera.x > maxX || this.camera.x < 0) {
+      this.dir *= -1;
+      this.camera.x = Math.min(Math.max(this.camera.x, 0), maxX);
     }
-    this.particles.update(dt);
+    // Track the floor surface (solid with air above) near the view center.
+    const map = this.dungeon.map;
+    const midCol = Math.floor((this.camera.x + VIEW_W / 2) / TILE);
+    for (let ty = map.h - 1; ty > 0; ty--) {
+      if (map.isSolid(midCol, ty) && !map.isSolid(midCol, ty - 1)) {
+        const targetY = ty * TILE - VIEW_H * 0.65;
+        const clamped = Math.min(Math.max(targetY, 0), map.heightPx - VIEW_H);
+        this.camera.y += (clamped - this.camera.y) * Math.min(1, 3 * dt);
+        break;
+      }
+    }
+    this.camera.clampTo(this.dungeon.map.widthPx, this.dungeon.map.heightPx);
+    this.camera.update(dt);
   }
 
   render(r: Renderer, _game: Game): void {
-    r.setCamera(0, 0);
+    const d = this.dungeon;
+    r.setCamera(this.camera.viewX, this.camera.viewY);
     r.clear('#0B1120');
+    drawTileMap(r, d.map, this.camera.viewX, this.camera.viewY);
 
-    r.textCentered('PIXEL QUEST - ENGINE DEMO', VIEW_W / 2, 5, PALETTE.C);
-
-    // Every sprite in a labeled flow grid.
-    let x = 8;
-    let y = 20;
-    let rowH = 0;
-    for (const name of SPRITE_NAMES) {
-      const rows = SPRITES[name];
-      const w = rows[0].length;
-      const h = rows.length;
-      const cellW = Math.max(w, measureText(name)) + 9;
-      if (x + cellW > VIEW_W - 8) {
-        x = 8;
-        y += rowH;
-        rowH = 0;
-      }
-      const cx = x + Math.floor((cellW - 9) / 2);
-      r.sprite(name, Math.round(cx - w / 2), y, { ui: true });
-      r.textCentered(name, cx, y + h + 2, PALETTE.t);
-      rowH = Math.max(rowH, h + 14);
-      x += cellW;
+    // Entity markers straight from the generator output.
+    const frame = Math.floor(this.t * 8);
+    for (const c of d.coins) {
+      r.sprite(`coin${(frame % 4) + 1}` as 'coin1', c.tx * TILE + 4, c.ty * TILE + 4);
     }
-
-    // Bouncing player 1 (sine bounce, flip + leg animation).
-    const bounce = Math.abs(Math.sin(this.t * 3.2));
-    const px = VIEW_W / 2 - 6;
-    const py = VIEW_H - 34 - bounce * 22;
-    const runFrame = Math.floor(this.t * 8) % 2 === 0 ? 'player1Run1' : 'player1Run2';
-    const flipX = Math.sin(this.t * 1.6) < 0;
-    r.sprite(bounce > 0.85 ? 'player1Jump' : runFrame, Math.round(px), Math.round(py), {
-      ui: true,
-      flipX,
-    });
-
-    this.particles.render(r.ctx, 0, 0);
-
-    // FPS-ish counters (render frames vs. fixed ticks).
-    this.frames++;
-    const now = performance.now();
-    if (now - this.lastFpsMs >= 1000) {
-      this.fps = this.frames;
-      this.frames = 0;
-      this.lastFpsMs = now;
+    for (const s of d.slimes) {
+      r.sprite(frame % 2 === 0 ? 'slime1' : 'slime2', s.tx * TILE + 1, s.ty * TILE + 6);
     }
-    r.text(`FPS ${this.fps}`, 8, VIEW_H - 16, PALETTE.t);
-    r.text(`TICKS ${this.ticks}`, 8, VIEW_H - 8, PALETTE.t);
+    for (const t of d.torches) {
+      r.sprite(frame % 2 === 0 ? 'torch1' : 'torch2', t.tx * TILE + 5, t.ty * TILE + 2);
+    }
+    r.sprite('player1Idle', d.spawn.tx * TILE + 2, d.spawn.ty * TILE + 2);
+    r.sprite('doorClosed', d.exit.tx * TILE, (d.exit.ty - 1) * TILE);
+
+    r.textCentered('PIXEL QUEST - DUNGEON DEMO', VIEW_W / 2, 5, PALETTE.C);
+    r.text(`SEED ${d.seed}`, 8, VIEW_H - 16, PALETTE.t);
+    r.text(`LEVEL ${d.level}  ${d.map.w}x${d.map.h}`, 8, VIEW_H - 8, PALETTE.t);
   }
 }
 
@@ -118,6 +106,6 @@ window.addEventListener('resize', fit);
 new ResizeObserver(fit).observe(document.documentElement);
 fit();
 
-game.setScene(new DemoScene());
+game.setScene(new DungeonDemoScene());
 game.start();
 window.__pq = { game };
