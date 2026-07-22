@@ -47,3 +47,42 @@ export const MAX_SUBSTEP = 4;
 
 /** Exponential follow rate (1/s): higher = tighter tracking. */
 export const CAMERA_FOLLOW_RATE = 8;
+
+// --- Health & damage (GAME-DESIGN §6). ---
+
+/** Hearts per player (and the cap). */
+export const HEART_MAX = 3;
+/** Invulnerability after taking damage (s). */
+export const INVULN_TIME = 1.2;
+/** Invulnerability after a co-op respawn (s). */
+export const RESPAWN_INVULN = 1.5;
+/** Delay before a dead co-op player respawns at their partner (s). */
+export const COOP_RESPAWN_DELAY = 2.5;
+/** Damage knockback (px/s): away from the source, biased upward. */
+export const HURT_KNOCKBACK_X = 150;
+export const HURT_KNOCKBACK_Y = -190;
+
+// --- Entities (GAME-DESIGN §9). ---
+
+/** Slime patrol speed (px/s) = 1.5 tiles/s. */
+export const SLIME_SPEED = 24;
+/** Slime collision box (px). */
+export const SLIME_BODY_W = 12;
+export const SLIME_BODY_H = 8;
+/** Stomp bounce = this × JUMP_VELOCITY (upward). */
+export const STOMP_BOUNCE = 0.6;
+/** Minimum downward speed (px/s) for a hit to count as a stomp. */
+export const STOMP_MIN_VY = 40;
+/** Coin pickup radius from player center (px). */
+export const COIN_RADIUS = 12;
+/** Platform drop-through hold time after down+jump (s). */
+export const DROP_THROUGH_TIME = 0.18;
+
+// --- Run & scoring (GAME-DESIGN §7). ---
+
+export const LEVELS_PER_RUN = 3;
+export const COIN_SCORE = 10;
+export const STOMP_SCORE = 50;
+export const LEVEL_SCORE = 100;
+/** "LEVEL n" banner duration between levels (s). */
+export const LEVEL_BANNER_TIME = 1.2;

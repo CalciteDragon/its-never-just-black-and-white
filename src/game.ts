@@ -5,9 +5,10 @@
  */
 
 import { STEP } from './constants';
+import { AudioSys } from './engine/audio';
 import { Input } from './engine/input';
 import { Renderer } from './engine/renderer';
-import { SaveStore } from './engine/save';
+import { SAVE_KEYS, SaveStore } from './engine/save';
 
 export interface Scene {
   enter?(game: Game): void;
@@ -52,6 +53,7 @@ export class Game {
   readonly input: Input;
   readonly renderer: Renderer;
   readonly save: SaveStore;
+  readonly audio: AudioSys;
   /** Total simulated seconds (advances in fixed steps). */
   time = 0;
 
@@ -60,10 +62,18 @@ export class Game {
   private running = false;
   private lastMs = 0;
 
-  constructor(canvas: HTMLCanvasElement, opts?: { save?: SaveStore }) {
+  constructor(canvas: HTMLCanvasElement, opts?: { save?: SaveStore; audio?: AudioSys }) {
     this.input = new Input();
     this.renderer = new Renderer(canvas);
     this.save = opts?.save ?? new SaveStore();
+    this.audio = opts?.audio ?? new AudioSys();
+    this.audio.muted = this.save.getFlag(SAVE_KEYS.muted);
+  }
+
+  /** Flip mute and persist the choice. */
+  toggleMute(): void {
+    this.audio.muted = !this.audio.muted;
+    this.save.setFlag(SAVE_KEYS.muted, this.audio.muted);
   }
 
   setScene(s: Scene): void {
@@ -87,13 +97,12 @@ export class Game {
       this.stepper.advance(elapsedSec, (dt) => {
         scene.update(dt, this);
         this.time += dt;
+        // Edges clear after EACH consumed step: a two-step frame must not
+        // double-fire pressed(); a zero-step frame must not drop presses.
+        this.input.update();
       });
-      // Edges clear once per rendered frame, after all fixed steps.
-      this.input.update();
       scene.render(this.renderer, this);
       this.renderer.present();
-    } else {
-      this.input.update();
     }
   }
 
