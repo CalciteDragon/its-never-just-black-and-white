@@ -1,32 +1,31 @@
+/**
+ * Deliberately minimal. Phase 4 replaces the solver wholesale with the OBB/SAT
+ * one, so these cover only "the temporary AABB solver still works" plus the
+ * GAME-DESIGN §6 derived numbers, which outlive the implementation.
+ */
+
 import { describe, expect, it } from 'vitest';
 import {
   GRAVITY_FALL,
   GRAVITY_RISE,
   JUMP_VELOCITY,
   MAX_FALL_SPEED,
+  PLAYER_SIZE,
   RUN_SPEED,
   STEP,
   TILE,
 } from '../src/constants';
-import {
-  applyGravity,
-  isSupported,
-  moveBody,
-  rectOverlapsSpikes,
-  rectOverlapsTile,
-} from '../src/world/physics';
+import { applyGravity, isSupported, moveBody } from '../src/world/physics';
 import type { Body } from '../src/world/physics';
 import { Tile, TileMap } from '../src/world/tiles';
 
-/** Build a map from ASCII art: '#' solid, '=' platform, '^' spike, '.' empty. */
+/** Build a map from ASCII art: '#' solid, '.' empty. */
 function mapFrom(rows: string[]): TileMap {
   const m = new TileMap(rows[0].length, rows.length);
-  const lookup: Record<string, Tile> = { '#': Tile.Solid, '=': Tile.Platform, '^': Tile.Spike };
   rows.forEach((row, ty) => {
     for (let tx = 0; tx < row.length; tx++) {
-      const t = lookup[row[tx]];
-      if (t !== undefined) {
-        m.set(tx, ty, t);
+      if (row[tx] === '#') {
+        m.set(tx, ty, Tile.Solid);
       }
     }
   });
@@ -34,14 +33,14 @@ function mapFrom(rows: string[]): TileMap {
 }
 
 function body(x: number, y: number, vx = 0, vy = 0): Body {
-  return { x, y, w: 10, h: 13, vx, vy };
+  return { x, y, w: PLAYER_SIZE, h: PLAYER_SIZE, vx, vy };
 }
 
 describe('moveBody', () => {
   const floor = mapFrom(['........', '........', '........', '........', '########']);
 
   it('lands flush on a floor and reports landed exactly once', () => {
-    const b = body(20, 10, 0, 0);
+    const b = body(2 * TILE, 10, 0, 0);
     let landedCount = 0;
     for (let i = 0; i < 120; i++) {
       applyGravity(b, STEP);
@@ -58,7 +57,7 @@ describe('moveBody', () => {
 
   it('stops at walls with the correct hitWall sign and flush snap', () => {
     const walls = mapFrom(['#......#', '#......#', '#......#', '########']);
-    const right = body(30, 2 * TILE, 300, 0);
+    const right = body(3 * TILE, 2 * TILE, 600, 0);
     let hit: -1 | 0 | 1 = 0;
     for (let i = 0; i < 30; i++) {
       const r = moveBody(right, walls, STEP);
@@ -71,7 +70,7 @@ describe('moveBody', () => {
     expect(right.x + right.w).toBeCloseTo(7 * TILE, 1);
     expect(right.vx).toBe(0);
 
-    const left = body(30, 2 * TILE, -300, 0);
+    const left = body(3 * TILE, 2 * TILE, -600, 0);
     let hitL: -1 | 0 | 1 = 0;
     for (let i = 0; i < 30; i++) {
       const r = moveBody(left, walls, STEP);
@@ -86,7 +85,7 @@ describe('moveBody', () => {
 
   it('bumps its head on a ceiling and zeroes vy', () => {
     const cave = mapFrom(['########', '........', '........', '########']);
-    const b = body(20, 2 * TILE + 2, 0, -300);
+    const b = body(2 * TILE, 2 * TILE + 2, 0, -600);
     let bumped = false;
     for (let i = 0; i < 30; i++) {
       const r = moveBody(b, cave, STEP);
@@ -101,7 +100,7 @@ describe('moveBody', () => {
   });
 
   it('never tunnels through a thin floor at extreme speed', () => {
-    const b = body(20, 0, 0, 2000); // 33 px per frame vs a 16 px tile
+    const b = body(2 * TILE, 0, 0, 4000); // 66 px per frame vs a 32 px tile
     for (let i = 0; i < 5; i++) {
       moveBody(b, floor, STEP);
     }
@@ -109,33 +108,9 @@ describe('moveBody', () => {
     expect(b.vy).toBe(0);
   });
 
-  it('passes up through a platform, lands on it, and can drop through', () => {
-    const plat = mapFrom(['........', '........', '..====..', '........', '########']);
-    // Rising: no ceiling hit.
-    const riser = body(36, 3 * TILE + 2, 0, -200);
-    const rr = moveBody(riser, plat, STEP);
-    expect(rr.hitCeiling).toBe(false);
-    expect(riser.y).toBeLessThan(3 * TILE + 2);
-
-    // Falling from above: lands on the platform surface.
-    const faller = body(36, 2, 0, 0);
-    for (let i = 0; i < 90; i++) {
-      applyGravity(faller, STEP);
-      moveBody(faller, plat, STEP);
-    }
-    expect(faller.y + faller.h).toBeCloseTo(2 * TILE, 1);
-
-    // Drop through on request, then land on the real floor.
-    for (let i = 0; i < 90; i++) {
-      applyGravity(faller, STEP);
-      moveBody(faller, plat, STEP, { dropThrough: true });
-    }
-    expect(faller.y + faller.h).toBeCloseTo(4 * TILE, 1);
-  });
-
   it('stops flush against an interior block and stays put once vx zeroes', () => {
     const walls = mapFrom(['#......#', '#..##..#', '#......#', '########']);
-    const b = body(17, TILE + 1, 400, 0); // row 1: runs into the block at col 3
+    const b = body(TILE + 1, TILE + 1, 800, 0); // row 1: runs into the block at col 3
     for (let i = 0; i < 10; i++) {
       moveBody(b, walls, STEP);
     }
@@ -147,37 +122,41 @@ describe('moveBody', () => {
   });
 });
 
-describe('support and overlap queries', () => {
-  const floor = mapFrom(['........', '........', '########']);
-
-  it('isSupported is true at rest on ground, false mid-air', () => {
-    const grounded = body(10, 2 * TILE - 13, 0, 0);
-    expect(isSupported(grounded, floor)).toBe(true);
-    const airborne = body(10, 4, 0, 0);
-    expect(isSupported(airborne, floor)).toBe(false);
+describe('the open top and bottom', () => {
+  it('falls straight out of the bottom of the map', () => {
+    const m = mapFrom(['........', '........', '........']);
+    const b = body(2 * TILE, 0, 0, 0);
+    for (let i = 0; i < 60; i++) {
+      applyGravity(b, STEP);
+      moveBody(b, m, STEP);
+    }
+    expect(b.y).toBeGreaterThan(m.heightPx);
   });
 
-  it('rectOverlapsTile finds tile types in a rect', () => {
-    const m = mapFrom(['........', '...^....', '########']);
-    expect(rectOverlapsTile(m, 3 * TILE, TILE, 10, 10, Tile.Spike)).toBe(true);
-    expect(rectOverlapsTile(m, 0, 0, 10, 10, Tile.Spike)).toBe(false);
-  });
-
-  it('spike hurt-box forgives the top half and the 2px side edges', () => {
-    const m = mapFrom(['........', '...^....', '########']);
-    const sx = 3 * TILE;
-    const sy = TILE;
-    // Feet resting just above the spike tile's midline: safe.
-    expect(rectOverlapsSpikes(m, sx, sy - 13, 10, 13)).toBe(false);
-    // Standing inside the lower half: hit.
-    expect(rectOverlapsSpikes(m, sx + 3, sy + 10, 10, 6)).toBe(true);
-    // Grazing the 2px left edge inset: safe.
-    expect(rectOverlapsSpikes(m, sx - 8, sy + 10, 10, 6)).toBe(false);
+  it('rises straight out of the top, even flush against a side wall', () => {
+    const m = mapFrom(['........', '........', '........']);
+    const b = body(0.5, 2 * TILE, 0, -JUMP_VELOCITY); // hugging the left wall
+    for (let i = 0; i < 60; i++) {
+      const r = moveBody(b, m, STEP);
+      expect(r.hitCeiling).toBe(false);
+    }
+    expect(b.y + b.h).toBeLessThan(0);
   });
 });
 
-describe('gravity and §5 kinematic targets', () => {
-  it('applyGravity uses rise/fall split and caps at terminal velocity', () => {
+describe('support queries', () => {
+  const floor = mapFrom(['........', '........', '########']);
+
+  it('isSupported is true at rest on ground, false mid-air', () => {
+    const grounded = body(TILE, 2 * TILE - PLAYER_SIZE, 0, 0);
+    expect(isSupported(grounded, floor)).toBe(true);
+    const airborne = body(TILE, 4, 0, 0);
+    expect(isSupported(airborne, floor)).toBe(false);
+  });
+});
+
+describe('gravity and the §6 derived targets', () => {
+  it('applyGravity uses the rise/fall split and caps at terminal velocity', () => {
     const rising = body(0, 0, 0, -100);
     applyGravity(rising, 0.1);
     expect(rising.vy).toBeCloseTo(-100 + GRAVITY_RISE * 0.1, 5);
@@ -189,32 +168,38 @@ describe('gravity and §5 kinematic targets', () => {
     expect(terminal.vy).toBe(MAX_FALL_SPEED);
   });
 
-  it('jump peak height is 3.2–4.0 tiles (analytic)', () => {
-    const peak = (JUMP_VELOCITY * JUMP_VELOCITY) / (2 * GRAVITY_RISE) / TILE;
-    expect(peak).toBeGreaterThanOrEqual(3.2);
-    expect(peak).toBeLessThanOrEqual(4.0);
+  it('fall gravity is 1.6× rise gravity; terminal is 24 tiles/s', () => {
+    expect(GRAVITY_FALL / GRAVITY_RISE).toBeCloseTo(1.6, 6);
+    expect(MAX_FALL_SPEED / TILE).toBe(24);
   });
 
-  it('fall gravity is ~1.6× rise gravity; terminal ≈ 22 tiles/s', () => {
-    const ratio = GRAVITY_FALL / GRAVITY_RISE;
-    expect(ratio).toBeGreaterThanOrEqual(1.5);
-    expect(ratio).toBeLessThanOrEqual(1.7);
-    expect(MAX_FALL_SPEED / TILE).toBeGreaterThanOrEqual(20);
-    expect(MAX_FALL_SPEED / TILE).toBeLessThanOrEqual(24);
+  it('jump peak is 3.48 tiles', () => {
+    const peakTiles = (JUMP_VELOCITY * JUMP_VELOCITY) / (2 * GRAVITY_RISE) / TILE;
+    expect(peakTiles).toBeCloseTo(3.48, 2);
   });
 
-  it('full-speed jump clears at least 3.5 tiles horizontally (analytic)', () => {
+  it('full-speed jump clearance is 4.56 tiles — 4-tile gaps only', () => {
     const riseT = JUMP_VELOCITY / GRAVITY_RISE;
     const peakPx = (JUMP_VELOCITY * JUMP_VELOCITY) / (2 * GRAVITY_RISE);
     const fallT = Math.sqrt((2 * peakPx) / GRAVITY_FALL);
+    expect(riseT + fallT).toBeCloseTo(0.57, 2);
     const clearanceTiles = ((riseT + fallT) * RUN_SPEED) / TILE;
-    expect(clearanceTiles).toBeGreaterThanOrEqual(3.5);
+    expect(clearanceTiles).toBeCloseTo(4.56, 2);
+    // A 5-tile gap must NOT be jumpable — those need a flip or a pad.
+    expect(clearanceTiles).toBeLessThan(5);
   });
 
-  it('simulated jump apex matches the analytic peak within 5%', () => {
+  /**
+   * The apex undershoots the continuous solution by v₀·dt/2 ≈ 5.8 px (5.2 %),
+   * because this solver integrates velocity before position. That is a property
+   * of the temporary Euler step, not of the tuning — phase 4's sub-stepped
+   * solver has to close it to meet its own ±5 % target.
+   */
+  it('the simulated apex matches the analytic peak within 6%', () => {
     const tall = new TileMap(8, 40);
     tall.fillRect(0, 39, 8, 1, Tile.Solid);
-    const b = body(20, 39 * TILE - 13, 0, -JUMP_VELOCITY);
+    const startY = 39 * TILE - PLAYER_SIZE;
+    const b = body(2 * TILE, startY, 0, -JUMP_VELOCITY);
     let minY = b.y;
     for (let i = 0; i < 200; i++) {
       applyGravity(b, STEP);
@@ -224,8 +209,9 @@ describe('gravity and §5 kinematic targets', () => {
         break;
       }
     }
-    const simPeakPx = 39 * TILE - 13 - minY;
+    const simPeakPx = startY - minY;
     const analyticPx = (JUMP_VELOCITY * JUMP_VELOCITY) / (2 * GRAVITY_RISE);
-    expect(Math.abs(simPeakPx - analyticPx) / analyticPx).toBeLessThan(0.05);
+    expect(analyticPx - simPeakPx).toBeCloseTo((JUMP_VELOCITY * STEP) / 2, 0);
+    expect(Math.abs(simPeakPx - analyticPx) / analyticPx).toBeLessThan(0.06);
   });
 });

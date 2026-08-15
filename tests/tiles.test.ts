@@ -8,27 +8,43 @@ describe('TileMap', () => {
     expect(m.get(4, 4)).toBe(Tile.Solid);
     m.set(4, 4, Tile.Empty);
     expect(m.get(4, 4)).toBe(Tile.Empty);
-    m.set(4, 4, Tile.Platform);
-    expect(m.get(4, 4)).toBe(Tile.Platform);
+    m.set(4, 4, Tile.PadUp);
+    expect(m.get(4, 4)).toBe(Tile.PadUp);
+    expect(m.isSolid(4, 4)).toBe(false); // a pad is not a wall
   });
 
-  it('reads out-of-bounds as Solid on sides/top and Empty below the bottom', () => {
+  it('the tile enum is exactly the six chars of the level format', () => {
+    expect(Tile.Empty).toBe(0);
+    expect(Tile.Solid).toBe(1);
+    expect(new Set([Tile.PadUp, Tile.PadDown, Tile.PadLeft, Tile.PadRight]).size).toBe(4);
+  });
+
+  it('seals the sides and opens the top and bottom', () => {
     const m = new TileMap(10, 8);
     expect(m.get(-1, 3)).toBe(Tile.Solid);
     expect(m.get(10, 3)).toBe(Tile.Solid);
-    expect(m.get(3, -1)).toBe(Tile.Solid);
+    expect(m.get(3, -1)).toBe(Tile.Empty);
     expect(m.get(3, 8)).toBe(Tile.Empty);
-    expect(m.get(-5, 100)).toBe(Tile.Empty); // below-bottom wins (pit)
+  });
+
+  it('the vertical check wins in the corners, so a wall-hugger still escapes', () => {
+    // Both directions of OOB at once: vertical is evaluated first, so leaving
+    // through the top while flush against a side wall reads Empty, not Solid.
+    const m = new TileMap(10, 8);
+    expect(m.get(-1, -1)).toBe(Tile.Empty);
+    expect(m.get(10, -1)).toBe(Tile.Empty);
+    expect(m.get(-1, 8)).toBe(Tile.Empty);
+    expect(m.get(10, 99)).toBe(Tile.Empty);
   });
 
   it('ignores out-of-bounds writes and clips fillRect', () => {
     const m = new TileMap(4, 4);
     m.set(-1, 0, Tile.Solid);
     m.set(0, 99, Tile.Solid);
-    m.fillRect(-2, -2, 100, 100, Tile.Spike);
+    m.fillRect(-2, -2, 100, 100, Tile.PadDown);
     for (let y = 0; y < 4; y++) {
       for (let x = 0; x < 4; x++) {
-        expect(m.get(x, y)).toBe(Tile.Spike);
+        expect(m.get(x, y)).toBe(Tile.PadDown);
       }
     }
   });

@@ -1,9 +1,9 @@
 {
-  "name": "pixel-quest",
+  "name": "its-never-just-black-and-white",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
-  "description": "A pixel-art dungeon platformer with procedurally generated levels, local two-player co-op, and a daily challenge. TypeScript + Canvas, zero runtime dependencies.",
+  "description": "A minimalist momentum platformer. A rigid-body square with real corner collision, and a flip that inverts both the palette and gravity. TypeScript + Canvas, zero runtime dependencies.",
   "scripts": {
     "dev": "vite",
     "build": "npm run typecheck && vite build",

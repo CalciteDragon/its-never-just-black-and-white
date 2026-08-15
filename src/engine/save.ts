@@ -1,13 +1,14 @@
 /**
- * Best-score + flag persistence. Storage is injectable for tests; defaults to
+ * Best-time + flag persistence. Storage is injectable for tests; defaults to
  * localStorage when available, otherwise an in-memory Map. Every storage
  * access is wrapped in try/catch (private mode, quota, corrupt JSON).
+ *
+ * There is no score in this game — a level result is a time, and lower wins.
  */
 
-export interface ScoreEntry {
-  score: number;
+export interface TimeEntry {
+  /** Completion time in milliseconds. Lower is better. */
   timeMs: number;
-  coins: number;
   dateIso: string;
 }
 
@@ -16,14 +17,15 @@ export interface StorageLike {
   setItem(k: string, v: string): void;
 }
 
-/** localStorage keys (GAME-DESIGN §3). */
+/** localStorage keys (GAME-DESIGN §3/§12). */
 export const SAVE_KEYS = {
-  adventure: 'pq.best.adventure',
-  coop: 'pq.best.coop',
-  muted: 'pq.muted',
-  /** Per-day daily-challenge best, e.g. daily('2026-07-16'). */
-  daily(dateStr: string): string {
-    return `pq.daily.${dateStr}`;
+  /** Furthest level reached. */
+  progress: 'bw.progress',
+  muted: 'bw.muted',
+  editorDraft: 'bw.editor.draft',
+  /** Per-level best time, e.g. best('01-first-steps'). */
+  best(levelId: string): string {
+    return `bw.best.${levelId}`;
   },
 } as const;
 
@@ -51,24 +53,16 @@ function defaultStorage(): StorageLike {
   return new MemoryStorage();
 }
 
-function isScoreEntry(v: unknown): v is ScoreEntry {
+function isTimeEntry(v: unknown): v is TimeEntry {
   if (typeof v !== 'object' || v === null) {
     return false;
   }
   const e = v as Record<string, unknown>;
-  return (
-    typeof e.score === 'number' &&
-    typeof e.timeMs === 'number' &&
-    typeof e.coins === 'number' &&
-    typeof e.dateIso === 'string'
-  );
+  return typeof e.timeMs === 'number' && typeof e.dateIso === 'string';
 }
 
-/** Is `a` a better result than `b`? Higher score wins; ties → lower timeMs. */
-export function isBetterScore(a: ScoreEntry, b: ScoreEntry): boolean {
-  if (a.score !== b.score) {
-    return a.score > b.score;
-  }
+/** Is `a` a better result than `b`? Strictly faster wins; a tie is not better. */
+export function isBetterTime(a: TimeEntry, b: TimeEntry): boolean {
   return a.timeMs < b.timeMs;
 }
 
@@ -80,29 +74,29 @@ export class SaveStore {
   }
 
   /** Stored best for a key, or null (missing / corrupt / unreadable). */
-  getBest(key: string): ScoreEntry | null {
+  getBest(key: string): TimeEntry | null {
     try {
       const raw = this.storage.getItem(key);
       if (raw === null) {
         return null;
       }
       const parsed: unknown = JSON.parse(raw);
-      return isScoreEntry(parsed) ? parsed : null;
+      return isTimeEntry(parsed) ? parsed : null;
     } catch {
       return null;
     }
   }
 
-  /** Record a result; persists (and reports) only if it beats the stored best. */
-  submit(key: string, entry: ScoreEntry): { isNewBest: boolean } {
+  /** Record a time; persists (and reports) only if it beats the stored best. */
+  submit(key: string, entry: TimeEntry): { isNewBest: boolean } {
     const best = this.getBest(key);
-    if (best !== null && !isBetterScore(entry, best)) {
+    if (best !== null && !isBetterTime(entry, best)) {
       return { isNewBest: false };
     }
     try {
       this.storage.setItem(key, JSON.stringify(entry));
     } catch {
-      // Persistence is best-effort; the run result still counts this session.
+      // Persistence is best-effort; the result still counts this session.
     }
     return { isNewBest: true };
   }

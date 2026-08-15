@@ -1,16 +1,15 @@
 /**
- * Offscreen 480×270 pixel canvas, integer-scaled to the visible canvas with
+ * Offscreen VIEW_W×VIEW_H canvas, integer-scaled to the visible canvas with
  * letterboxing. Constructing a Renderer requires a DOM (browser only), but
- * computeScale is pure and node-tested. All draws snap to integer pixels.
+ * computeScale is pure and node-tested.
+ *
+ * Phase 3 owns the look: antialiased shapes, rotated rects, and the post pass.
+ * For now this is a rect-and-text blitter and nothing more.
  */
 
 import { VIEW_H, VIEW_W } from '../constants';
 import { drawText, drawTextCentered } from './font';
-import { buildSpriteCache } from './sprites';
-import type { SpriteName } from './sprites';
-
-/** Letterbox bar color (background void, GAME-DESIGN §2). */
-export const LETTERBOX_COLOR = '#0B1120';
+import { palette } from './palette';
 
 export interface ScaleFit {
   scale: number;
@@ -28,21 +27,13 @@ export function computeScale(winW: number, winH: number): ScaleFit {
   };
 }
 
-export interface SpriteDrawOpts {
-  flipX?: boolean;
-  ui?: boolean;
-  alpha?: number;
-}
-
 export class Renderer {
-  /** Offscreen 2d context (480×270, smoothing off). Scenes draw into this. */
+  /** Offscreen 2d context. Scenes draw into this. */
   readonly ctx: CanvasRenderingContext2D;
 
   private readonly visible: HTMLCanvasElement;
   private readonly visibleCtx: CanvasRenderingContext2D;
   private readonly offscreen: HTMLCanvasElement;
-  private sprites: Map<SpriteName, HTMLCanvasElement> | null = null;
-  private mirrored: Map<SpriteName, HTMLCanvasElement> | null = null;
   private camX = 0;
   private camY = 0;
 
@@ -82,25 +73,6 @@ export class Renderer {
     this.ctx.fillRect(dx, dy, Math.round(w), Math.round(h));
   }
 
-  sprite(name: SpriteName, x: number, y: number, opts?: SpriteDrawOpts): void {
-    const flip = opts?.flipX === true;
-    const cache = flip ? this.mirroredCache() : this.spriteCache();
-    const img = cache.get(name);
-    if (!img) {
-      return;
-    }
-    const dx = Math.round(opts?.ui ? x : x - this.camX);
-    const dy = Math.round(opts?.ui ? y : y - this.camY);
-    const alpha = opts?.alpha;
-    if (alpha !== undefined && alpha < 1) {
-      this.ctx.globalAlpha = Math.max(0, alpha);
-      this.ctx.drawImage(img, dx, dy);
-      this.ctx.globalAlpha = 1;
-    } else {
-      this.ctx.drawImage(img, dx, dy);
-    }
-  }
-
   /** Bitmap text. UI space by default; pass ui = false for world space. */
   text(str: string, x: number, y: number, color: string, scale = 1, ui = true): void {
     const dx = Math.round(ui ? x : x - this.camX);
@@ -120,7 +92,9 @@ export class Renderer {
     const { scale, offX, offY } = computeScale(this.visible.width, this.visible.height);
     const vctx = this.visibleCtx;
     vctx.imageSmoothingEnabled = false;
-    vctx.fillStyle = LETTERBOX_COLOR;
+    // The letterbox is the background continuing past the frame, so it tracks
+    // the palette rather than being a colour of its own.
+    vctx.fillStyle = palette.paper;
     vctx.fillRect(0, 0, this.visible.width, this.visible.height);
     vctx.drawImage(this.offscreen, offX, offY, VIEW_W * scale, VIEW_H * scale);
   }
@@ -130,34 +104,5 @@ export class Renderer {
     this.visible.width = win.innerWidth;
     this.visible.height = win.innerHeight;
     this.present();
-  }
-
-  private spriteCache(): Map<SpriteName, HTMLCanvasElement> {
-    if (!this.sprites) {
-      this.sprites = buildSpriteCache();
-    }
-    return this.sprites;
-  }
-
-  private mirroredCache(): Map<SpriteName, HTMLCanvasElement> {
-    if (!this.mirrored) {
-      const out = new Map<SpriteName, HTMLCanvasElement>();
-      for (const [name, img] of this.spriteCache()) {
-        const canvas = document.createElement('canvas');
-        canvas.width = img.width;
-        canvas.height = img.height;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          throw new Error('Renderer: 2d context unavailable for mirrored sprite');
-        }
-        ctx.imageSmoothingEnabled = false;
-        ctx.translate(img.width, 0);
-        ctx.scale(-1, 1);
-        ctx.drawImage(img, 0, 0);
-        out.set(name, canvas);
-      }
-      this.mirrored = out;
-    }
-    return this.mirrored;
   }
 }

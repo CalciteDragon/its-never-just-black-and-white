@@ -11,7 +11,7 @@ import { defineConfig, type Plugin } from 'vite';
  */
 function screenshotSink(): Plugin {
   return {
-    name: 'pixel-quest:screenshot-sink',
+    name: 'bw:screenshot-sink',
     configureServer(server) {
       server.middlewares.use('/__shot', (req, res) => {
         if (req.method !== 'POST') {

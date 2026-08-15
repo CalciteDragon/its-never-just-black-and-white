@@ -1,11 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  dailyDateString,
-  dailySeed,
-  hashStringToSeed,
-  mixSeeds,
-  Rng,
-} from '../src/engine/rng';
+import { hashStringToSeed, mixSeeds, Rng } from '../src/engine/rng';
 
 describe('hashStringToSeed', () => {
   it('matches known FNV-1a 32-bit vectors', () => {
@@ -127,21 +121,5 @@ describe('Rng', () => {
     expect([...a].sort((x, y) => x - y)).toEqual(input);
     expect(a).toEqual(b); // deterministic
     expect(c).not.toEqual(a); // different seed, different order (for this fixture)
-  });
-});
-
-describe('daily seed', () => {
-  it('dailyDateString formats UTC with zero padding', () => {
-    expect(dailyDateString(new Date(Date.UTC(2026, 0, 5)))).toBe('2026-01-05');
-    expect(dailyDateString(new Date(Date.UTC(2026, 11, 31, 23, 59, 59)))).toBe('2026-12-31');
-  });
-
-  it('dailySeed is stable for a fixed date and differs across days', () => {
-    const d1 = new Date(Date.UTC(2026, 6, 16, 12, 0, 0));
-    const d1b = new Date(Date.UTC(2026, 6, 16, 3, 30, 0));
-    const d2 = new Date(Date.UTC(2026, 6, 17, 0, 0, 0));
-    expect(dailySeed(d1)).toBe(dailySeed(d1b));
-    expect(dailySeed(d1)).toBe(hashStringToSeed('PIXEL-QUEST-DAILY-2026-07-16'));
-    expect(dailySeed(d1)).not.toBe(dailySeed(d2));
   });
 });

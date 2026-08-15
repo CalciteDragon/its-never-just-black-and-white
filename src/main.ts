@@ -1,16 +1,15 @@
 /**
- * Browser bootstrap: canvas wiring, resize handling, fullscreen toggle,
- * ?seed= parsing, and the title scene.
+ * Browser bootstrap: canvas wiring, resize handling, fullscreen toggle, and
+ * the title scene.
  */
 
-import { hashStringToSeed } from './engine/rng';
 import { Game } from './game';
 import { TitleScene } from './scenes/title';
 
 declare global {
   interface Window {
     /** Dev hook for automated driving (hidden tabs suspend RAF). */
-    __pq?: { game: Game };
+    __bw?: { game: Game };
   }
 }
 
@@ -46,10 +45,6 @@ window.addEventListener('keydown', (e: KeyboardEvent) => {
   }
 });
 
-// ?seed=anything forces the adventure/co-op seed (shareable runs).
-const seedParam = new URLSearchParams(window.location.search).get('seed');
-const forcedSeed = seedParam ? hashStringToSeed(seedParam) : undefined;
-
-game.setScene(new TitleScene({ forcedSeed }));
+game.setScene(new TitleScene());
 game.start();
-window.__pq = { game };
+window.__bw = { game };

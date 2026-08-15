@@ -1,21 +1,22 @@
 /**
- * Tile grid + the production tile renderer. TileMap is pure logic (node-safe);
- * drawTileMap only calls Renderer methods and is exercised in the browser.
+ * The tile grid. Pure logic, node-safe — tile *rendering* lives in the scene
+ * layer now (phase 3 draws row-merged runs; nothing here knows about a canvas).
  *
- * Out-of-bounds semantics: left/right/top read as Solid (sealed dungeon walls),
- * below the bottom reads as Empty so bodies can fall out of the map (pits).
+ * Out-of-bounds semantics (GAME-DESIGN §8): the left and right edges read as
+ * Solid so the sides seal the level; above the top row and below the bottom row
+ * read as Empty, because gravity flips and leaving through the ceiling has to
+ * be as lethal as falling out the floor.
  */
 
 import { TILE } from '../constants';
-import type { Renderer } from '../engine/renderer';
 
 export enum Tile {
   Empty = 0,
   Solid = 1,
-  /** One-way platform: collides only when landing on it from above. */
-  Platform = 2,
-  /** Hazard tile: never blocks movement; overlap is queried separately. */
-  Spike = 3,
+  PadUp = 2,
+  PadDown = 3,
+  PadLeft = 4,
+  PadRight = 5,
 }
 
 /** px → tile coordinate. */
@@ -45,12 +46,16 @@ export class TileMap {
     return this.h * TILE;
   }
 
-  /** OOB: sides/top → Solid, below bottom → Empty (fall-out death). */
+  /**
+   * OOB: top and bottom → Empty, sides → Solid. The vertical check comes FIRST
+   * on purpose — a body hugging a wall on its way out of the top must escape
+   * rather than catch on the sealed side.
+   */
   get(tx: number, ty: number): Tile {
-    if (ty >= this.h) {
+    if (ty < 0 || ty >= this.h) {
       return Tile.Empty;
     }
-    if (tx < 0 || tx >= this.w || ty < 0) {
+    if (tx < 0 || tx >= this.w) {
       return Tile.Solid;
     }
     return this.tiles[ty * this.w + tx] as Tile;
@@ -79,67 +84,5 @@ export class TileMap {
   /** Raw byte view for determinism tests / structural comparison. */
   bytes(): Uint8Array {
     return this.tiles.slice();
-  }
-}
-
-// --- Rendering (browser path; colors per GAME-DESIGN §2) ---
-
-const COLOR_FILL = '#1E293B'; // S slate
-const COLOR_EDGE = '#22D3EE'; // C cyan top edges
-const COLOR_SHADE = '#020617'; // B bottom/side shading
-const COLOR_FLECK = '#475569'; // s texture flecks
-
-/** Deterministic per-tile hash for texture flecks (no Rng: purely positional). */
-function tileHash(tx: number, ty: number): number {
-  let h = (tx * 73856093) ^ (ty * 19349663);
-  h = (h ^ (h >>> 13)) * 1274126177;
-  return (h ^ (h >>> 16)) >>> 0;
-}
-
-/**
- * Draw all tiles overlapping the current view. Caller must have set the
- * renderer camera; viewX/viewY are the camera's top-left in world px (used
- * only for culling).
- */
-export function drawTileMap(r: Renderer, map: TileMap, viewX: number, viewY: number): void {
-  const x0 = Math.max(0, toTile(viewX) - 1);
-  const y0 = Math.max(0, toTile(viewY) - 1);
-  const x1 = Math.min(map.w - 1, toTile(viewX) + Math.ceil(480 / TILE) + 1);
-  const y1 = Math.min(map.h - 1, toTile(viewY) + Math.ceil(270 / TILE) + 1);
-
-  for (let ty = y0; ty <= y1; ty++) {
-    for (let tx = x0; tx <= x1; tx++) {
-      const t = map.get(tx, ty);
-      if (t === Tile.Empty) {
-        continue;
-      }
-      const px = tx * TILE;
-      const py = ty * TILE;
-      if (t === Tile.Solid) {
-        r.rect(px, py, TILE, TILE, COLOR_FILL);
-        if (map.get(tx, ty - 1) !== Tile.Solid) {
-          r.rect(px, py, TILE, 1, COLOR_EDGE);
-        }
-        if (map.get(tx, ty + 1) !== Tile.Solid) {
-          r.rect(px, py + TILE - 1, TILE, 1, COLOR_SHADE);
-        }
-        if (map.get(tx - 1, ty) !== Tile.Solid) {
-          r.rect(px, py, 1, TILE, COLOR_SHADE);
-        }
-        if (map.get(tx + 1, ty) !== Tile.Solid) {
-          r.rect(px + TILE - 1, py, 1, TILE, COLOR_SHADE);
-        }
-        const hash = tileHash(tx, ty);
-        if (hash % 5 === 0) {
-          r.rect(px + 3 + (hash % 9), py + 4 + ((hash >>> 4) % 8), 1, 1, COLOR_FLECK);
-        }
-      } else if (t === Tile.Platform) {
-        r.rect(px, py, TILE, 4, COLOR_FILL);
-        r.rect(px, py, TILE, 1, COLOR_EDGE);
-      } else {
-        // Spike sprite sits in the lower half of its tile.
-        r.sprite('spike', px, py + 8);
-      }
-    }
   }
 }

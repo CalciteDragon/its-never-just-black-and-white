@@ -40,19 +40,9 @@ describe('Camera', () => {
     expect(c.y).toBe(0);
   });
 
-  it('shake jitters the view then decays to exactly zero', () => {
+  it('the view origin is the camera position — there is no shake', () => {
     const c = new Camera();
     c.snapTo(500, 300);
-    const baseX = c.viewX;
-    c.shake(4, 0.2);
-    let sawJitter = false;
-    for (let i = 0; i < 30; i++) {
-      c.update(STEP);
-      if (Math.abs(c.viewX - baseX) > 0.01) {
-        sawJitter = true;
-      }
-    }
-    expect(sawJitter).toBe(true);
     expect(c.viewX).toBe(c.x);
     expect(c.viewY).toBe(c.y);
   });

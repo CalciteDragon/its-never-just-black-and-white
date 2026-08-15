@@ -1,23 +1,17 @@
 /**
- * Smooth-follow camera with map clamping and decaying shake. Pure logic;
- * scenes read viewX/viewY and pass them to Renderer.setCamera.
+ * Smooth-follow camera with map clamping. Pure logic; scenes read viewX/viewY
+ * and pass them to Renderer.setCamera.
+ *
+ * There is no shake — impacts spin the player, they don't rattle the screen.
+ * Phase 3 adds lookahead, vertical freedom, and the speed-driven bounce.
  */
 
 import { CAMERA_FOLLOW_RATE, VIEW_H, VIEW_W } from '../constants';
-import { Rng } from '../engine/rng';
 
 export class Camera {
-  /** Top-left of the view in world px (pre-shake, floats). */
+  /** Top-left of the view in world px (floats). */
   x = 0;
   y = 0;
-
-  private shakeMag = 0;
-  private shakeLeft = 0;
-  private shakeDur = 0;
-  private jx = 0;
-  private jy = 0;
-  /** Cosmetic only — a fixed seed keeps replays looking identical. */
-  private readonly rng = new Rng(0x5eed);
 
   /** Center the view on (cx, cy) immediately. */
   snapTo(cx: number, cy: number): void {
@@ -40,37 +34,12 @@ export class Camera {
     this.y = Math.min(Math.max(this.y, 0), maxY);
   }
 
-  /** Kick off (or extend) a shake of ±mag px lasting dur seconds. */
-  shake(mag: number, dur: number): void {
-    this.shakeMag = Math.max(this.shakeMag, mag);
-    this.shakeLeft = Math.max(this.shakeLeft, dur);
-    this.shakeDur = Math.max(this.shakeDur, dur);
-  }
-
-  /** Advance shake decay. Call once per fixed step. */
-  update(dt: number): void {
-    if (this.shakeLeft <= 0) {
-      this.jx = 0;
-      this.jy = 0;
-      return;
-    }
-    this.shakeLeft = Math.max(0, this.shakeLeft - dt);
-    const falloff = this.shakeDur > 0 ? this.shakeLeft / this.shakeDur : 0;
-    const m = this.shakeMag * falloff;
-    this.jx = this.rng.float(-m, m);
-    this.jy = this.rng.float(-m, m);
-    if (this.shakeLeft === 0) {
-      this.shakeMag = 0;
-      this.shakeDur = 0;
-    }
-  }
-
-  /** Final view origin including shake jitter (what the renderer should use). */
+  /** View origin the renderer should use. */
   get viewX(): number {
-    return this.x + this.jx;
+    return this.x;
   }
 
   get viewY(): number {
-    return this.y + this.jy;
+    return this.y;
   }
 }

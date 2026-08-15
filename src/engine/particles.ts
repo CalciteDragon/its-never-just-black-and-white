@@ -4,8 +4,8 @@
  * render takes an injected 2d context and is never called in tests.
  */
 
+import { palette } from './palette';
 import { Rng } from './rng';
-import { PALETTE } from './sprites';
 
 /** Hard cap on simultaneously alive particles. */
 export const MAX_PARTICLES = 512;
@@ -24,7 +24,7 @@ export interface ParticleOpts {
   life?: number;
   /** Random extra lifetime in [0, lifeJitter) seconds. */
   lifeJitter?: number;
-  /** Single color or a palette to pick from per particle. */
+  /** Colour override. Defaults to the accent as it stands at spawn time. */
   color?: string | string[];
   /** Square size, px. */
   size?: number;
@@ -61,7 +61,7 @@ export class ParticleSystem {
       vy: 0,
       life: 0,
       size: 1,
-      color: PALETTE.W,
+      color: '',
       gravity: 0,
       drag: 0,
     }));
@@ -80,7 +80,8 @@ export class ParticleSystem {
     const angleMax = opts.angleMax ?? Math.PI * 2;
     const life = opts.life ?? 0.5;
     const lifeJitter = opts.lifeJitter ?? 0.2;
-    const color = opts.color ?? PALETTE.W;
+    // Sampled per spawn: a spark keeps the colour of the phase that made it.
+    const color = opts.color ?? palette.accent;
     const size = opts.size ?? 1;
     const gravity = opts.gravity ?? 0;
     const drag = opts.drag ?? 0;
@@ -148,74 +149,23 @@ export class ParticleSystem {
   }
 }
 
-/** Ground dust: short gray puffs kicked up on jump/land. */
+/**
+ * Accent dust kicked up on jump and landing. The one emitter phase 2 keeps;
+ * phase 6 replaces it with the full set (dust, burst, flip ring, pad streams).
+ */
 export function burstDust(ps: ParticleSystem, x: number, y: number): void {
   ps.spawn({
     x,
     y,
     count: 6,
-    speedMin: 15,
-    speedMax: 45,
+    speedMin: 30,
+    speedMax: 90,
     angleMin: -Math.PI * 0.85,
     angleMax: -Math.PI * 0.15,
     life: 0.3,
     lifeJitter: 0.15,
-    color: [PALETTE.s, PALETTE.t],
-    size: 1,
-    gravity: 120,
-    drag: 3,
-  });
-}
-
-/** Coin sparkle: quick gold/white glitter in all directions. */
-export function burstSparkle(ps: ParticleSystem, x: number, y: number): void {
-  ps.spawn({
-    x,
-    y,
-    count: 10,
-    speedMin: 25,
-    speedMax: 80,
-    life: 0.35,
-    lifeJitter: 0.25,
-    color: [PALETTE.y, PALETTE.W, PALETTE.o],
-    size: 1,
-    gravity: 40,
-    drag: 4,
-  });
-}
-
-/** Enemy poof: a colored cloud that rapidly slows. */
-export function burstPoof(ps: ParticleSystem, x: number, y: number, color: string): void {
-  ps.spawn({
-    x,
-    y,
-    count: 12,
-    speedMin: 20,
-    speedMax: 70,
-    life: 0.45,
-    lifeJitter: 0.2,
-    color,
     size: 2,
-    gravity: -20,
-    drag: 5,
-  });
-}
-
-/** Torch ember: a single slow mote drifting upward. */
-export function emberDrift(ps: ParticleSystem, x: number, y: number): void {
-  ps.spawn({
-    x,
-    y,
-    count: 1,
-    speedMin: 4,
-    speedMax: 12,
-    angleMin: -Math.PI * 0.75,
-    angleMax: -Math.PI * 0.25,
-    life: 1.1,
-    lifeJitter: 0.6,
-    color: [PALETTE.O, PALETTE.o, PALETTE.y],
-    size: 1,
-    gravity: -12,
-    drag: 0.5,
+    gravity: 240,
+    drag: 3,
   });
 }

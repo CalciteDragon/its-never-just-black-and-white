@@ -1,7 +1,8 @@
 /**
  * Deterministic randomness. All game logic randomness flows through Rng
- * (mulberry32) so identical seeds produce identical runs — this powers the
- * daily challenge and the generator tests. Node-safe: no browser APIs.
+ * (mulberry32) so the physics is reproducible: same start state plus the same
+ * inputs must produce a bit-identical trajectory. Also serves particle jitter
+ * and editor cosmetics. Node-safe: no browser APIs.
  */
 
 /** Hash an arbitrary string to a uint32 seed (FNV-1a, 32-bit). */
@@ -81,18 +82,4 @@ export class Rng {
     }
     return out;
   }
-}
-
-/** UTC calendar date as 'YYYY-MM-DD'. Defaults to now. */
-export function dailyDateString(d?: Date): string {
-  const date = d ?? new Date();
-  const y = date.getUTCFullYear();
-  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(date.getUTCDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-/** The shared world-wide seed for a given UTC day. */
-export function dailySeed(d?: Date): number {
-  return hashStringToSeed('PIXEL-QUEST-DAILY-' + dailyDateString(d));
 }

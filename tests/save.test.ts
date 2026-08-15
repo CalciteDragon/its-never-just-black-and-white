@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { SAVE_KEYS, SaveStore } from '../src/engine/save';
-import type { ScoreEntry, StorageLike } from '../src/engine/save';
+import { isBetterTime, SAVE_KEYS, SaveStore } from '../src/engine/save';
+import type { StorageLike, TimeEntry } from '../src/engine/save';
 
 class FakeStorage implements StorageLike {
   readonly map = new Map<string, string>();
@@ -24,38 +24,43 @@ class ThrowingStorage implements StorageLike {
   }
 }
 
-function entry(score: number, timeMs: number): ScoreEntry {
-  return { score, timeMs, coins: score / 10, dateIso: '2026-07-16T00:00:00.000Z' };
+function entry(timeMs: number): TimeEntry {
+  return { timeMs, dateIso: '2026-07-16T00:00:00.000Z' };
 }
+
+describe('isBetterTime', () => {
+  it('lower time wins and a tie is not an improvement', () => {
+    expect(isBetterTime(entry(4000), entry(5000))).toBe(true);
+    expect(isBetterTime(entry(5000), entry(4000))).toBe(false);
+    expect(isBetterTime(entry(4000), entry(4000))).toBe(false);
+  });
+});
 
 describe('SaveStore.submit', () => {
   it('first submit is a new best and persists', () => {
     const store = new SaveStore(new FakeStorage());
-    expect(store.submit('k', entry(100, 5000)).isNewBest).toBe(true);
-    expect(store.getBest('k')).toEqual(entry(100, 5000));
+    expect(store.submit('k', entry(5000)).isNewBest).toBe(true);
+    expect(store.getBest('k')).toEqual(entry(5000));
   });
 
-  it('higher score beats lower; lower score does not overwrite', () => {
+  it('faster beats slower; slower does not overwrite', () => {
     const store = new SaveStore(new FakeStorage());
-    store.submit('k', entry(100, 5000));
-    expect(store.submit('k', entry(150, 9000)).isNewBest).toBe(true);
-    expect(store.submit('k', entry(120, 1000)).isNewBest).toBe(false);
-    expect(store.getBest('k')).toEqual(entry(150, 9000));
+    store.submit('k', entry(5000));
+    expect(store.submit('k', entry(4000)).isNewBest).toBe(true);
+    expect(store.submit('k', entry(9000)).isNewBest).toBe(false);
+    expect(store.getBest('k')).toEqual(entry(4000));
   });
 
-  it('score ties break by lower timeMs; equal score and time is not a new best', () => {
+  it('re-submitting the exact best is not a new best', () => {
     const store = new SaveStore(new FakeStorage());
-    store.submit('k', entry(100, 5000));
-    expect(store.submit('k', entry(100, 4000)).isNewBest).toBe(true);
-    expect(store.getBest('k')).toEqual(entry(100, 4000));
-    expect(store.submit('k', entry(100, 6000)).isNewBest).toBe(false);
-    expect(store.submit('k', entry(100, 4000)).isNewBest).toBe(false);
+    store.submit('k', entry(4000));
+    expect(store.submit('k', entry(4000)).isNewBest).toBe(false);
   });
 
-  it('keys are independent', () => {
+  it('per-level keys are independent', () => {
     const store = new SaveStore(new FakeStorage());
-    store.submit(SAVE_KEYS.adventure, entry(100, 1));
-    expect(store.getBest(SAVE_KEYS.coop)).toBeNull();
+    store.submit(SAVE_KEYS.best('01-first-steps'), entry(1000));
+    expect(store.getBest(SAVE_KEYS.best('02-flip'))).toBeNull();
   });
 });
 
@@ -72,7 +77,7 @@ describe('SaveStore.getBest robustness', () => {
 
   it('wrong-shape JSON is tolerated as null', () => {
     const storage = new FakeStorage();
-    storage.setItem('k', JSON.stringify({ score: 'high', timeMs: 1 }));
+    storage.setItem('k', JSON.stringify({ timeMs: 'fast' }));
     expect(new SaveStore(storage).getBest('k')).toBeNull();
     storage.setItem('k', JSON.stringify([1, 2, 3]));
     expect(new SaveStore(storage).getBest('k')).toBeNull();
@@ -84,8 +89,8 @@ describe('SaveStore.getBest robustness', () => {
     const storage = new FakeStorage();
     storage.setItem('k', 'garbage');
     const store = new SaveStore(storage);
-    expect(store.submit('k', entry(10, 1)).isNewBest).toBe(true);
-    expect(store.getBest('k')).toEqual(entry(10, 1));
+    expect(store.submit('k', entry(1200)).isNewBest).toBe(true);
+    expect(store.getBest('k')).toEqual(entry(1200));
   });
 });
 
@@ -104,8 +109,8 @@ describe('SaveStore fallbacks', () => {
   it('works with no storage at all (in-memory fallback in node)', () => {
     const store = new SaveStore();
     expect(store.getBest('k')).toBeNull();
-    expect(store.submit('k', entry(50, 100)).isNewBest).toBe(true);
-    expect(store.getBest('k')).toEqual(entry(50, 100));
+    expect(store.submit('k', entry(100)).isNewBest).toBe(true);
+    expect(store.getBest('k')).toEqual(entry(100));
     store.setFlag('f', true);
     expect(store.getFlag('f')).toBe(true);
   });
@@ -113,17 +118,17 @@ describe('SaveStore fallbacks', () => {
   it('never throws when the storage itself throws', () => {
     const store = new SaveStore(new ThrowingStorage());
     expect(store.getBest('k')).toBeNull();
-    expect(store.submit('k', entry(1, 1)).isNewBest).toBe(true); // best-effort
+    expect(store.submit('k', entry(1)).isNewBest).toBe(true); // best-effort
     expect(store.getFlag('f')).toBe(false);
     expect(() => store.setFlag('f', true)).not.toThrow();
   });
 });
 
 describe('SAVE_KEYS', () => {
-  it('matches the GAME-DESIGN §3 key scheme', () => {
-    expect(SAVE_KEYS.adventure).toBe('pq.best.adventure');
-    expect(SAVE_KEYS.coop).toBe('pq.best.coop');
-    expect(SAVE_KEYS.muted).toBe('pq.muted');
-    expect(SAVE_KEYS.daily('2026-07-16')).toBe('pq.daily.2026-07-16');
+  it('matches the GAME-DESIGN §3 bw. key scheme', () => {
+    expect(SAVE_KEYS.progress).toBe('bw.progress');
+    expect(SAVE_KEYS.muted).toBe('bw.muted');
+    expect(SAVE_KEYS.editorDraft).toBe('bw.editor.draft');
+    expect(SAVE_KEYS.best('01-first-steps')).toBe('bw.best.01-first-steps');
   });
 });
