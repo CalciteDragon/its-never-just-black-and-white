@@ -101,17 +101,96 @@ All met. `src/` went 3866 → 1808 lines (47 %; the remaining overshoot is `audi
 
 The look. Everything visible in the finished game is decided here.
 
-- ~~**`engine/palette.ts`** (new)~~ — built in phase 2 (decision 1), including its tests. Nothing left to do here beyond consuming it.
-- **`engine/renderer.ts`** — already at 960×540 and rect/text only; still needs `imageSmoothingEnabled = true`, antialiased shape drawing, and rotated-rect drawing (`save`/`translate`/`rotate`/`restore`) since the player needs it in phase 4. Keep `computeScale` pure and tested.
-- **Post-processing** — `applyPost(speedNorm)`:
-  - **Vignette:** a cached radial gradient, alpha lerped by `speedNorm`, accent tint fading in across the top half of the range. Regenerate the gradient only on resize or phase change, never per frame.
-  - **Chromatic aberration:** the buffer redrawn three times with `globalCompositeOperation = 'lighter'` and per-channel offsets, gated off entirely below `CA_THRESHOLD` so the common case costs nothing. Benchmark against a `getImageData` approach and keep the faster one.
-- **`world/camera.ts`** — follow with lookahead, horizontal clamp to level bounds, vertical freedom (gravity flips, so the camera can't assume a floor), and the speed-driven screen bounce. Replace `shake()` with `bounce`.
+- ~~**`engine/palette.ts`** (new)~~ — built in phase 2 (decision 1), including its tests. Only the rgba accessors are left (decision 3).
+- **`engine/renderer.ts`** — antialiased shape drawing, rotated-rect drawing (`save`/`translate`/`rotate`/`restore`) since the player needs it in phase 4, and `applyPost(speedNorm)`. Keep `computeScale` pure and tested.
+- **`world/camera.ts`** — follow with lookahead, horizontal clamp to level bounds, vertical freedom (gravity flips, so the camera can't assume a floor), and the speed-driven screen bounce.
 - **Tile rendering** — row-run merging so a long floor draws as one rect.
 
-**Tests:** palette flip symmetry (flipping twice is identity), `computeScale` bounds, camera clamp and lookahead, bounce amplitude at `speedNorm` 0 and 1, run-merging producing the expected rect count.
+### Seven decisions taken before writing any of it
 
-**Exit:** a hardcoded test grid renders in black and white at 960×540, the vignette breathes with a fake speed value, and pressing space visibly inverts the world.
+1. **`imageSmoothingEnabled = true` is not what makes shapes antialiased — it is a no-op for `fillRect` and paths.** Canvas 2D antialiases fills unconditionally; the flag only affects `drawImage`/pattern scaling. What actually delivers a clean edge on a square resting at 37° is **the coordinate policy**: `Renderer.rect` currently `Math.round`s every draw. So the real change is *where rounding survives*:
+   - `setCamera` rounds the camera origin, so static geometry (tile coords are multiples of 32) still lands on whole pixels and stays crisp.
+   - `rect` and the rotated draws stop rounding — they take floats and antialias.
+   - `text` keeps rounding. The 5×7 bitmap font is the one deliberately low-res element (GAME-DESIGN §2) and blurring it would throw away the signature.
+   - `present` keeps `imageSmoothingEnabled = false`. Smoothing an integer-scaled blit would soften the entire frame — the only place softness is wanted is inside `applyPost`.
+
+   Amend ARCHITECTURE.md §Rendering pipeline, which currently states the flag and the antialiasing as one fact.
+
+2. **The screen bounce integrates its phase; it cannot read absolute time.** GAME-DESIGN §7 specifies `sin(t · BOUNCE_FREQ · speedNorm) · BOUNCE_AMP · speedNorm`. With `t` large, a small change in `speedNorm` moves the sine argument by `t · BOUNCE_FREQ · Δn` — at t = 100 s, a 0.01 change in speed jumps the phase by 9 radians and the screen snaps. Correct form: `bouncePhase += BOUNCE_FREQ · speedNorm · dt`, offset `= sin(bouncePhase) · BOUNCE_AMP · speedNorm`. Frequency modulation done on the phase, not on the argument. **This amends GAME-DESIGN §7 in this phase's commit**, and gets a dedicated test (below), because it is invisible in a 10-second play session and glaring in a 3-minute one.
+
+3. **The vignette needs `rgba()`, so the rgba formatting belongs to the palette.** A gradient's inner stop is transparent `paper`, which means parsing `#0A0A0A` into components — colour logic, and hard rule 6 says every hex lives in `palette.ts`. Add `paperRgba(a)` and `accentRgba(a)` there: pure, node-testable, still exactly one file containing hex. The chromatic aberration pass also needs pure red/green/blue and black as **compositing operands** (not palette colours); export them from `palette.ts` too, commented as such, rather than letting four hex literals leak into the renderer.
+
+4. **Two cached gradients per phase, not one per frame.** The vignette's alpha and its accent tint both vary continuously with `speedNorm`, so a single gradient carrying both would be rebuilt every frame. Split them: one `paper` gradient and one `accent` gradient per phase, four total, built lazily and keyed on `palette.phase`. Per-frame variation is then just `globalAlpha`, which is free. Note the offscreen buffer is a fixed 960×540 — **only the visible canvas resizes** — so phase change is the *only* invalidation trigger, and the renderer can detect it itself by comparing a stored phase rather than requiring callers to notify it.
+
+5. **Chromatic aberration must be background-agnostic, which rules out the naive version.** "Draw the buffer three times with `lighter` and per-channel offsets" only produces a channel split against a black background — and this game inverts, so half the time the background is `#F2F2F2` and additive blending saturates the whole frame to white. The correct decomposition survives the flip: for each channel, draw the pristine frame at its offset onto a staging canvas, `globalCompositeOperation = 'multiply'` with a pure channel mask (multiply by `(1,0,0)` yields `(r,0,0)`), then add that onto the accumulator with `lighter`. At zero offset the three sum back to the original exactly, whatever the background. Cost: **three canvases** — offscreen, a pristine copy, a staging buffer — allocated lazily on the first frame that exceeds `CA_THRESHOLD`, so a player who never gets fast never pays the 4 MB.
+
+6. **Post order is aberration first, then vignette.** Two reasons, one aesthetic and one structural. The vignette is a screen-space overlay and shouldn't be channel-split. And each shifted channel copy leaves an uncovered strip up to `CA_MAX_OFFSET` px wide at the frame edge, which would read as a coloured band — the vignette covers exactly that band, and it is at its strongest (alpha ≥ 0.33) precisely when aberration is active (`speedNorm > 0.45`). The artifact and its mask arrive together.
+
+7. **`applyPost`'s numbers are pure functions; `applyPost` is only the drawing.** `vignetteAlpha(n)`, `tintAmount(n)` and `caOffset(n)` export from `renderer.ts` and unit-test in node — the ramp, the threshold, the endpoint values. What's left inside `applyPost` is gradient fills and `drawImage` calls, which is the part a test could never have caught anyway. Same trick that keeps `computeScale` honest.
+
+### Where `speedNorm` comes from
+
+Nothing produces it yet — phase 6 wires it to four consumers. This phase computes it in `PlayScene` from the temporary player's velocity, which is real, not fake: `target = clamp(|v| / SPEED_REF, 0, 1)`, smoothed with an exponential lag at `SPEED_SMOOTH_RATE` so one frame of wall contact doesn't strobe the screen. Four lines and one field; **no new module**, no `SpeedMeter` abstraction for phase 6 to inherit and regret. The two consumers this phase (`camera.update`, `applyPost`) take it as an argument.
+
+### Camera specifics
+
+- **Lookahead** — `offset = clamp(vx · LOOKAHEAD_TIME, ±LOOKAHEAD_MAX)`, itself smoothed at `LOOKAHEAD_RATE` (deliberately *slower* than `CAMERA_FOLLOW_RATE`), then added to the follow target. Smoothing the offset rather than just the target is what stops a direction reversal — a 180 px target jump at full speed — from whipping the view.
+- **Horizontal clamp** stays; `clampTo` becomes `clampX(mapWpx)`.
+- **Vertical** gets `CAMERA_VSLACK` px of allowed overshoot past the map's top and bottom rather than a hard clamp, so the frame or two before an out-of-bounds death is legible instead of the square clipping off a pinned edge. **When the map is shorter than the view, centre it vertically — do not pin to the top.** Pinning to y = 0 is a hidden assumption that down is down, and this game's whole premise is that it isn't.
+- **Bounce lives in `viewY`, never in `y`.** Writing it into the camera position would feed it back through follow and clamp and turn a cosmetic wobble into a physical oscillator.
+
+### Tile run merging
+
+A pure `forEachRun(map, tx0, ty0, tx1, ty1, cb)` in `world/tiles.ts`, merging horizontally over **equal tile values** (not just `Solid`, so pads merge too) and skipping `Empty`. Callback-based rather than array-returning: ~100 runs × 60 fps of throwaway objects is churn for nothing. `tiles.ts` stays pure and node-safe — it was deliberately freed of its `Renderer` import in phase 2 and does not get it back. The scene keeps a five-line draw loop over the callback.
+
+### Order of work
+
+1. **`constants.ts`** — the camera and feel/effects blocks: `LOOKAHEAD_TIME` 0.35 s, `LOOKAHEAD_MAX` 96 px, `LOOKAHEAD_RATE` 3 /s, `CAMERA_VSLACK` 64 px, `SPEED_REF` 320, `SPEED_SMOOTH_RATE` 6 /s, `CA_THRESHOLD` 0.45, `CA_MAX_OFFSET` 3.0, `VIGNETTE_MIN` 0.15, `VIGNETTE_MAX` 0.55, `VIGNETTE_INNER` 0.45, `VIGNETTE_TINT_MAX` 0.22, `BOUNCE_AMP` 2.5, `BOUNCE_FREQ` 9.0, `PLAYER_CORE_INSET` 5. The four not in GAME-DESIGN §6 (`VIGNETTE_INNER`, `VIGNETTE_TINT_MAX`, the lookahead trio, `PLAYER_CORE_INSET`) are added to the table there in the same commit.
+2. **`engine/palette.ts`** — `paperRgba` / `accentRgba` / the compositing operands (decision 3).
+3. **`engine/renderer.ts`** — coordinate policy (decision 1), `rectRotated` + `rectRotatedOutline`, the three pure post functions, `applyPost`.
+4. **`world/camera.ts`** — lookahead, `clampX`, vertical slack, integrated bounce.
+5. **`world/tiles.ts`** — `forEachRun`.
+6. **`scenes/play.ts`** — run-merged tiles, `speedNorm`, `input.pressed('flip')` → `palette.flip()`, `applyPost` last. **Colours only: no gravity change.** The flip's gravity half is phase 5's, and faking it here would leave a second implementation for phase 5 to find and remove.
+7. **`entities/player.ts`** — draw through `rectRotated` as an `ink` body plus a `paper` core, and add a render-only `angle` field defaulting to 0. The simulation never sets it (phase 4 does, from the rigid body), but it makes the rotated path real code on the screen instead of an untested primitive that phase 4 discovers is wrong.
+8. **`scenes/title.ts`** — `applyPost(0)` so the frame is consistent from the first screen.
+9. **Tests, typecheck, browser check, benchmark, doc amendments.**
+
+### Test suite
+
+| Action | Files |
+| --- | --- |
+| Rewrite | `camera` (every assertion moves: `clampTo` splits, `follow` gains a velocity argument) |
+| Extend | `palette` (rgba formatting, operands), `renderer` (the three post ramps), `tiles` (run merging), `constants` (new derived relations) |
+| Keep | `font`, `game`, `input`, `save`, `rng`, `particles`, `physics`, `player` |
+
+Assertions worth naming:
+
+- **Bounce phase continuity** — step the camera 600 times with `speedNorm` jittering every step; no single step may move the bounce offset by more than `2 · BOUNCE_AMP`. This is the test for decision 2, and it fails loudly against the spec's literal formula.
+- **Bounce endpoints** — offset is exactly 0 at `speedNorm = 0` (and the phase does not advance); peak over one cycle is `BOUNCE_AMP` at 1.
+- **Lookahead** — sign follows `vx`; converges to `vx · LOOKAHEAD_TIME` ahead of the player; saturates at `LOOKAHEAD_MAX`; a sign reversal moves `viewX` monotonically, no overshoot past the new target.
+- **Camera vertical** — overshoot is permitted up to `CAMERA_VSLACK` and no further; a map shorter than the view centres rather than pinning.
+- **Run merging** — a 40-wide floor row is 1 run; one gap makes 2; a pad in the middle of a floor splits it into 3 runs of two distinct values; the window clips runs to the requested range rather than to the map.
+- **Post ramps** — `caOffset` is exactly 0 at and below `CA_THRESHOLD`, `CA_MAX_OFFSET` at 1, monotone between; `vignetteAlpha` hits `VIGNETTE_MIN`/`VIGNETTE_MAX` at the ends; `tintAmount` is 0 across the whole bottom half of the range.
+- **Palette rgba** — `paperRgba(0)` and `paperRgba(1)` share rgb and differ only in alpha; flipping changes the rgb; the output never contains a `#`.
+
+### Verification that isn't a unit test
+
+`applyPost` cannot be node-tested, so the phase ends with a browser pass through `npm run dev`:
+
+- **The CA benchmark the brief calls for.** Time the composite path against a `getImageData` implementation over ~120 frames via `window.__bw`, keep the faster, record both numbers in *As built*, then delete the losing implementation and the harness. The prediction: composite wins by a wide margin — `getImageData`/`putImageData` moves 2.1 MB through JS per frame while the composite path is seven GPU-side full-screen operations. Budget: **the whole post pass under 2 ms at 960×540**, measured at `speedNorm = 1`.
+- Force `speedNorm` to 0 → 1 and confirm the vignette closes and the tint arrives only in the top half.
+- Set the player's render `angle` to ~0.6 rad from the console and confirm the rotated body and its inset core sit correctly and read cleanly against a wall — this is also where `PLAYER_CORE_INSET` gets its final value.
+- Press space repeatedly: everything inverts, including the letterbox, and nothing flickers or fails to invert (an element that survives a flip is a colour that escaped the palette).
+- Capture a fresh `docs/screenshot.png` through the existing `screenshotSink`. Phase 1 deleted the stale one and the README has been missing an image since; the look is decided here, so this is the first phase that can honestly supply it.
+
+### Risks
+
+- **The post pass is the first thing in this project with a real frame budget.** Everything else is a handful of `fillRect`s. If CA overruns, the fallback is to run the aberration on a half-resolution staging canvas and upscale — the effect is a ≤3 px colour fringe, and it survives halving unnoticed. Gating harder than `CA_THRESHOLD` is the wrong lever; it would remove the effect exactly where the game is meant to open up.
+- **Dropping `Math.round` from world draws is a wider change than it looks.** Every existing draw call inherits sub-pixel positioning at once. The mitigation is decision 1's split, and the thing to watch in the browser is a tile seam appearing between two adjacent runs — if it does, the camera rounding isn't reaching that path.
+- **Run merging changes what's on screen, and no unit test sees pixels.** The rect *count* is testable; the rect *coverage* is not. Compare a screenshot against the per-tile renderer before deleting it.
+- **The `angle` field on the temporary player is a hook, not a feature.** It exists so phase 4 has somewhere to write. If phase 3 ends with anything animating it, that's a second rotation source for phase 4 to fight.
+
+**Exit:** the test grid renders in black and white at 960×540 with row-merged geometry, the vignette breathes with the player's real speed, chromatic aberration arrives above `CA_THRESHOLD` and stays under the frame budget, the camera leads and bounces without snapping, and pressing space inverts the world — palette only, gravity untouched. `npm run typecheck` and `npm test` green; GAME-DESIGN §6/§7 and ARCHITECTURE.md amended where this phase contradicted them.
 
 ---
 

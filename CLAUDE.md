@@ -36,5 +36,4 @@ The design source of truth is `docs/GAME-DESIGN.md`. Read it before writing code
 7. **Linear motion is arcade, angular motion is simulated.** Collision response must never take horizontal control away from the player, and the velocity component into a surface is clamped dead on contact. See `docs/PHYSICS.md` — this split is the design, not a compromise to be tidied up later.
 8. **`PLAYER_SIZE` ≤ 22.6 px.** Above `TILE/√2`, one-tile gaps become angle-dependent and every level breaks. It is 20 for a reason.
 9. Before finishing any task: `npm run typecheck` AND `npm test` must pass.
-10. **Do not `git commit`** — the user reviews and commits.
-11. The project path contains a space (`...\VSCode\Pixel Quest`) — always quote paths in shell commands. The directory keeps its old name; only the project is renamed.
+10. The project path contains a space (`...\VSCode\Pixel Quest`) — always quote paths in shell commands. The directory keeps its old name; only the project is renamed.
