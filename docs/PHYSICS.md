@@ -2,7 +2,7 @@
 
 The oriented-box rigid-body solver in `src/world/obb.ts` + `src/world/physics.ts`, and the game-feel numbers in `src/constants.ts`.
 
-> **Status:** describes the target solver from [GAME-DESIGN.md](GAME-DESIGN.md). Phase 4 lands it; see [PHASES.md](PHASES.md). Refreshed from as-built code at the end of phase 7.
+> **Status:** built in phase 4 and described here as-built; see [PHASES.md](PHASES.md). Sections marked *(amended in phase 4)* were written before anything ran and turned out wrong once it did. Refreshed again at the end of phase 7.
 
 ## The core split
 
@@ -33,16 +33,28 @@ Gravity direction is a sign, not a vector: `gravitySign` is `+1` (down) or `−1
 
 One fixed step of `STEP = 1/60 s`:
 
-1. **Integrate gravity.** `g = rising ? GRAVITY_RISE : GRAVITY_FALL`, where *rising* means `vy · gravitySign < 0`. `vy += g · gravitySign · dt`, clamped to `±MAX_FALL_SPEED`.
+1. **Integrate gravity.** `g = rising ? GRAVITY_RISE : GRAVITY_FALL`, where *rising* means `vy · gravitySign < 0`. `vy += g · gravitySign · dt`.
+
+   *(Amended in phase 4.)* The clamp is **directional**, not symmetric: `MAX_FALL_SPEED` limits motion *along* gravity only, so `if (vy · gravitySign > MAX_FALL_SPEED) vy = MAX_FALL_SPEED · gravitySign`. A symmetric clamp would cap `PAD_IMPULSE` (820 px/s) at 768 and quietly break every jump pad in the game.
+
+   And position drifts by the **average of the pre- and post-gravity velocity**, not by the post-gravity velocity:
+   ```
+   driftY = (vy_before + vy_after) / 2
+   ```
+   This is exact for constant acceleration, so sampled positions lie *on* the parabola. It is also **not** interchangeable with the half-gravity split (kick-drift-kick), which is the same trajectory but a different *stored* velocity: KDK ends the step having just applied the second half-kick, so a square sitting still on the floor stores `vy = GRAVITY_FALL · STEP / 2` = **29.3 px/s forever**. `speedNorm` would never fall below 0.09, the vignette would never fully open, and the controller would need an "at rest" special case everywhere. Take the average from the actual pair rather than subtracting `g·dt/2`, or the terminal clamp desynchronises the two and the fall runs 29 px/s slow.
+
 2. **Sub-step.** Split the step so no sub-step moves more than `MAX_SUBSTEP` (8 px) linearly *or* sweeps a corner further than that arc-wise:
    ```
    corner_arc = |ω| · dt · s/√2
-   steps = ceil( max(|vx·dt|, |vy·dt|, corner_arc) / MAX_SUBSTEP )
+   steps      = ceil( max( hypot(vx·dt, driftY·dt), corner_arc ) / MAX_SUBSTEP )
    ```
-   At terminal velocity that's 12.8 px/frame → 2 sub-steps against a 32 px tile. Nothing tunnels. The rotational term rarely dominates (14 rad/s spins a corner 3.6 px per frame) but including it costs nothing and closes the case where a fast spin whips a corner through a thin wall.
+   *(Amended in phase 4.)* The linear term is the **magnitude of the displacement**, not the larger component: max-of-components under-counts diagonal motion by up to √2. It is taken from the actual per-step displacement rather than from `vy`, so a caller that hands in a velocity beyond terminal cannot smuggle a long advance past the cap.
+
+   At full run plus terminal fall that's 13.5 px/frame → 2 sub-steps against a 32 px tile. Nothing tunnels: measured, a body entering at 4000 px/s never penetrates a floor by more than `CONTACT_SLOP`. The rotational term rarely dominates (14 rad/s sweeps a corner 3.3 px per frame) but including it costs nothing and closes the case where a fast spin whips a corner through a thin wall.
+
 3. **Advance** position and angle by the sub-step.
-4. **Resolve contacts** (below), up to `MAX_CONTACT_ITERS` = 4 times.
-5. **Damp and settle** rotation (below).
+4. **Resolve contacts** (below), up to `MAX_CONTACT_ITERS` = 4 times — **inside** the sub-step loop. *(Amended in phase 4: the original listed sub-stepping and resolution as sequential steps. Read that way, sub-stepping is decorative — advancing the same distance in pieces with no test between them lands in exactly the same place.)* If any contact was found, the remaining sub-steps drift at the post-resolution `vy` rather than the pre-collision average.
+5. **Damp and settle** rotation (below), once per full step.
 
 ## Collision detection — SAT
 
@@ -59,22 +71,48 @@ r_box = (s/2) · ( |a·u| + |a·w| )
 
 and the tile's radius onto **a** is `(T/2)·(|a_x| + |a_y|)`. Overlap on all four axes ⇒ collision; the axis of **minimum** overlap gives the contact normal **n** and penetration depth `d`. Sign **n** so it points from the tile toward the box — the direction the box gets pushed out.
 
+Tile axes are tested first and an axis is kept only on **strict** improvement, so a tie goes to the tile axis. That is what makes a flush contact resolve as a face contact rather than a degenerate box-axis one, and it is one of the orderings determinism rests on.
+
 The square's 90° rotational symmetry means θ only ever matters mod 90°, which is worth exploiting for both the tests and the auto-right target.
+
+### Interior faces
+
+*(Added in phase 4.)* **A tile face buried against a neighbouring solid is not a surface, and must be excluded from the choice of resolution direction.** Without this rule a contiguous floor is not a floor. A square landing across a tile seam barely overlaps the second tile horizontally, so *that* tile's cheapest separating axis is sideways — and the landing answers with a shove along the floor plus ~9 rad/s of spin from the resulting single-corner contact.
+
+The rule is exact rather than heuristic: if the neighbour in the push direction is solid, the push drives the box **into** solid material, so the contact is spurious and the neighbour owns the real one. The dominant component of **n** picks the direction to test; at exactly 45° both are tested, which needs no threshold and no tie-break. Overlap is still tested on all four axes, so *detection* stays exact — only the resolution direction is restricted.
+
+Out-of-bounds reads do the right thing for free: the sealed sides mask their own outward faces, and the open top and bottom leave theirs exposed.
 
 ### Contact point
 
 Which feature is incident depends on which axis won:
 
-- **n is a tile axis** → a box vertex is deepest. Contact = the vertex minimising `vertex · n`.
-- **n is a box axis** → a tile corner is deepest. Contact = the corner maximising `corner · n`.
+- **n is a tile axis** → box vertices are candidates, clipped to the tile's extent along the contact tangent.
+- **n is a box axis** → tile corners are candidates, clipped to the box face's extent along the tangent.
 
-This is the whole reason corners feel real. A square descending onto a ledge edge resolves against a *tile corner* on a *box face axis*, which puts the contact point far from the centre and generates the torque that spins you off.
+Corner contacts are the whole reason corners feel real. A square descending onto a ledge edge resolves against a *tile corner* on a *box face axis*, which puts the contact point far from the centre and generates the torque that spins you off.
+
+**The deepest-vertex rule cannot rest a flat square, and the failure is loud.** *(Amended in phase 4 — the original took the single deepest feature.)* A 20 px square flush on a floor has two bottom corners at equal depth; a tie-break picks one, giving `r × n = ∓10`. Measured against the as-built solver, that lands a flat drop with **−12.25 rad/s** of spin out of a perfectly square approach, and with the impact gate below also removed it settles into a permanent **2.20 rad/s** (126°/s) roll — deterministic, so *every* flat landing in the game rolls the same way.
+
+So contacts are **merged into a manifold before resolution**, not resolved one tile at a time:
+
+- candidate points are clipped to the incident face, with `CLIP_TOL` of tangential slack (below);
+- contacts sharing a normal merge across tiles, taking the maximum depth;
+- the contact point is the **centroid of every candidate within `CONTACT_TOL` of the deepest**, pooled across the whole manifold.
+
+Flush on one tile or straddling two, both bottom corners tie, the centroid is the face centre, `r × n` is **exactly** zero, the denominator collapses to `1/m`, and the impulse is a clean full stop with no torque at all. Overhanging a ledge, only the corner actually over the tile is a candidate, so it tips off. Tilted, one vertex is clearly deepest and the corner physics is untouched. `CONTACT_TOL` = 0.25 px puts the tie band at `asin(0.25/20)` = **±0.72°**, below the settled angular residual and far below any visible tilt.
+
+`CLIP_TOL` is a different quantity from `CONTACT_TOL` — tangential rather than depth — and has to be larger. A resting body sits `CONTACT_SLOP` inside the floor and sinks a further `GRAVITY_FALL · STEP² / 2` = 0.489 px every step before its contact is resolved, so its lower corner strays that far past the bottom of the wall tile beside it. Clipped strictly, that corner is discarded, the wall contact degenerates to its single upper corner, and **walking into a wall answers with 3.7 rad/s of spin conjured out of resting slop alone.** Two steps' worth of sink, 0.99 px, on a 32 px tile.
 
 ### Resolution order
 
-Collect every overlapping solid tile, resolve the **deepest first**, then re-run the broadphase and repeat. A corner wedged into a one-tile gap touches two tiles and needs both resolved, and resolving them in arbitrary order oscillates. Cap at 4 iterations and accept a hair of penetration over a hang.
+Collect every overlapping solid tile, merge into manifolds, resolve the **deepest**, then re-run the broadphase and repeat. Cap at `MAX_CONTACT_ITERS` = 4 — a natural cap once manifolds are merged, since there are only four tile-axis normals.
 
-Positional correction moves the centre by `n · (d − SLOP)` with `SLOP` = 0.01 px.
+*(Amended in phase 4.)* **Only one manifold is resolved per pass.** Resolving several off one collection is what turns an inside corner into an oscillator: the wall push moves the body several px, and the floor contact behind it is then resolved against candidate points from before the move, losing the corner that had strayed past the floor tile's edge and answering with a single-corner torque. Manifolds that decline to act have not moved anything, so the next one down is still looking at fresh geometry and may be tried in the same pass.
+
+The broadphase iterates **row-major**, and manifolds order by depth with a **stable** sort, so ties keep discovery order. Both are free if chosen deliberately and unfindable if not.
+
+Positional correction moves the centre by `n · (d − SLOP)` with `CONTACT_SLOP` = 0.01 px. Correcting to *exactly* the slop makes rest a **fixed point** rather than an asymptote: the body descends 0.489 px and is pushed back to the same float, bit-identically, forever. That is why no velocity-based sleep threshold is needed — a test asserts the last 100 positions of a 300-step rest are the same number, not merely close.
 
 ## Collision response — impulse
 
@@ -99,15 +137,30 @@ Applied:
 
 ```
 v  +=  (j / m) · n
-ω  +=  SPIN_TRANSFER · j · (r × n) / I
-v  =  v − min(0, v·n) · n          ← the arcade clamp
+ω  +=  SPIN_TRANSFER · j · (r × n) / I     ← only if −v_n > IMPACT_SPEED_MIN
+v  =  v − min(0, v·n) · n                  ← the arcade clamp
 ```
+
+*(Amended in phase 4: the angular half is gated on approach speed — see below.)* The linear half always runs, and the clamp makes it exact: since `Δ(v·n) = −v_n/denominator ≤ −v_n`, the impulse can never overshoot into separation, so after the clamp `v·n` is **exactly** zero. A body resting on a floor therefore stores `vy === 0`, not a residual.
 
 **That last line is the seam between the two models,** and it's the most important line in the solver. Physically exact response would leave a landing square still moving into the floor: a flat-face landing puts the contact at a vertex, `r × n = ∓s/2 = ∓10`, so `(r×n)²/I = 100/66.7 = 1.5` and the denominator is 2.5 — one impulse kills only 40 % of the downward speed. A corner landing is worse: `|r × n|` reaches `s/√2 ≈ 14.1`, denominator 4, killing 25 %.
 
 For a free-floating body that's correct and looks great. For a platformer it means mushy, sinking landings. So the impulse runs in full — the spin it produces is exactly the physical spin — and then the velocity component *into* the surface is clamped to zero. Linear motion stops dead like a platformer. Angular motion keeps every bit of the real physics. Neither model contaminates the other.
 
 `SPIN_TRANSFER` = 0.6 is an admitted cheat on top: a physically exact torque makes the square whirl off every graze. 0.6 keeps impacts lively and readable without turning a scrape into a tumble.
+
+### Impact, not contact
+
+*(Added in phase 4.)* **A resting contact is still a contact.** With `CONTACT_SLOP` residual penetration, gravity re-penetrates a resting body by 0.489 px *every* step, so "a contact resolved this step" is permanently true on the ground — and it is therefore useless as a discriminator, whether for spin or for the auto-right spring.
+
+Discriminate by **approach speed** instead: `IMPACT_SPEED_MIN = 2 · GRAVITY_FALL · STEP` = 117.3 px/s, twice the largest approach gravity alone can build in one step, sitting at a 1.96 px drop. One threshold, two jobs:
+
+- **above it** — a genuine impact: apply the angular impulse, and suppress the spring for that step;
+- **below it** — resting or scraping: linear stop only, no torque, and the spring runs.
+
+The second job is what stops a square resting at 1° from buzzing, and it is also what closes the wedge oscillation this solver was most at risk of. A body held into a corner and *accelerated* there the way a controller does approaches at `GROUND_ACCEL · STEP` = 35 px/s after the first frame — comfortably under the gate, so no torque, and the position is a bit-identical fixed point. Re-supplying a large velocity every step instead (which nothing in the game can do) makes every frame a fresh above-threshold impact, and the tilted corner and the suppressed spring settle into a period-2 limit cycle.
+
+The threshold is a cheat and it has a boundary: a contact at exactly 117.3 px/s either spins you or does not. Nothing in the game arrives at that speed, but it is a discontinuity and worth knowing where it is when something looks wrong.
 
 ## Grounded
 
@@ -123,13 +176,13 @@ Because `up` is derived from `gravitySign`, landing on what was the ceiling is g
 
 ## Rotational damping and settling
 
-Three mutually exclusive cases per step:
+Three mutually exclusive cases per step. *(Amended in phase 4: keyed on **impact**, not on contact — see above. Keyed on contact, the middle row is permanently true for anything standing on the ground, so the spring would never run in the one place it exists to run.)*
 
 | Condition | Behaviour |
 | --- | --- |
 | Airborne | `ω *= exp(−ANG_DAMP_AIR · dt)` — light, 0.4/s. A jump's spin decays ~20 % over its 0.57 s airtime. |
-| Grounded, a contact resolved this step | `ω *= exp(−ANG_DAMP_GROUND · dt)` — strong, 8/s. **The spring is suppressed**, so a genuine impact isn't fought by the auto-right in the same frame it lands. |
-| Grounded, no contact this step | The restoring spring, below. |
+| Grounded, an **impact** this step | `ω *= exp(−ANG_DAMP_GROUND · dt)` — strong, 8/s. **The spring is suppressed**, so a genuine impact isn't fought by the auto-right in the same frame it lands. |
+| Grounded, no impact this step | The restoring spring, below. |
 
 The spring pulls toward the nearest multiple of 90° — visually identical for a square, so it's always the short way round and never rotates more than 45°:
 
@@ -140,7 +193,22 @@ err      = θ − θ_target                      ∈ [−π/4, π/4]
 ω       += α · dt
 ```
 
-`RIGHT_STIFFNESS` = 240 rad/s² and `RIGHT_DAMPING` = 31 ≈ 2√240 make it **critically damped**: no overshoot, no wobble, natural frequency ω_n = √240 = 15.5 rad/s, settling to within 2 % in **≈ 0.25 s**. That's the "~0.3 s soft auto-right" from the design doc, and it's why a tilted landing reads as a physical settle rather than a snap or a bounce.
+`RIGHT_STIFFNESS` = 240 rad/s² and `RIGHT_DAMPING` = 31 ≈ 2√240 make it **critically damped**: no overshoot, no wobble, natural frequency ω_n = √240 = 15.5 rad/s.
+
+*(Amended in phase 4.)* The continuous 2 % settling time is `4/ω_n` = **0.26 s**, and the discrete scheme does not hit it. Because the angle is advanced before the spring is evaluated, the step map is `[[1, h], [−kh, 1 − ch − kh²]]`, whose eigenvalues at 60 Hz are **0.844 and 0.573** — both real and positive, so still no overshoot and no oscillation, but the slow mode decays more slowly than the continuous envelope. Measured from both 25° and 44°:
+
+| Remaining error | Time |
+| --- | --- |
+| 5 % | 0.350 s |
+| 2 % | 0.433 s |
+| 1 % | 0.500 s |
+| exactly 0 (the settle snap) | 0.58–0.63 s |
+
+The design's "~0.3 s soft auto-right" holds at the threshold that matters perceptually — 5 % of a 25° tilt is 1.25°, which reads as square — but the doc's 2 % figure was a continuous-time number and is 0.43 s in practice. Bringing the 2 % mark down to 0.26 s would need `RIGHT_DAMPING` ≈ 27 (the discrete critical value at this `h` and `k`), which is a feel decision, not a correctness one, and is left to phase 5's controller pass.
+
+### The settle snap
+
+*(Added in phase 4.)* Position reaches an exact fixed point; ω only ever approaches zero asymptotically, leaving a permanent sub-pixel wobble and no exactly-still state to assert. So: grounded, `|ω| < ANG_SETTLE_VEL` (0.05 rad/s) and `|err| < ANG_SETTLE_EPS` (0.002 rad) ⇒ set the angle to the target and zero ω. At 0.002 rad a corner of the square moves 0.028 px, so the snap the design otherwise forbids is a third of a pixel below visible.
 
 ## The numbers
 
@@ -165,13 +233,22 @@ All in `src/constants.ts` with units. Derived properties are enforced by `tests/
 | `SPIN_TRANSFER` | 0.6 | collision torque scale |
 | `RESTITUTION` | 0.0 | no bounce |
 | `GROUND_NORMAL_DOT` | 0.7 | ≈45° counts as ground |
+| `CONTACT_SLOP` | 0.01 px | residual penetration left by positional correction |
+| `CONTACT_TOL` | 0.25 px | depth band within which candidates tie and merge |
+| `CLIP_TOL` | 0.99 px | tangential slack on the incident-face clip (derived) |
+| `MAX_CONTACT_ITERS` | 4 | resolution passes per sub-step |
+| `IMPACT_SPEED_MIN` | 117.3 px/s | impact vs. resting, `2 · GRAVITY_FALL · STEP` (derived) |
+| `ANG_SETTLE_EPS` | 0.002 rad | angle error under which a grounded body snaps square |
+| `ANG_SETTLE_VEL` | 0.05 rad/s | angular speed under which that snap is allowed |
 
 ### Derived, and asserted by tests
 
-- **Jump peak** = v²/2g = 700²/4400 ≈ 111.4 px ≈ **3.48 tiles**.
-- **Rise** ≈ 0.318 s, **fall from peak** ≈ 0.252 s, **airtime ≈ 0.570 s**.
+- **`PLAYER_INERTIA` = `inertiaOfSquare(PLAYER_SIZE)` = s²/6 = 66.7.** Derived, never typed in: a literal could silently disagree with `PLAYER_SIZE`, and every angular result scales with the ratio. The solver computes inertia from the body's own size through the same function.
+- **Jump peak** = v²/2g = 700²/4400 ≈ 111.4 px ≈ **3.48 tiles**. Simulated: **111.361 px**, 0.002 % under — average-velocity integration is exact for constant acceleration, so the only error left is that the true apex falls between two samples. (Phase 2's plain Euler missed by 5.2 %.)
+- **Rise** ≈ 0.318 s, **fall from peak** ≈ 0.252 s, **airtime ≈ 0.570 s** = 34.2 steps.
 - **Full-speed jump clearance** ≈ 0.570 × 256 ≈ 146 px ≈ **4.56 tiles**. Levels may use 4-tile gaps; 5 needs a flip or a pad.
-- **Spin per jump.** With air damping, total rotation over one airtime is `ω₀ · (1 − e^{−0.4·0.57}) / 0.4 = ω₀ · 0.511`. A standing jump (ω₀ = 2.5) turns **≈ 73°**; a full-speed jump (ω₀ = 2.5 + 0.014·256 = 6.08) turns **≈ 178°** — very close to a half-turn, so a fast jump usually lands on the opposite face.
+- **Spin per jump.** With air damping, total rotation over one airtime is `ω₀ · (1 − e^{−0.4·0.57}) / 0.4 = ω₀ · 0.511`. A standing jump (ω₀ = 2.5) turns **≈ 73°**; a full-speed jump (ω₀ = 2.5 + 0.014·256 = 6.08) turns **≈ 178°** — very close to a half-turn, so a fast jump usually lands on the opposite face. Measured in the browser at the last airborne frame: **72.87°** and **177.3°**. The discrete sum runs +0.33 % high because damping is applied after the advance, which is `h·λ/2` exactly.
+- **Solver cost** at terminal velocity wedged in a corner: **0.0023 ms/step**, against a 16.67 ms frame budget. Resting flat, 0.0005 ms.
 
 ### The one-tile corridor
 

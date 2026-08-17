@@ -6,7 +6,7 @@ A minimalist momentum platformer built from scratch with **TypeScript and the Ca
 
 ![The renderer at speed: row-merged geometry, the vignette closing in, and chromatic fringing on every edge.](docs/screenshot.png)
 
-> **Under construction.** This is a total overhaul of Pixel Quest — the dungeon platformer this repo used to hold, preserved in git history before `d7a54ff` — rebuilt from the loop up. Phases 1–3 of 7 are complete: the design is settled and the look is decided, but the rigid-body physics, the levels, and the editor are not built yet. The screenshot above is the phase 3 test grid, dev overlay and all — an honest picture of where the build actually is. See [docs/PHASES.md](docs/PHASES.md) for the plan and what's landed.
+> **Under construction.** This is a total overhaul of Pixel Quest — the dungeon platformer this repo used to hold, preserved in git history before `d7a54ff` — rebuilt from the loop up. Phases 1–4 of 7 are complete: the design is settled, the look is decided, and the square is now a real rigid body that tumbles, catches on corners and rights itself. The levels, the flip's gravity half, and the editor are not built yet. The screenshot above is the test grid, dev overlay and all — an honest picture of where the build actually is. See [docs/PHASES.md](docs/PHASES.md) for the plan and what's landed.
 
 ## Play
 

@@ -9,7 +9,7 @@ Design decisions are settled in [GAME-DESIGN.md](GAME-DESIGN.md) — phases impl
 | 1 | Design doc, docs, rename | ✅ done |
 | 2 | Demolition | ✅ done |
 | 3 | Renderer & post-processing | ✅ done |
-| 4 | Rigid-body physics | ⬜ |
+| 4 | Rigid-body physics | ✅ done |
 | 5 | Player, world & level format | ⬜ |
 | 6 | Particles & audio | ⬜ |
 | 7 | Editor & shell | ⬜ |
@@ -206,7 +206,7 @@ The `angle` field on the player is a hook and nothing animates it, as the brief 
 
 ---
 
-## Phase 4 — Rigid-body physics ⬜
+## Phase 4 — Rigid-body physics ✅
 
 The hard one, and the reason this overhaul is interesting. Budget accordingly.
 
@@ -315,6 +315,23 @@ Assertions worth naming:
 - **`obb.ts` is where a sign error hides.** It is pure, cheap to test exhaustively, and the only layer where a wrong sign produces plausible-looking motion instead of a crash. If any test in this phase is over-invested, make it that one.
 
 **Exit:** a headless test drives a body through a hand-built grid and lands it, spinning, on a target tile; a flat square lands flat and stays bit-identically still; the browser shows a square that tumbles when it jumps, catches on corners, and rights itself. `npm run typecheck` and `npm test` green; PHYSICS.md §Per-step algorithm, §Contact point and §Rotational damping, and GAME-DESIGN §6/§12, amended where this phase contradicted them.
+
+### As built
+
+All met. Tests 165 → 226, typecheck clean. The eight decisions held; the brief's *predictions* mostly did not, and the two failures the phase actually hit were not on its risk list.
+
+- **The integrator prediction was exact and the apex is 0.002 % off.** Sampled peak 111.361 px against the analytic 111.364 — three orders of magnitude better than the ±5 % target, exactly as decision 1 said, because average-velocity integration is exact for constant acceleration and the only residual is that the true apex falls between samples. `vy` at rest is `0`, not `0.0`-ish: the arcade clamp can be shown never to overshoot into separation, so `v·n` lands on exactly zero. Airtime 34.2 steps, spin per jump 72.87° / 177.3° measured in the browser against 73.0 / 177.6, with the +0.33 % discrete bias landing precisely where predicted.
+- **Two real bugs, both from tile *seams*, and neither is in the brief.** They are the same shape — a surface that is one thing to a player and several things to a solver — and between them they cost more than every decision in the brief combined.
+  1. **A contiguous floor is not a floor.** A square landing across a tile seam barely overlaps the second tile horizontally, so *that* tile's cheapest separating axis is sideways: measured, an ordinary landing was shoved along the floor with **8.07 rad/s** of spin. The fix is exact rather than heuristic — if the neighbour in the push direction is solid, the push drives the box into solid material, so the contact is spurious and the neighbour owns the real one. `FACE_*` / `faceBlocked` in `obb.ts`, four `map.get` calls per tile in the broadphase. Out-of-bounds reads do the right thing for free.
+  2. **Resting slop clips the corner off the wall beside it.** A resting body sits `CONTACT_SLOP` inside the floor and sinks a further 0.489 px each step before resolution, so its lower corner hangs past the bottom of the adjacent wall tile. Clipped strictly, that corner is discarded, the wall contact degenerates to its single upper corner, and **walking into a wall answered with 3.65 rad/s of spin conjured out of nothing but slop.** Hence `CLIP_TOL` — tangential, and necessarily larger than the depth band `CONTACT_TOL`, which is the whole reason it is a separate constant.
+- **Decision 4's ordering was under-specified in the direction that matters, and the inside corner found it.** "Resolve the deepest first" can be read as "resolve all of them, deepest first", and that reading oscillates: the wall push moves the body 5 px, and the floor manifold behind it is then resolved against candidate points from *before* the move. **Only one manifold is resolved per pass**, then straight back to the broadphase — which is what PHYSICS.md said all along, and is also what makes `MAX_CONTACT_ITERS` = 4 mean what decision 4 claims it means.
+- **The named "flat rest, watched failing" assertion had no teeth, and its predicted number was wrong twice over.** Phase 3's lesson repeating, exactly. Measured against the naive single-deepest-vertex contact point: the landing is kicked to **−12.25 rad/s**, but the spring then returns it to *exactly* zero within 100 steps — so the brief's end-state assertion (`|ω| < 1e-6`, positions bit-identical) **passes on the very implementation it is named for**. It now asserts the whole trajectory — a flat landing must produce no rotation at *any* point — and fails against the naive version at 12.25. The brief's ≈4.4 rad/s permanent roll needs decision 3 removed as well, and is then **2.20 rad/s** (126°/s), not 4.4: the taper is stronger than the estimate. Three other tests caught the naive version unaided; the headline one did not.
+- **The wedge oscillation the brief called "the failure this phase actually risks" is closed by decision 3, not by decision 4's four mechanisms.** It is reachable, but only by re-supplying a large velocity every step. A controller cannot: after the arcade clamp, the next frame approaches at `GROUND_ACCEL · STEP` = 35 px/s, under the 117.3 gate, so no torque and the spring keeps running. The corner test now accelerates the way the controller does and converges to a bit-identical fixed point; forcing 300 px/s every step instead gives a clean period-2 limit cycle at ±6 rad/s. Worth knowing which lever actually holds it.
+- **`RIGHT_DAMPING` is critically damped on paper and overdamped in practice, and the docs quoted the paper number.** The angle is advanced before the spring is evaluated, so the step map's eigenvalues at 60 Hz are 0.844 and 0.573 — real and positive, hence still no overshoot, but slower than the continuous envelope. Measured 2 % settling is **0.433 s**, not 0.26 s. The design's "~0.3 s" survives at the threshold that reads as square (5 % of a tilt = 1.25°, at 0.350 s), so this is amended in the docs rather than retuned; hitting 0.26 s would want `RIGHT_DAMPING` ≈ 27, which is a feel decision for phase 5.
+- **Solver cost is 0.0023 ms/step** at terminal velocity wedged in a corner — the worst case, and **64× under** the brief's 0.15 ms prediction, 0.014 % of the frame budget. Free fall 0.0012, resting flat 0.0005. No harness was added to measure it: `window.__bw.game` from phase 2 plus `Game.stepFrame`'s documented manual-drive path was enough to run the entire browser pass from the console, including the jump angles, the wall, the terminal drop, the flip and the pixel checks on the rotating core.
+- **One refinement to decision 4 worth naming:** the sub-step count is taken from the step's actual *displacement*, not from `hypot(vx, vy)`. They agree everywhere in normal play, but a caller handing in a velocity past terminal would otherwise have the clamp shrink the count while the average-velocity drift kept the distance. Measured: a body entering a floor at 4000 px/s never penetrates deeper than `CONTACT_SLOP`.
+
+`gravitySign` is a field on the player that nothing writes — phase 4 passes `+1` and the browser confirms space inverts the palette while the body keeps falling down. It is a real API the solver requires and the tests drive both signs through, not a placeholder. The render-only `angle` hook from phase 3 is retired; `render` reads `body.angle`, and the paper core was pixel-checked rotating with it at 0, 0.6 and 45°.
 
 ---
 

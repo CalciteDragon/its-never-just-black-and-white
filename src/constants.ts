@@ -1,7 +1,7 @@
 /**
  * All global tuning constants live here, commented with units.
  * Values are the GAME-DESIGN §6 design targets; the phase that owns a block
- * appends it. Angular constants arrive with the rigid-body solver (phase 4).
+ * appends it.
  */
 
 /** Internal render resolution (px). The world renders at this size, then integer-scales up. */
@@ -53,6 +53,108 @@ export const MAX_SUBSTEP = 8;
  * and the only visual tell of the body's angle.
  */
 export const PLAYER_CORE_INSET = 5;
+
+// --- Angular motion (GAME-DESIGN §6). Units: rad, rad/s, rad/s², 1/s. ---
+
+/**
+ * Moment of inertia of a square lamina of side `s` about its centre, at unit
+ * mass. Exported as a function so PLAYER_INERTIA and the solver share one
+ * derivation: a literal 66.7 could silently disagree with PLAYER_SIZE, and
+ * every angular result in the game scales with that ratio.
+ */
+export function inertiaOfSquare(s: number): number {
+  return (s * s) / 6;
+}
+
+/** Player moment of inertia = PLAYER_SIZE² / 6 ≈ 66.7 at unit mass. */
+export const PLAYER_INERTIA = inertiaOfSquare(PLAYER_SIZE);
+
+/**
+ * A contact normal within ≈45° of "up" counts as ground. Tiles are axis-aligned
+ * but the box is not: balanced on a corner, the box contacts along one of its
+ * own face normals, up to 45° off vertical. Standing there is the moment the
+ * game is showing off, so it counts.
+ */
+export const GROUND_NORMAL_DOT = 0.7;
+/** Angular velocity imparted by a standing jump (rad/s). */
+export const JUMP_SPIN_BASE = 2.5;
+/** Extra jump spin per px/s of horizontal speed (rad/s per px/s). */
+export const JUMP_SPIN_PER_SPEED = 0.014;
+/** Angular velocity imparted by a flip (rad/s). Phase 5 spends it. */
+export const FLIP_SPIN_KICK = 3.0;
+/** Hard clamp on |angVel| (rad/s). */
+export const MAX_ANG_SPEED = 14;
+/** Exponential angular damping in flight (1/s) — light: a jump keeps its spin. */
+export const ANG_DAMP_AIR = 0.4;
+/** Exponential angular damping on a step that landed an impact (1/s). */
+export const ANG_DAMP_GROUND = 8;
+/** Restoring spring toward the nearest multiple of 90° (rad/s²). */
+export const RIGHT_STIFFNESS = 240;
+/** Spring damping (1/s) ≈ 2√RIGHT_STIFFNESS — critically damped, no overshoot. */
+export const RIGHT_DAMPING = 31;
+/**
+ * Fraction of the physically exact collision torque actually applied. An
+ * admitted cheat: exact torque whirls the square off every graze.
+ */
+export const SPIN_TRANSFER = 0.6;
+/** No bounce. Impacts spin you; they never launch you. */
+export const RESTITUTION = 0.0;
+
+// --- Solver internals (world/physics.ts, PHASES phase 4). ---
+
+/**
+ * Residual penetration left by positional correction (px). Correcting to
+ * exactly this makes rest a fixed point rather than an asymptote.
+ */
+export const CONTACT_SLOP = 0.01;
+/**
+ * Depth window (px) within which contact candidates count as tied and merge
+ * into their centroid. At PLAYER_SIZE this is a tie band of
+ * asin(0.25/20) = ±0.72° — below the settled angular residual, and far below
+ * any tilt a player could see. It is what lets a flat square land flat: both
+ * bottom corners tie, the contact point is the face centre, r × n is exactly
+ * zero, and the landing produces no torque at all.
+ */
+export const CONTACT_TOL = 0.25;
+/**
+ * Tangential slack (px) on clipping contact candidates to the incident face.
+ *
+ * Distinct from CONTACT_TOL, and necessarily larger: that one is a depth band,
+ * this one is a tangential one, and it is sized by how far a resting body sinks
+ * into the floor before its contact is resolved — GRAVITY_FALL · STEP² / 2 =
+ * 0.489 px, every step, forever. Deepest-first can evaluate a wall contact
+ * while the box is down there, and the box's lower corner is then that far
+ * below the bottom of the wall tile. Clipped strictly it is discarded, the wall
+ * contact degenerates to the single upper corner, and walking into a wall
+ * answers with 3.7 rad/s of spin conjured out of resting slop alone. Two steps'
+ * worth, for margin; at 1 px on a 32 px tile the ledge cases are untouched.
+ */
+export const CLIP_TOL = GRAVITY_FALL * STEP * STEP + CONTACT_SLOP;
+/**
+ * Contact resolution passes per sub-step. Four is a natural cap once contacts
+ * are merged into manifolds: there are only four tile-axis normals.
+ */
+export const MAX_CONTACT_ITERS = 4;
+/**
+ * Approach speed (px/s) above which a contact is a genuine impact rather than
+ * resting or scraping. Twice the largest approach speed gravity alone can build
+ * in one step, i.e. a 1.96 px drop. One threshold, two jobs: above it, impacts
+ * own the spin and the auto-right spring is suppressed for that step; below it,
+ * the contact is a linear stop only and the spring owns settling.
+ *
+ * A resting contact is still a contact — gravity re-penetrates a resting body
+ * by 0.489 px every step — so "a contact resolved this step" is permanently
+ * true on the ground and cannot be the discriminator.
+ */
+export const IMPACT_SPEED_MIN = 2 * GRAVITY_FALL * STEP;
+/**
+ * Angle error (rad) under which a grounded, near-still body snaps to its target
+ * angle. At 0.002 rad a corner of the square moves 0.028 px, so the snap the
+ * design otherwise forbids is a third of a pixel below visible.
+ */
+export const ANG_SETTLE_EPS = 0.002;
+/** Angular speed (rad/s) under which that snap is allowed. */
+export const ANG_SETTLE_VEL = 0.05;
 
 // --- Camera (world/camera.ts). ---
 

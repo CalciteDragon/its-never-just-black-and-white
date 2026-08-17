@@ -162,7 +162,7 @@ Derived, and asserted by tests:
 
 | Constant | Value | Meaning |
 | --- | --- | --- |
-| `PLAYER_INERTIA` | 66.7 | moment of inertia of a square about its centre, s²/6 at unit mass |
+| `PLAYER_INERTIA` | 66.7 | moment of inertia of a square about its centre; **derived** as `inertiaOfSquare(PLAYER_SIZE)` = s²/6 at unit mass, never typed in |
 | `GROUND_NORMAL_DOT` | 0.7 | contact normal within ≈45° of up counts as ground |
 | `JUMP_SPIN_BASE` | 2.5 rad/s | spin imparted by a standing jump |
 | `JUMP_SPIN_PER_SPEED` | 0.014 rad/s per px/s | added spin scaled by |vx| |
@@ -174,6 +174,22 @@ Derived, and asserted by tests:
 | `RIGHT_DAMPING` | 31 /s | ≈ 2√k, critically damped, settles in ~0.26 s |
 | `SPIN_TRANSFER` | 0.6 | fraction of collision torque actually applied |
 | `RESTITUTION` | 0.0 | no bounce; impacts spin you, they don't launch you |
+
+> *(Amended in phase 4.)* `RIGHT_DAMPING` = 31 is critically damped in continuous time, but the discrete scheme settles to 2 % in **0.43 s**, not the 0.26 s quoted above — see [PHYSICS.md](PHYSICS.md) § Rotational damping. It reads as square (5 % of a tilt) at 0.35 s, so the "~0.3 s soft auto-right" holds perceptually; the 2 % figure did not survive discretisation.
+
+### Solver internals
+
+Added in phase 4. These are not feel knobs — each one is the answer to a specific failure, documented in [PHYSICS.md](PHYSICS.md).
+
+| Constant | Value | Meaning |
+| --- | --- | --- |
+| `CONTACT_SLOP` | 0.01 px | residual penetration left by positional correction; makes rest a fixed point |
+| `CONTACT_TOL` | 0.25 px | depth band within which contact candidates tie and merge to their centroid (a ±0.72° tie band at `PLAYER_SIZE`) |
+| `CLIP_TOL` | `GRAVITY_FALL·STEP² + CONTACT_SLOP` ≈ 0.99 px | tangential slack when clipping candidates to the incident face — two steps of a resting body's sink |
+| `MAX_CONTACT_ITERS` | 4 | resolution passes per sub-step; one per tile-axis normal |
+| `IMPACT_SPEED_MIN` | `2·GRAVITY_FALL·STEP` = 117.3 px/s | approach speed separating a genuine impact from resting or scraping |
+| `ANG_SETTLE_EPS` | 0.002 rad | angle error under which a grounded, near-still body snaps square (a corner moves 0.028 px) |
+| `ANG_SETTLE_VEL` | 0.05 rad/s | angular speed under which that snap is allowed |
 
 ### Feel & effects
 
@@ -293,8 +309,8 @@ Signatures are binding; phase briefs fill in the detail.
 - **`engine/particles.ts`** — pooled system, reworked for accent-coloured emitters: `spawnDust`, `spawnBurst`, `spawnStream` (jump pads), `update(dt)`, `render(r)`.
 - **`engine/audio.ts`** — `class AudioSys { sfx(name); setIntensity(speedNorm); setMuted(b) }` with the delay send and the layered music scheduler.
 - **`engine/save.ts`** — `SaveStore` with injectable storage, `bw.` keys: `bw.progress`, `bw.best.<levelId>`, `bw.muted`, `bw.editor.draft`.
-- **`world/obb.ts`** *(new, pure)* — `vertices(box)`, `projectOnto(box, axis)`, `satOverlap(obb, aabb): { hit, normal, depth } | null`, `deepestVertex(...)`. No tilemap knowledge, fully unit-tested.
-- **`world/physics.ts`** — rewritten: `interface RigidBody { x, y, vx, vy, angle, angVel, size }` (centre origin), `stepBody(body, map, dt, opts): StepResult { grounded, contacts, landed, hitCeiling }`. Sub-stepped, SAT-resolved, impulse response. Node-safe.
+- **`world/obb.ts`** *(new, pure)* — `vertices(box, out)`, `projectRadius(box, ax, ay)`, `tileRadius(tile, ax, ay)`, `deepestVertex(box, nx, ny, out)`, `satOverlap(box, tile, out, interiorFaces): boolean`, `contactCandidates(box, tile, nx, ny, tileAxis, out): number`, and the `FACE_*` flags with `faceBlocked`. No tilemap knowledge, fully unit-tested. *(Amended in phase 4: `satOverlap` writes into a caller-supplied result and returns a boolean rather than allocating `{ hit, normal, depth } | null` — the doc's shape was redundant with itself, and this keeps the hot path allocation-free, consistent with `forEachRun`. `projectOnto` is named for what it returns.)*
+- **`world/physics.ts`** — rewritten: `interface RigidBody { x, y, vx, vy, angle, angVel, size }` (centre origin), `stepBody(body, map, dt, opts): StepResult { grounded, landed, hitCeiling, contacts, contactCount }`, plus `createBody`, `rightAngleError` and `subStepCount`. Sub-stepped, SAT-resolved, impulse response. Node-safe. *(Amended in phase 4: `stepBody` owns gravity — it needs `opts.gravitySign` and the rise/fall split anyway — which deletes `applyGravity`, `moveBody` and `isSupported`; support stops being a positional query, because "the floor" is whichever surface opposes gravity this instant. `StepResult.contacts` is a **fixed-capacity buffer reused across calls**, valid only until the next `stepBody`, carrying point, normal and impulse per contact so phase 6's landing splash has somewhere to read impact strength.)*
 - **`world/level.ts`** *(new)* — `parseLevel(json): Level | LevelError`, `Level { id, name, w, h, tiles: Uint8Array, spawn, goal, pads }`, `serializeLevel(level): string`, `validateLevel(rows): string[]`.
 - **`world/tiles.ts`** — `enum Tile { Empty, Solid, PadUp, PadDown, PadLeft, PadRight }`, `class TileMap` with the seal-sides / open-vertically bounds rule.
 - **`world/camera.ts`** — follow with lookahead, clamp horizontally to the level, screen bounce, no shake.

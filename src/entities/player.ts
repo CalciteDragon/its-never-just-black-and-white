@@ -1,12 +1,14 @@
 /**
- * Player controller: run accel/friction, coyote time, jump buffering, and
- * variable jump height. Input arrives as plain booleans so tests drive the
- * controller directly.
+ * Player controller: run accel/friction, coyote time, jump buffering, variable
+ * jump height, and the jump's angular impulse. Input arrives as plain booleans
+ * so tests drive the controller directly.
  *
- * TEMPORARY, like the solver underneath it. Phase 5 rewrites this against the
- * rigid body: the flip and its charge, spin impulses, pad response and
- * out-of-bounds death all land there. Right now it is a square that runs and
- * jumps, and that is deliberately all it is.
+ * ADAPTED, not rewritten. Phase 5 rewrites this against the finished design:
+ * the flip and its charge, pad response and out-of-bounds death all land there.
+ * What phase 4 owns is the move to the centre-origin rigid body and the jump
+ * spin — the latter because it is two lines of final code on an action that
+ * already exists, and without it the entire angular half of the solver is dead
+ * on screen for a whole phase.
  */
 
 import {
@@ -16,7 +18,10 @@ import {
   GROUND_FRICTION,
   JUMP_BUFFER,
   JUMP_CUT_FACTOR,
+  JUMP_SPIN_BASE,
+  JUMP_SPIN_PER_SPEED,
   JUMP_VELOCITY,
+  MAX_ANG_SPEED,
   PLAYER_CORE_INSET,
   PLAYER_SIZE,
   RUN_SPEED,
@@ -24,8 +29,8 @@ import {
 import { palette } from '../engine/palette';
 import { burstDust } from '../engine/particles';
 import type { Renderer } from '../engine/renderer';
-import { applyGravity, moveBody } from '../world/physics';
-import type { Body } from '../world/physics';
+import { createBody, stepBody } from '../world/physics';
+import type { RigidBody } from '../world/physics';
 import type { EntityWorld } from './context';
 
 export interface PlayerInputs {
@@ -43,39 +48,41 @@ export const NO_INPUTS: PlayerInputs = {
 };
 
 export class Player {
-  readonly body: Body;
+  readonly body: RigidBody;
   onGround = false;
   /**
-   * Render-only body angle (radians). The simulation never writes it — phase 4
-   * drives it from the rigid body's real angular state. It exists now so the
-   * rotated draw path is live code on the screen rather than an untested
-   * primitive phase 4 discovers is wrong. Anything animating it before then is
-   * a second rotation source for phase 4 to fight.
+   * +1 = gravity down, −1 = up. Phase 4 never writes it; the flip that negates
+   * it is phase 5's, and it needs a charge and a spin kick that do not exist
+   * yet. It is a real field rather than a literal because the solver takes it
+   * either way and the tests drive both signs through it.
    */
-  angle = 0;
+  gravitySign: 1 | -1 = 1;
 
   private coyote = 0;
   private buffer = 0;
   private jumpCutDone = true;
 
-  constructor(x: number, y: number) {
-    this.body = { x, y, w: PLAYER_SIZE, h: PLAYER_SIZE, vx: 0, vy: 0 };
+  constructor(cx: number, cy: number) {
+    this.body = createBody(cx, cy, PLAYER_SIZE);
   }
 
   get centerX(): number {
-    return this.body.x + this.body.w / 2;
+    return this.body.x;
   }
 
   get centerY(): number {
-    return this.body.y + this.body.h / 2;
+    return this.body.y;
   }
 
-  /** Place the player with feet on the given world-space y, at rest. */
-  spawnAt(x: number, feetY: number): void {
-    this.body.x = x;
-    this.body.y = feetY - this.body.h;
-    this.body.vx = 0;
-    this.body.vy = 0;
+  /** Place the player's CENTRE at (cx, cy), at rest and square to the world. */
+  spawnAt(cx: number, cy: number): void {
+    const b = this.body;
+    b.x = cx;
+    b.y = cy;
+    b.vx = 0;
+    b.vy = 0;
+    b.angle = 0;
+    b.angVel = 0;
     this.onGround = false;
     this.coyote = 0;
     this.buffer = 0;
@@ -84,6 +91,7 @@ export class Player {
 
   update(dt: number, inp: PlayerInputs, world: EntityWorld): void {
     const b = this.body;
+    const gs = this.gravitySign;
 
     // Horizontal control is arcade, and stays that way at every angle (§5).
     const dir = (inp.right ? 1 : 0) - (inp.left ? 1 : 0);
@@ -101,27 +109,32 @@ export class Player {
     this.buffer = inp.jumpPressed ? JUMP_BUFFER : Math.max(0, this.buffer - dt);
 
     if (this.buffer > 0 && this.coyote > 0) {
-      b.vy = -JUMP_VELOCITY;
+      b.vy = -JUMP_VELOCITY * gs;
+      // Spin signed by travel direction, so the square appears to roll forward.
+      // Standing still there is no direction to read, and the design still
+      // wants the ≈73° turn, so it defaults to rolling right.
+      const spinDir = b.vx < 0 ? -1 : 1;
+      b.angVel += spinDir * (JUMP_SPIN_BASE + JUMP_SPIN_PER_SPEED * Math.abs(b.vx));
+      b.angVel = Math.min(Math.max(b.angVel, -MAX_ANG_SPEED), MAX_ANG_SPEED);
       this.buffer = 0;
       this.coyote = 0;
       this.jumpCutDone = false;
       world.sfx('jump');
-      burstDust(world.particles, this.centerX, b.y + b.h);
+      burstDust(world.particles, b.x, b.y + (PLAYER_SIZE / 2) * gs);
     }
 
     // Variable jump height: releasing jump while rising cuts the ascent once.
-    if (!inp.jumpHeld && b.vy < 0 && !this.jumpCutDone) {
+    if (!inp.jumpHeld && b.vy * gs < 0 && !this.jumpCutDone) {
       b.vy *= JUMP_CUT_FACTOR;
       this.jumpCutDone = true;
     }
 
-    applyGravity(b, dt);
-    const res = moveBody(b, world.map, dt);
+    const res = stepBody(b, world.map, dt, { gravitySign: gs });
     if (res.landed) {
       world.sfx('land');
-      burstDust(world.particles, this.centerX, b.y + b.h);
+      burstDust(world.particles, b.x, b.y + (PLAYER_SIZE / 2) * gs);
     }
-    this.onGround = res.onGround;
+    this.onGround = res.grounded;
   }
 
   /**
@@ -129,13 +142,12 @@ export class Player {
    * The body is the same colour as the geometry it touches, so without the core
    * a square flush against a wall would vanish into it — and a plain square
    * gives no cue at all about its angle, where a square with a core reads at a
-   * glance. Both rotate together; neither branches on the phase.
+   * glance. Both rotate with the simulation; neither branches on the phase.
    */
   render(r: Renderer): void {
-    const cx = this.centerX;
-    const cy = this.centerY;
-    r.rectRotated(cx, cy, PLAYER_SIZE, PLAYER_SIZE, this.angle, palette.ink);
+    const b = this.body;
+    r.rectRotated(b.x, b.y, PLAYER_SIZE, PLAYER_SIZE, b.angle, palette.ink);
     const core = PLAYER_SIZE - 2 * PLAYER_CORE_INSET;
-    r.rectRotated(cx, cy, core, core, this.angle, palette.paper);
+    r.rectRotated(b.x, b.y, core, core, b.angle, palette.paper);
   }
 }

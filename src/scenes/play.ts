@@ -8,7 +8,7 @@
  * someone will try to keep.
  */
 
-import { SPEED_REF, SPEED_SMOOTH_RATE, TILE, VIEW_H, VIEW_W } from '../constants';
+import { PLAYER_SIZE, SPEED_REF, SPEED_SMOOTH_RATE, TILE, VIEW_H, VIEW_W } from '../constants';
 import type { Input } from '../engine/input';
 import { palette } from '../engine/palette';
 import { ParticleSystem } from '../engine/particles';
@@ -82,7 +82,8 @@ export class PlayScene implements Scene {
   }
 
   private respawn(): void {
-    this.player.spawnAt(SPAWN_TX * TILE, SPAWN_FEET_TY * TILE);
+    // Centre origin: the spawn tile's middle, lifted so the feet rest on the row.
+    this.player.spawnAt(SPAWN_TX * TILE + TILE / 2, SPAWN_FEET_TY * TILE - PLAYER_SIZE / 2);
     this.particles.clear();
     this.speedNorm = 0;
   }
@@ -117,8 +118,10 @@ export class PlayScene implements Scene {
     this.player.update(dt, readInputs(input), this.world(game));
 
     // No death yet (phase 5 owns it): leaving the world just puts you back.
+    // The one place the centre-origin migration is arithmetic rather than types.
     const b = this.player.body;
-    if (b.y > this.map.heightPx + TILE || b.y + b.h < -TILE) {
+    const half = PLAYER_SIZE / 2;
+    if (b.y - half > this.map.heightPx + TILE || b.y + half < -TILE) {
       this.respawn();
     }
 
@@ -142,7 +145,7 @@ export class PlayScene implements Scene {
     this.player.render(r);
     this.particles.render(r.ctx, Math.round(vx), Math.round(vy));
 
-    r.text('PHASE 3 TEST GRID', 16, 16, palette.ink, 2);
+    r.text('PHASE 4 TEST GRID', 16, 16, palette.ink, 2);
     r.text('AD/ARROWS MOVE  W/UP JUMP  SPACE FLIP  R RESET  ESC TITLE', 16, 40, palette.ink);
     if (game.audio.muted) {
       r.text('MUTED', 16, VIEW_H - 24, palette.ink);

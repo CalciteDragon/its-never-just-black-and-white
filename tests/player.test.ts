@@ -1,11 +1,22 @@
 /**
  * Deliberately minimal, like the controller it covers. Phase 5 rewrites the
- * player against the rigid body (flip, charge, spin, pads, death); what is
- * asserted here is only the platformer feel that carries over unchanged.
+ * player against the finished design (flip, charge, pads, death); what is
+ * asserted here is the platformer feel that carries over unchanged, plus the
+ * two things phase 4 added — the centre origin and the jump's angular impulse.
  */
 
 import { describe, expect, it } from 'vitest';
-import { COYOTE_TIME, JUMP_VELOCITY, RUN_SPEED, STEP, TILE } from '../src/constants';
+import {
+  COYOTE_TIME,
+  JUMP_SPIN_BASE,
+  JUMP_SPIN_PER_SPEED,
+  JUMP_VELOCITY,
+  MAX_ANG_SPEED,
+  PLAYER_SIZE,
+  RUN_SPEED,
+  STEP,
+  TILE,
+} from '../src/constants';
 import { ParticleSystem } from '../src/engine/particles';
 import { Rng } from '../src/engine/rng';
 import { nullWorldParts } from '../src/entities/context';
@@ -29,10 +40,10 @@ function inp(partial: Partial<PlayerInputs>): PlayerInputs {
   return { ...NO_INPUTS, ...partial };
 }
 
-/** A player settled on the floor at tile column 3. */
-function grounded(map: TileMap): Player {
+/** A player settled on the floor at `tx`. spawnAt takes the CENTRE. */
+function grounded(map: TileMap, tx = 3): Player {
   const p = new Player(0, 0);
-  p.spawnAt(3 * TILE, 10 * TILE);
+  p.spawnAt(tx * TILE + TILE / 2, 10 * TILE - PLAYER_SIZE / 2);
   const w = world(map);
   for (let i = 0; i < 10; i++) {
     p.update(STEP, NO_INPUTS, w);
@@ -91,7 +102,8 @@ describe('Player movement', () => {
     const m = room();
     const w = world(m);
     const p = new Player(0, 0);
-    p.spawnAt(3 * TILE, 10 * TILE - 16); // 16 px up: lands within the buffer
+    // 16 px up: lands within the buffer window.
+    p.spawnAt(3 * TILE + TILE / 2, 10 * TILE - PLAYER_SIZE / 2 - 16);
     p.update(STEP, inp({ jumpPressed: true, jumpHeld: true }), w); // press early
     let jumped = false;
     for (let i = 0; i < 30; i++) {
@@ -115,11 +127,74 @@ describe('Player movement', () => {
     expect(Math.abs(cut.body.vy)).toBeLessThan(Math.abs(full.body.vy));
   });
 
-  it('is a PLAYER_SIZE square that settles flush on the floor', () => {
+  it('is a PLAYER_SIZE square, centre-origin, that settles flush on the floor', () => {
     const m = room();
     const p = grounded(m);
-    expect(p.body.w).toBe(p.body.h);
-    expect(p.body.y + p.body.h).toBeCloseTo(10 * TILE, 1);
+    expect(p.body.size).toBe(PLAYER_SIZE);
+    // x, y is the CENTRE now, so centerX/centerY are the body's own coords.
+    expect(p.centerX).toBe(p.body.x);
+    expect(p.centerY).toBe(p.body.y);
+    expect(p.body.y + PLAYER_SIZE / 2).toBeCloseTo(10 * TILE, 1);
     expect(p.onGround).toBe(true);
+    expect(p.body.angle).toBe(0);
+  });
+});
+
+describe('the jump spin (decision 8)', () => {
+  it('a standing jump rolls the square forward at JUMP_SPIN_BASE', () => {
+    const m = room();
+    const p = grounded(m);
+    expect(p.body.angVel).toBe(0);
+    p.update(STEP, inp({ jumpPressed: true, jumpHeld: true }), world(m));
+    // Positive is clockwise on screen. Standing still there is no travel
+    // direction to read, and the design still wants the turn, so it rolls right.
+    expect(p.body.angVel).toBeGreaterThan(0);
+    expect(p.body.angVel).toBeCloseTo(JUMP_SPIN_BASE * Math.exp(-0.4 * STEP), 4);
+  });
+
+  it('scales with speed and signs with travel direction', () => {
+    const m = room();
+    const w = world(m);
+    const fast = grounded(m);
+    for (let i = 0; i < 60; i++) {
+      fast.update(STEP, inp({ right: true }), w);
+    }
+    fast.update(STEP, inp({ right: true, jumpPressed: true, jumpHeld: true }), w);
+    const expected = JUMP_SPIN_BASE + JUMP_SPIN_PER_SPEED * RUN_SPEED;
+    expect(expected).toBeCloseTo(6.084, 3);
+    expect(fast.body.angVel).toBeGreaterThan(JUMP_SPIN_BASE);
+    expect(fast.body.angVel).toBeCloseTo(expected * Math.exp(-0.4 * STEP), 3);
+
+    // Column 20, or a 60-step run left ends jammed against the sealed map edge
+    // and jumps at 35 px/s instead of run speed.
+    const left = grounded(m, 20);
+    for (let i = 0; i < 60; i++) {
+      left.update(STEP, inp({ left: true }), w);
+    }
+    left.update(STEP, inp({ left: true, jumpPressed: true, jumpHeld: true }), w);
+    expect(left.body.angVel).toBeCloseTo(-expected * Math.exp(-0.4 * STEP), 3);
+  });
+
+  it('never exceeds MAX_ANG_SPEED, however it is stacked', () => {
+    const m = room();
+    const p = grounded(m);
+    p.body.angVel = MAX_ANG_SPEED;
+    p.update(STEP, inp({ jumpPressed: true, jumpHeld: true }), world(m));
+    expect(p.body.angVel).toBeLessThanOrEqual(MAX_ANG_SPEED);
+  });
+
+  it('lands tilted and settles itself, with no help from the controller', () => {
+    const m = room();
+    const w = world(m);
+    const p = grounded(m);
+    p.update(STEP, inp({ jumpPressed: true, jumpHeld: true }), w);
+    for (let i = 0; i < 200; i++) {
+      p.update(STEP, NO_INPUTS, w);
+    }
+    expect(p.onGround).toBe(true);
+    // Settled to an exact multiple of 90°, dead still.
+    expect(p.body.angVel).toBe(0);
+    expect(Math.abs(p.body.angle % (Math.PI / 2))).toBeLessThan(1e-12);
+    expect(p.body.vy).toBe(0);
   });
 });
