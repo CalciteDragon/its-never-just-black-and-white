@@ -210,23 +210,111 @@ The `angle` field on the player is a hook and nothing animates it, as the brief 
 
 The hard one, and the reason this overhaul is interesting. Budget accordingly.
 
-- **`world/obb.ts`** (new, pure) — oriented-box geometry with no tilemap knowledge: vertices, axis projection, SAT overlap against an axis-aligned box returning `{ normal, depth }`, and the deepest incident vertex for the contact point. Exhaustively unit-tested; this is where a subtle sign error would poison everything above it.
-- **`world/physics.ts`** (rewritten) — `stepBody`:
-  1. Integrate gravity along `gravitySign`, integrate angular velocity, sub-step at `MAX_SUBSTEP`.
-  2. Broadphase the OBB's AABB over the tilemap for candidate solids.
-  3. Narrowphase SAT per candidate, resolve the deepest first, re-test (a corner wedged in a gap touches two tiles and needs both resolved).
-  4. Positional correction along the MTV; impulse `j = −(1 + RESTITUTION)(v_p · n) / (1/m + (r × n)²/I)` applied at the contact point; angular response scaled by `SPIN_TRANSFER`.
-  5. Grounded = any contact normal opposing current gravity.
-  6. Angular damping (air vs ground), then the restoring spring toward the nearest 90° when grounded.
-- **Determinism** — fixed timestep, no `Math.random` anywhere on this path. Same start state plus same inputs must produce a bit-identical trajectory, and a test asserts it over 600 steps.
+- **`world/obb.ts`** (new, pure) — oriented-box geometry with no tilemap knowledge: vertices, axis projection, SAT against an axis-aligned box, and the incident contact feature. Exhaustively unit-tested; this is where a sign error would poison everything above it.
+- **`world/physics.ts`** (rewritten) — `stepBody`: gravity along `gravitySign`, sub-stepped advance, broadphase over the tilemap, SAT narrowphase, positional correction plus impulse response at the contact point, grounded from contact normals, angular damping and the restoring spring.
+- **`entities/player.ts`** — adapted to the centre-origin rigid body (**not** rewritten; that is phase 5).
+- **Determinism** — fixed timestep, no `Math.random` on this path, bit-identical trajectories over 600 steps.
 
-**Tests:** SAT correctness against hand-computed cases; no tunnelling at terminal velocity; a square dropped flat lands flat and stays still; a square dropped on a ledge corner acquires spin of the correct sign; a tilted grounded square rights itself within 0.4 s; the 22 px square passes a one-tile corridor at 0°, 22.5° and 45°; jump peak and airtime match the analytic values from GAME-DESIGN §6 within 5 %.
+### Eight decisions taken before writing any of it
 
-> The ±5 % peak target constrains the **integrator**, not just the tuning. Phase 2 measured the temporary solver at 5.2 % short, and derived the cause: integrating velocity before position loses `v₀·dt/2` regardless of step size. Sub-stepping alone does not fix it — advance position by the average velocity across the step (or split gravity half before, half after) or this test cannot pass.
+Four of these contradict PHYSICS.md. The spec was written before anything ran; each contradiction below is derived, not preferred, and gets amended in this phase's commit.
 
-**Risks:** resolution order oscillation in tight corners (mitigate with an iteration cap and a velocity-based sleep threshold); the restoring spring fighting a genuine collision (suppress it during the frame a contact resolves).
+1. **The integrator is "average velocity across the step", and that is *not* interchangeable with the half-gravity split.** Phase 2's note offers them as equivalent alternatives. They give identical *positions* and different *stored velocities*, and the difference decides whether a resting body reads as at rest. Kick-drift-kick ends the step having just applied the second half-kick, so a square sitting on the floor stores `vy = GRAVITY_FALL · STEP / 2` = **29.3 px/s forever** — `speedNorm` never falls below 0.09, the vignette never fully opens, and phase 5's controller has to special-case "at rest" everywhere. The correct form integrates gravity in full, drifts by the **average of the pre- and post-gravity velocity**, and resolves against the full velocity, so the arcade clamp leaves `vy` exactly 0. Take the average from the actual pair rather than subtracting `g·dt/2`, or the `MAX_FALL_SPEED` clamp desynchronises it at terminal. Scope: the correction applies to the acceleration `stepBody` itself applies. Velocity the *caller* wrote (input accel, the jump impulse) is treated as an impulse at the step boundary — 0.29 px of position error during the 0.12 s accel ramp, on an axis no derived number depends on.
 
-**Exit:** a headless test can drive a body through a hand-built grid and land it, spinning, on a target tile.
+2. **The deepest-vertex rule cannot rest a flat square, and the failure is loud.** A 20 px square flush on a floor has two bottom corners at equal depth; the tie-break picks one, giving `r × n = ∓10` and, per resting step, `j = 58.67/2.5 = 23.5` → `Δω = 0.6 · 23.5 · 10/66.7 = ` **2.11 rad/s**. Injection tapers as the corner's own velocity cancels gravity's and balances the 12.5 %/step ground damping at **≈4.4 rad/s** — a permanent 250°/s roll, deterministic, so *every* flat landing rolls the same way. Spanning two tiles does not save it: the first contact's impulse zeroes `vy`, so the second is already separating and contributes no counter-torque. So contacts are **merged into a manifold before resolution**, not resolved one tile at a time:
+   - candidate points are **clipped to the incident face** — box vertices within the tile's extent along the contact tangent (or tile corners within the box face's extent, when a box axis wins);
+   - contacts sharing a normal merge across tiles, taking the maximum depth;
+   - the contact point is the **centroid of every candidate within `CONTACT_TOL` of the deepest**.
+
+   Flush on one tile or straddling two, both bottom corners tie, the centroid is the face centre, `r × n = 0`, the denominator collapses to `1/m` and the impulse is a clean full stop with zero torque. Overhanging a ledge, only the corner actually over the tile is a candidate, so it tips off. Tilted, one vertex is clearly deepest and the corner physics is untouched. `CONTACT_TOL` = 0.25 px puts the tie band at `asin(0.25/20)` = **±0.72°**, which is below the settled residual and far below any real tilt.
+
+3. **A resting contact is still a contact, so the spring's suppression condition inverts its own purpose.** With `SLOP` residual penetration, gravity re-penetrates a resting body by 0.489 px *every* step, so "a contact resolved this step" is permanently true — and PHYSICS.md suppresses the auto-right spring exactly then. The spring would never run for a body on the ground, which is the only place it is supposed to run. Discriminate by **impact, not by contact**: `IMPACT_SPEED_MIN = 2 · GRAVITY_FALL · STEP` = 117.3 px/s, twice the largest approach speed gravity alone can produce in one step (a 1.96 px drop). One threshold, two jobs:
+   - **above it** — a genuine impact: apply the angular impulse, suppress the spring for that step;
+   - **below it** — resting or scraping: linear stop only, no torque, spring runs.
+
+   The second job is what stops a square resting at 1° from buzzing: a single-corner resting contact injects 2.11 rad/s per step, which rotates it 2° in one frame — straight past flat and onto the other corner. The gate makes the split explicit and honest: **impacts own spin, the spring owns settling.** Decision 2 is still needed alongside it, for the flat landing at 400 px/s that a single vertex would answer with `Δω = 14.4` rad/s — over `MAX_ANG_SPEED`, from landing perfectly flat.
+
+4. **Resolution runs inside the sub-step loop, and every ordering in it is pinned.** PHYSICS.md lists sub-stepping and resolution as sequential steps 2–4; read that way, sub-stepping is decorative — advancing the full distance in pieces with no test between them lands in the same place. Resolve after each sub-step advance. The orderings that determinism rests on, all of which are free if chosen deliberately and unfindable if not: broadphase iterates tiles **row-major**; manifolds resolve **deepest first**; SAT keeps an axis only on strict improvement, so **tile axes win ties over box axes** (which is also what makes a flush contact resolve as a face contact rather than a degenerate box-axis one); `MAX_CONTACT_ITERS` = 4 is a natural cap once manifolds are merged, since there are only four tile-axis normals. Sub-step count uses `hypot(vx, vy) · dt`, not the larger of the two components — max-of-components under-counts diagonal motion by up to √2. At full run plus terminal fall that is 13.5 px/step → 2 sub-steps; at 4000 px/s, 9.
+
+5. **The outline's "velocity-based sleep threshold" is unnecessary and is dropped; a sub-degree angular settle replaces it.** Positional correction to exactly `SLOP` makes rest a **fixed point** — the body descends 0.489 px and is pushed back to the same y, bit-identically, forever — so linear sleep would guard nothing. Only ω is asymptotic: critical damping approaches zero without reaching it, leaving a permanent sub-pixel wobble and no exactly-still state to assert. Snap it: grounded, `|ω| < ANG_SETTLE_VEL` (0.05 rad/s) and error under `ANG_SETTLE_EPS` (0.002 rad) ⇒ set the angle to the target and zero ω. At 0.002 rad a corner moves 0.028 px, so the snap the design otherwise forbids is a third of a pixel below visible — and a constants test pins it there.
+
+6. **`PLAYER_INERTIA` is derived, not typed in.** `s²/6` at unit mass; writing 66.7 as a literal means `PLAYER_SIZE` and the inertia can disagree silently, and every angular result scales with the ratio. `export const PLAYER_INERTIA = (PLAYER_SIZE * PLAYER_SIZE) / 6;`, with the constants test asserting it still lands on 66.7.
+
+7. **`stepBody` owns gravity, which deletes three exports and changes the body origin.** `applyGravity`, `moveBody` and `isSupported` all go: gravity moves inside the step (it needs `opts.gravitySign` and the rise/fall split anyway), and support stops being a positional query — grounded is a property of the contact normals, and has to be, because "the floor" is whichever surface opposes gravity this instant. Two API details the module contract in GAME-DESIGN §12 leaves open, decided here and amended there: `satOverlap` writes into a caller-supplied result and returns a boolean rather than returning `{ hit } | null` (the doc's shape is redundant with itself, and this keeps the hot path allocation-free, consistent with `forEachRun`); and `StepResult.contacts` is a **fixed-capacity buffer reused across calls**, valid only until the next `stepBody`, carrying point, normal and impulse per contact because phase 6's landing splash is specified as scaled by impact speed and needs somewhere to read it.
+
+8. **The jump's angular impulse lands here. The flip's does not.** Phase 3's rule was that nothing gets faked; the corollary is that nothing real gets withheld either. `JUMP_SPIN_BASE + JUMP_SPIN_PER_SPEED · |vx|` on an already-existing action is two lines of final code that phase 5 will keep verbatim, and without it the entire angular half of the solver is dead on screen for a whole phase — the same reasoning that made phase 3 compute `speedNorm` from real velocity rather than deferring it. The flip's spin kick, the charge, pads and death stay in phase 5, because each needs state that does not exist yet; adding them here would be a placeholder, and placeholders are what the rule is actually about.
+
+### The centre origin, and how far it reaches
+
+`RigidBody` is `{ x, y, vx, vy, angle, angVel, size }` with **`x, y` at the centre**, against the old top-left AABB. Outside `physics.ts` and `player.ts` the blast radius is three lines in `play.ts` — the camera already tracks `player.centerX/centerY`, which become one-line getters over `body.x/body.y`, so only the out-of-bounds check changes. `spawnAt` becomes `spawnAt(cx, cy)`, which is the shape phase 5 wants anyway when it spawns from a tile centre in the level data.
+
+The render-only `angle` field phase 3 parked on the player is **retired**, not written to: `render` reads `body.angle`. That hook existed so this phase would find a working rotated draw path instead of an untested primitive, and it has done its job the moment the simulation drives it.
+
+### Predictions worth recording
+
+Phase 3's benchmark prediction was worth more written down than guessed at afterwards. Three here:
+
+- **The apex overshoots ±5 % by three orders of magnitude.** Average-velocity integration is exact for constant acceleration, so sampled positions lie *on* the parabola and the only error is that the true apex falls between samples: peak sampled at step 19 is 111.361 px against the analytic 111.364, **0.003 %**, versus phase 2's 5.2 %. If the measured number is anywhere near 5 %, the integrator is not what this brief says it is.
+- **Airtime 0.5697 s = 34.2 steps**, and the rise/fall gravity switch mid-step costs at most 0.18 px.
+- **Solver cost under 0.15 ms/step** at terminal velocity inside a corner — the post pass measures 0.051 ms and the frame budget is 16.7 ms, so this is a smoke alarm, not a constraint.
+
+### Order of work
+
+Bottom-up: the geometry layer poisons everything above it, so it goes first and gets tested before anything depends on it.
+
+1. **`constants.ts`** — the angular block from GAME-DESIGN §6 in full, plus the solver constants this brief adds: `CONTACT_SLOP` 0.01 px, `CONTACT_TOL` 0.25 px, `MAX_CONTACT_ITERS` 4, `IMPACT_SPEED_MIN` (derived, decision 3), `ANG_SETTLE_EPS` 0.002 rad, `ANG_SETTLE_VEL` 0.05 rad/s, `PLAYER_INERTIA` (derived, decision 6). The six new ones are added to §6's table in the same commit.
+2. **`world/obb.ts`** — square-only (the projection-radius shortcut `r = (s/2)(|a·u| + |a·w|)` depends on it, and there is exactly one body in the game). Normals point **tile → box**, the push-out direction; write that on the module and in the tests, because it is the one convention that silently inverts every result downstream.
+3. **`tests/obb.test.ts`** — before `physics.ts` exists, against hand-computed numbers.
+4. **`world/physics.ts`** — `stepBody`, in the order of decisions 1–5.
+5. **`entities/player.ts`** — centre origin, `onGround` from `StepResult.grounded`, jump spin, `render` off `body.angle`.
+6. **`scenes/play.ts`** — the out-of-bounds check against the centre origin. Nothing else; the test grid is still throwaway and still must look it.
+7. **Tests, typecheck, browser pass, doc amendments.**
+
+### Test suite
+
+| Action | Files |
+| --- | --- |
+| Add | `obb` — the largest new test file in the repo, and deliberately so |
+| Rewrite | `physics` — the solver is new; only the §6 derived-number assertions survive |
+| Retune | `player` (centre origin, `spawnAt`), `constants` (angular block, the derived relations) |
+| Keep | `camera`, `renderer`, `palette`, `tiles`, `font`, `game`, `input`, `save`, `rng`, `particles`, `audio` |
+
+Assertions worth naming:
+
+- **Normal direction, stated four ways.** A box overlapping a tile from above, below, left and right yields `(0,−1)`, `(0,1)`, `(−1,0)`, `(1,0)` and the hand-computed depth. Half the value of `obb.test.ts` is in these four lines.
+- **Projection radius** at 0° is `s/2`, at 45° is `s/√2`, and matches `(s/2)(|a·u| + |a·w|)` at 30° — checked against explicit vertex projection, not against itself.
+- **Axis selection** — a flush face contact resolves on a tile axis, never a box axis; a tilted box on a ledge corner resolves on a box axis.
+- **Contact clipping** — a flush box centred over one tile gives the face centre; overhanging a ledge by half its width gives the corner that is still over the tile; a 20° tilt gives a single vertex.
+- **The flat rest, watched failing.** Drop a flat square onto a floor within a single tile's width, run 300 steps: `|ω| < 1e-6`, `vy === 0`, and the last 100 positions **bit-identical**. Then confirm the naive single-deepest-vertex version fails it at ≈4.4 rad/s before deleting that version. Phase 3's lesson stands — a test named in a brief is a hypothesis until it is watched failing.
+- **Spin sign off a ledge.** Box falling with its centre past a ledge's right edge contacts at `r = (−a, +b)`, `n = (0,−1)`, so `r × n = +a` and ω goes **positive** — clockwise on screen, right side down, tipping off the ledge. State the sign in the test, not just its non-zeroness.
+- **Auto-right** — 25° grounded settles under 0.02 rad within 24 steps (0.4 s), monotonically, no overshoot past zero.
+- **Flipped gravity** — with `gravitySign = −1` a body falls *up*, lands on what was the ceiling, and reports `grounded`. Nothing else exercises this path until phase 5 depends on it.
+- **The one-tile corridor**, two ways: a *vertical* shaft dropped through at 0°, 22.5° and 45° with a 1 px lateral offset (gravity drives it, no floor contact rights the angle, so the geometry is tested and nothing else), and a *horizontal* run through at `RUN_SPEED` with ω = 8 rad/s. Both assert exit, plus that ω never exceeds `MAX_ANG_SPEED`.
+- **Horizontal control survives contact** — running flat for 300 steps loses exactly zero `vx`. The floor normal is vertical and the model is frictionless, so the arcade clamp must be a no-op on the tangent (hard rule 7).
+- **No tunnelling** at 4000 px/s through a one-tile floor, and the inside-corner fixed point: 300 steps wedged in a corner, last 100 positions bit-identical.
+- **Determinism** over 600 steps with a scripted input sequence, compared with `toBe`, **plus a guard that the trajectory is non-trivial** — that it moved, rotated and contacted — or the assertion passes on a body that never left the spawn.
+- **Derived numbers** — jump peak, airtime, and spin per jump (73.0° standing, 177.6° at full speed, ±2 %: applying damping after the advance biases the discrete sum +0.33 %).
+
+### Verification that isn't a unit test
+
+`npm run dev`, with the phase 3 test grid:
+
+- A standing jump turns ≈73°; a full-speed jump turns ≈178° and lands on the opposite face. This is the phase's headline and no unit test can tell you whether it *reads*.
+- Land tilted on one of the grid's ledges — it settles in ~0.26 s with no snap, no wobble, and no fight between the spring and the contact.
+- Run into a wall at full speed: no spin, no stick, and horizontal control returns the instant you press away.
+- Fall into the 4-tile gap at terminal velocity — no tunnelling, and the landing is dead, not mushy.
+- The paper core now reads a *simulated* angle rather than a console-driven one; confirm it still does its job flush against ink geometry.
+- Time the solver over ~600 frames through `window.__bw`, worst case first (terminal velocity into a corner), record it in *As built*, delete the harness.
+- Press space: colours invert, **gravity does not**. Phase 4 passes `gravitySign = +1` and nothing else; if the world falls upward, decision 8's line got crossed.
+
+### Risks
+
+- **Wedge oscillation in tight corners** is the failure this phase actually risks. Four things fight it, and they are all in decision 4: merged manifolds (a corner is one contact per normal, not one per tile), deepest-first, the iteration cap, and the `SLOP` fixed point. The corner test asserts convergence directly rather than trusting them.
+- **`IMPACT_SPEED_MIN` is a cheat, and it has a boundary.** A contact at exactly the threshold either spins you or does not. It sits at a 1.96 px drop, which is not a speed anything in the game arrives at, but it is a discontinuity and it is worth knowing where it is when something looks wrong.
+- **The centre-origin migration is wide and mechanical**, like phase 2's `Input` collapse — and, like it, every missed site is a typecheck error rather than a silent bug. The one place that is *not* type-checked is arithmetic that happened to be right for a top-left origin: the out-of-bounds check in `play.ts` is the whole of it.
+- **`obb.ts` is where a sign error hides.** It is pure, cheap to test exhaustively, and the only layer where a wrong sign produces plausible-looking motion instead of a crash. If any test in this phase is over-invested, make it that one.
+
+**Exit:** a headless test drives a body through a hand-built grid and lands it, spinning, on a target tile; a flat square lands flat and stays bit-identically still; the browser shows a square that tumbles when it jumps, catches on corners, and rights itself. `npm run typecheck` and `npm test` green; PHYSICS.md §Per-step algorithm, §Contact point and §Rotational damping, and GAME-DESIGN §6/§12, amended where this phase contradicted them.
 
 ---
 
