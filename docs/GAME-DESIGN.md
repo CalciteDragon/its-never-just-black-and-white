@@ -235,6 +235,43 @@ Added in phase 5. Cosmetic, but real tuning numbers, so they live in `constants.
 | `GOAL_PULSE_AMP` / `GOAL_PULSE_FREQ` | 0.12 / 3.0 rad/s | scale pulse of that outline |
 | `GOAL_HOLD` | 1.2 s | how long the completion readout holds before the level advances |
 
+### Music and SFX
+
+Added in phase 6. The gates moved here out of §7's prose; the grid values are **derived** from `MUSIC_BPM` rather than typed in, for the same reason `PLAYER_INERTIA` is.
+
+| Constant | Value | Meaning |
+| --- | --- | --- |
+| `MUSIC_BPM` | 128 | tempo; a beat is 0.46875 s |
+| `MUSIC_SIXTEENTH` | **derived** = 0.1171875 s | the scheduling grid — 7.03 frames, deliberately not a whole number |
+| `MUSIC_BAR_STEPS` / `MUSIC_PATTERN_STEPS` | 16 / 32 | sixteenths per bar; the whole pattern is two bars, because the arp ascends over two |
+| `MUSIC_BAR` | **derived** = 1.875 s | 112.5 frames. The music runs on the audio clock and the simulation on `STEP`; the two are unrelated on purpose |
+| `MUSIC_FADE` | 0.35 s | layer cross-fade. One frame may move a gain by at most `STEP / MUSIC_FADE` = 0.0476 |
+| `MUSIC_LOOKAHEAD` | 0.1 s | scheduling window = 6 frames. `FixedStepper.maxFrame` is 2.5x it, which is what forces the cursor's resync (§9) |
+| `MUSIC_GATE_HATS` / `_BASS` / `_ARP` | 0.25 / 0.45 / 0.70 | strictly greater-than; the kick is always |
+| `MUSIC_GATE_EPS` | 0.01 | gain below which a layer allocates no nodes at all |
+| `MUSIC_GAIN_MIN` / `_MAX` | 0.10 / 0.34 | master music gain across the range |
+| `SFX_DELAY_TIME` | 0.18 s | the shared feedback-delay send |
+| `SFX_DELAY_FEEDBACK` / `_MAX` | 0.35 / 0.55 | feedback at rest and at full speed (§7's "rises slightly") |
+| `SFX_DELAY_LOWPASS` | 2000 Hz | inside the feedback loop, so repeats darken rather than merely quieten |
+| `STEP_SFX_DIST` | 24 px | ground distance between footfalls. A DISTANCE, so the cadence scales with speed for free and a body pinned against a wall makes no sound at all. At `RUN_SPEED` it lands exactly five to the beat |
+
+### Particles
+
+Added in phase 6. Every emitter is gravity-relative or normal-relative; nothing here is expressed against -y.
+
+| Constant | Value | Meaning |
+| --- | --- | --- |
+| `PARTICLE_SIZE` | 2 px | spark edge |
+| `SPARK_GRAVITY` / `SPARK_DRAG` | 260 px/s² / 3 /s | signed at spawn by `gravitySign` |
+| `SPARK_SPREAD` | 0.38π rad | half-angle of the cone for dust, bursts and splashes |
+| `DUST_COUNT` | 2 | sparks per footfall, with `DUST_SPEED_MIN`/`_MAX` 20/70 px/s and `DUST_LIFE` 0.3 s |
+| `JUMP_BURST_COUNT` | 8 | the burst under a jump, and under a pad hit; `BURST_SPEED_MIN`/`_MAX` 60/170 px/s, `BURST_LIFE` 0.35 s |
+| `SPLASH_COUNT_MIN` / `_MAX` | 2 / 20 | the landing splash, ramped from `IMPACT_SPEED_MIN` to `MAX_FALL_SPEED`; `SPLASH_SPEED_MIN`/`_MAX` 40/220 px/s, `SPLASH_LIFE` 0.4 s |
+| `FLIP_RING_COUNT` | 20 | the flip's ring, at `FLIP_RING_SPEED` 150 px/s for `FLIP_RING_LIFE` 0.4 s. Angles are placed **by index, never by `Rng`** — a randomly-angled ring is a puff |
+| `PAD_STREAM_INTERVAL` / `_SPEED` / `_LIFE` | 0.07 s / 90 px/s / 0.45 s | the pads' idle stream: 40.5 px = 1.27 tiles of travel, 6.4 alive per pad |
+| `PAD_STREAM_SPREAD` | 0.25 rad | narrow, so the stream reads as an arrow |
+| `PARTICLE_CULL_MARGIN` | 64 px | how far outside the view a pad still streams |
+
 ### Camera
 
 | Constant | Value | Meaning |
@@ -254,10 +291,12 @@ One number drives all of them. `speedNorm = clamp(|v| / SPEED_REF, 0, 1)`, smoot
 | Vignette | alpha lerps `VIGNETTE_MIN → VIGNETTE_MAX`; accent tint fades in over the top half of the range, peaking at `VIGNETTE_TINT_MAX` |
 | Chromatic aberration | zero below `CA_THRESHOLD`, then ramps to `CA_MAX_OFFSET` px |
 | Screen bounce | vertical camera offset `sin(phase) · BOUNCE_AMP · speedNorm`, where `phase += BOUNCE_FREQ · speedNorm · dt` |
-| Music | layer gates at 0.0 / 0.25 / 0.45 / 0.70; master gain ramps across the range |
+| Music | layer gates at `MUSIC_GATE_HATS` / `_BASS` / `_ARP`; master gain ramps `MUSIC_GAIN_MIN → MUSIC_GAIN_MAX` across the range |
 | Movement SFX | step rate scales with speed; delay feedback rises slightly |
 
 > **The bounce integrates its phase; it cannot read absolute time.** *(Amended in phase 3 — the original spec here read `sin(t · BOUNCE_FREQ · speedNorm)`.)* With absolute `t`, a small change in `speedNorm` moves the sine argument by `t · BOUNCE_FREQ · Δn`: at t = 100 s a 0.01 speed change jumps the phase by 9 radians and the screen snaps. Frequency modulation has to be applied to the phase, not to the argument. The bug is invisible in a ten-second play session and glaring in a three-minute one, so `tests/camera.test.ts` guards it directly.
+
+> *(Amended in phase 6.)* The gates were prose here (0.0 / 0.25 / 0.45 / 0.70) and are now tuning numbers in `constants.ts` with the rest. Two properties of them are worth stating because they are asserted rather than assumed: they are **strictly** greater-than, so hats are silent *at* 0.25 and audible at 0.2501; and a gate is a **target gain, not a switch**. Gating at scheduling time cannot cross-fade however the gain node behaves afterwards, because a note carries the gain it was scheduled with up to `MUSIC_LOOKAHEAD` before it sounds — so each layer owns a `GainNode` approached at `MUSIC_FADE`, and scheduling merely skips layers already below `MUSIC_GATE_EPS`. Since `speedNorm` is smoothed at `SPEED_SMOOTH_RATE` already, hovering on a boundary gives a slow swell rather than a flutter, and no hysteresis is needed on top.
 
 `speedNorm` normalises the **full velocity magnitude**, so terminal fall (`MAX_FALL_SPEED`) saturates it and flat-out running (`RUN_SPEED / SPEED_REF` = 0.8) deliberately does not. The effects still have somewhere left to go when you stop merely running and start actually moving.
 
@@ -311,9 +350,21 @@ Fully synthesised WebAudio, no assets, node-safe import.
 
 **SFX** run through a shared feedback-delay send (delay ~0.18 s, feedback ~0.35, lowpass ~2 kHz) for the echoey character: `step`, `jump`, `land`, `flip`, `pad`, `goal`, `death`, `menuMove`, `menuPick`. Sources are short filtered noise bursts and sine/triangle blips with fast envelopes — no square-wave chiptune, that's the old game.
 
-**Music** is a synthesised techno bed at ~128 BPM, built from four layers gated by `speedNorm` (§7): kick (always), hats (> 0.25), bass (> 0.45), arp lead (> 0.70). Scheduled with a lookahead scheduler against `AudioContext.currentTime`, not `setInterval` drift. Layers cross-fade over `MUSIC_FADE` rather than hard-switching.
+**Music** is a synthesised techno bed at `MUSIC_BPM` = 128, built from four layers gated by `speedNorm` (§7): kick (always), hats, bass, arp lead. Scheduled with a lookahead scheduler against `AudioContext.currentTime`, not `setInterval` drift. Layers cross-fade over `MUSIC_FADE` rather than hard-switching.
 
 Mute on `M`, persisted at `bw.muted`. The AudioContext is created lazily on first gesture and every access is guarded so the module imports cleanly under node.
+
+> *(Amended in phase 6, from the module as built.)* Four things the paragraphs above leave open, each of which turned out to decide whether the bed works at all.
+>
+> **A stalled scheduler resyncs; it does not catch up.** The textbook lookahead loop is correct only while it is pumped faster than it advances, and it is pumped from the frame loop — where `FixedStepper.maxFrame` is 250 ms against a 100 ms window. A backgrounded tab, a long GC or a suspended context leaves the cursor arbitrarily far in the past, and the loop then schedules every missed note with a start time already elapsed; WebAudio fires those immediately and simultaneously. The cursor therefore snaps forward to the next sixteenth at or after `now` and drops what was missed. Every pattern is bar-periodic, so the downbeat stays aligned and the resync is inaudible beyond the gap itself. Measured in the browser: a 17.2 s stall is 146.5 missed sixteenths, which the naive loop would have dumped into one instant and the cursor answers with three notes, all in the future.
+>
+> **The bed is scene-scoped.** `PlayScene` starts it on `enter` and stops it on `exit`; the title screen stays silent but for its menu blips, because a techno bed under a motionless title screen spends the escalation before the player has done anything to earn it. `setIntensity` is both the target-setter and the pump — called once per frame with the live `speedNorm`, which is exactly the cadence a lookahead scheduler wants, so there is no `setInterval` to outlive the scene and no second `update(dt)` beside it.
+>
+> **Death and the goal are punctuated by the bed dropping out.** Intensity is fed **0** in `dying` and `won` rather than `speedNorm` — the body keeps simulating through the death fade (§5), so the un-ducked version has the music swell as the corpse accelerates out of shot. Measured at 0.875 before the duck was added.
+>
+> **`muted` is an accessor, not a flag read at play time.** With a running scheduler, muting has to duck the master gain and stop scheduling, and unmuting has to resync onto the grid — which is the same path as the stall, for free.
+>
+> **The one clock rule.** The scheduler reads a wall clock, which is legitimate for the same reason `dateIso` is legitimate on the persistence path: it is not a logic path. The corollary is absolute, and lives on the module: **nothing in the simulation may ever read the music clock.** Syncing a jump to the beat would break determinism outright.
 
 ## 10. Level editor
 
@@ -342,15 +393,15 @@ Signatures are binding; phase briefs fill in the detail.
 - **`engine/font.ts`** — unchanged 5×7 bitmap font.
 - **`engine/palette.ts`** *(new)* — `class Palette { phase: 0 | 1; flip(): void; paper: string; ink: string; accent: string }`, plus `paperRgba(a)` / `accentRgba(a)` and `inkRgba(a, phase?)`. Pure. The single source of every colour in the game. *(Phase 5 adds `inkRgba`, whose optional `phase` exists so the death fade can be sampled once and held: the palette resets to phase A at the fade's peak, and under a live token the screen would jump from white to black at exactly the covered moment.)*
 - **`engine/renderer.ts`** — 960×540 offscreen buffer, antialiased, integer-scaled present. Adds `applyPost(speedNorm)` for vignette + chromatic aberration, and world/UI space draws.
-- **`engine/particles.ts`** — pooled system, reworked for accent-coloured emitters: `spawnDust`, `spawnBurst`, `spawnStream` (jump pads), `update(dt)`, `render(r)`.
-- **`engine/audio.ts`** — `class AudioSys { sfx(name); setIntensity(speedNorm); setMuted(b) }` with the delay send and the layered music scheduler.
+- **`engine/particles.ts`** — pooled system, accent-coloured: `class ParticleSystem { aliveCount; emit(x, y, vx, vy, life, size, gravity, drag): boolean; update(dt); render(ctx, camX, camY); clear() }` plus the emitters `spawnDust`, `spawnBurst`, `spawnSplash`, `spawnRing`, `spawnStream`. *(Amended in phase 6, three ways. Particles **store no colour**: `render` assigns the live accent once for the whole pass, so sparks invert in flight — a spawn-time colour would leave a flip trailing a cloud of the outgoing phase, and worse, the flip's own ring is emitted before `PlayScene` moves the palette, so the one thing announcing the flip would be the last thing still wearing the old colour. The pool's free-slot scan starts at a **rotating cursor**, making a spawn amortised O(1) instead of O(512), with drop-newest overflow. And the options-bag `spawn`/`ParticleOpts` are **gone**: once the emitter set landed they had no caller in `src/`, and an API kept alive only by its own tests is the placeholder the phase 3/4 rule forbids.)*
+- **`engine/audio.ts`** — split in two, the way `renderer.ts` splits `vignetteAlpha` from `applyPost`. Pure: `scheduleWindow(state, now, intensity, out): number` over a beat grid, plus `layerTarget`, `activeLayers`, `musicGain`, `delayFeedback`, `patternAt`, `createSchedulerState`, `createNoteBuffer`. Impure: `class AudioSys { constructor(makeCtx?); play(name); setIntensity(speedNorm); startMusic(); stopMusic(); get/set muted }`. *(Amended in phase 6, three ways. The effect player is `play(name)`, not `sfx(name)` — that was already true in the code and §12 had drifted. `setMuted(b)` becomes a **getter/setter pair**: with a running scheduler, muting is no longer "return early from `play`" but an action — duck the master, stop scheduling — and unmuting has to resync onto the grid, while every existing `audio.muted = x` call site compiles unchanged. And the constructor takes an **injected context factory**, defaulting to the guarded `new AudioContext()`, so the tests drive the real graph through a fake and count every node created against every `stop` scheduled.)*
 - **`engine/save.ts`** — `SaveStore` with injectable storage, `bw.` keys: `bw.progress`, `bw.best.<levelId>`, `bw.muted`, `bw.editor.draft`.
 - **`world/obb.ts`** *(new, pure)* — `vertices(box, out)`, `projectRadius(box, ax, ay)`, `tileRadius(tile, ax, ay)`, `deepestVertex(box, nx, ny, out)`, `satOverlap(box, tile, out, interiorFaces): boolean`, `contactCandidates(box, tile, nx, ny, tileAxis, out): number`, and the `FACE_*` flags with `faceBlocked`. No tilemap knowledge, fully unit-tested. *(Amended in phase 4: `satOverlap` writes into a caller-supplied result and returns a boolean rather than allocating `{ hit, normal, depth } | null` — the doc's shape was redundant with itself, and this keeps the hot path allocation-free, consistent with `forEachRun`. `projectOnto` is named for what it returns.)*
 - **`world/physics.ts`** — rewritten: `interface RigidBody { x, y, vx, vy, angle, angVel, size }` (centre origin), `stepBody(body, map, dt, opts): StepResult { grounded, landed, hitCeiling, contacts, contactCount }`, plus `createBody`, `rightAngleError` and `subStepCount`. Sub-stepped, SAT-resolved, impulse response. Node-safe. *(Amended in phase 4: `stepBody` owns gravity — it needs `opts.gravitySign` and the rise/fall split anyway — which deletes `applyGravity`, `moveBody` and `isSupported`; support stops being a positional query, because "the floor" is whichever surface opposes gravity this instant. `StepResult.contacts` is a **fixed-capacity buffer reused across calls**, valid only until the next `stepBody`, carrying point, normal and impulse per contact so phase 6's landing splash has somewhere to read impact strength.)* *(Amended in phase 5: `Contact` also carries `pad: Tile` and `onSolid: boolean`, because pads became collidable and `grounded` can no longer answer "does this recharge the flip?" — see PHYSICS.md § Grounded.)*
 - **`world/level.ts`** *(new)* — `parseLevel(raw: unknown): { ok: true; level } | { ok: false; errors: string[] }`, `Level { id, name, map: TileMap, spawn, goal, pads }`, `serializeLevel(level): string`, `validateLevel(rows: unknown): string[]`. *(Amended in phase 5, twice. `Level` holds a **`TileMap`**, not a raw `Uint8Array`: every consumer downstream — the solver's broadphase, `forEachRun`, the phase 7 editor — already takes one, so an array would be re-wrapped at each use site with the stride and the OOB rule agreed independently in every one of them. And `parseLevel` returns a **discriminated** union rather than `Level | LevelError`, because an untagged union of two object types cannot be narrowed in strict TS without a hand-written guard, and the editor's validation panel wants the whole error list rather than the first thing wrong. It never throws.)*
 - **`world/tiles.ts`** — `enum Tile { Empty, Solid, PadUp, PadDown, PadLeft, PadRight }`, `class TileMap` with the seal-sides / open-vertically bounds rule. *(Phase 5 adds `isBlocking(t)`, `isPad(t)`, `padDirection(t)` and the `tileFromChar` / `charFromTile` mapping over §8's six grid characters. The char table lives beside the enum because the phase 7 editor's palette needs exactly this one; `S` and `G` stay `level.ts`'s business and the enum does not grow.)*
 - **`world/camera.ts`** — follow with lookahead, clamp horizontally to the level, screen bounce, no shake.
-- **`entities/player.ts`** — the controller: input → linear velocity, jump + spin, flip + charge, pad response, death detection. Owns no rendering beyond a small `render(r)`. *(Amended in phase 5: `update(dt, inputs, world)` **returns** a reused `PlayerEvents { flipped, died }`, so the scene — not the player — moves the palette. `spawnAt` is the whole reset, including `gravitySign` and the charge.)*
+- **`entities/player.ts`** — the controller: input → linear velocity, jump + spin, flip + charge, pad response, death detection. Owns no rendering beyond a small `render(r)`. *(Phase 6 adds the emitters it owns — the running dust and the step cadence off ONE distance accumulator, the landing splash, the flip ring, the jump and pad bursts — plus the pure `splashCount(impulse)` ramp. `PlayerEvents` deliberately did **not** grow to carry a landing impulse: the player was already walking `StepResult.contacts` for the recharge and the pad, so the splash reads the largest-impulse ground contact right there.)* *(Amended in phase 5: `update(dt, inputs, world)` **returns** a reused `PlayerEvents { flipped, died }`, so the scene — not the player — moves the palette. `spawnAt` is the whole reset, including `gravitySign` and the charge.)*
 - **`scenes/`** — `TitleScene`, `LevelSelectScene`, `PlayScene(level)`, `ResultsScene(stats)`, `EditorScene`.
 - **`editor/grid.ts`** *(new, pure)* — grid model, paint/erase/resize, undo stack, validation. Unit-tested in node.
 - **`game.ts`** — unchanged fixed-step loop and `Scene` interface. Still the most reusable thing in the repo.

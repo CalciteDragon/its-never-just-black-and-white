@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { MAX_PARTICLES } from '../src/engine/particles';
 import {
   ANG_DAMP_AIR,
   ANG_DAMP_GROUND,
@@ -16,6 +17,8 @@ import {
   CORE_OUTLINE_WIDTH,
   DEATH_FADE_IN,
   DEATH_FADE_OUT,
+  DUST_COUNT,
+  FLIP_RING_COUNT,
   FLIP_SPIN_KICK,
   GRAVITY_FALL,
   GRAVITY_RISE,
@@ -29,10 +32,26 @@ import {
   LOOKAHEAD_TIME,
   MAX_ANG_SPEED,
   MAX_CONTACT_ITERS,
+  JUMP_BURST_COUNT,
   MAX_FALL_SPEED,
   MAX_SUBSTEP,
+  MUSIC_BAR,
+  MUSIC_BAR_STEPS,
+  MUSIC_FADE,
+  MUSIC_GAIN_MAX,
+  MUSIC_GAIN_MIN,
+  MUSIC_GATE_ARP,
+  MUSIC_GATE_BASS,
+  MUSIC_GATE_EPS,
+  MUSIC_GATE_HATS,
+  MUSIC_LOOKAHEAD,
+  MUSIC_PATTERN_STEPS,
+  MUSIC_SIXTEENTH,
   PAD_IMPULSE,
   PAD_SPIN_MAX,
+  PAD_STREAM_INTERVAL,
+  PAD_STREAM_LIFE,
+  PAD_STREAM_SPEED,
   PLAYER_CORE_INSET,
   PLAYER_INERTIA,
   PLAYER_SIZE,
@@ -43,7 +62,10 @@ import {
   SPEED_REF,
   SPEED_SMOOTH_RATE,
   SPIN_TRANSFER,
+  SPLASH_COUNT_MAX,
+  SPLASH_COUNT_MIN,
   STEP,
+  STEP_SFX_DIST,
   TILE,
   VIEW_H,
   VIEW_W,
@@ -316,6 +338,89 @@ describe('the jump pad (phase 5)', () => {
     const turn =
       ((FLIP_SPIN_KICK / ANG_DAMP_AIR) * (1 - Math.exp(-ANG_DAMP_AIR * cross)) * 180) / Math.PI;
     expect(turn).toBeCloseTo(49, 0);
+  });
+
+  it('the beat grid is 128 BPM in sixteenths, and the bar is NOT a whole frame count', () => {
+    expect(MUSIC_SIXTEENTH).toBeCloseTo(0.1171875, 12);
+    expect(MUSIC_BAR).toBeCloseTo(1.875, 12);
+    expect(MUSIC_BAR_STEPS * MUSIC_SIXTEENTH).toBeCloseTo(MUSIC_BAR, 12);
+    expect(MUSIC_PATTERN_STEPS).toBe(2 * MUSIC_BAR_STEPS); // the arp needs two
+    // 7.03 frames to a sixteenth, 112.5 to a bar. The music runs on the audio
+    // clock and the simulation on STEP; the two are unrelated ON PURPOSE, and a
+    // bar that landed on a whole frame count would be an invitation to couple
+    // them. Nothing in the simulation may ever read the music clock.
+    expect(MUSIC_SIXTEENTH / STEP).toBeCloseTo(7.03125, 6);
+    expect(Number.isInteger(MUSIC_BAR / STEP)).toBe(false);
+  });
+
+  it('the lookahead survives a five-frame hitch and sits under the frame clamp', () => {
+    // THIS is the relation that forces the scheduler's resync rather than
+    // merely recommending it: FixedStepper clamps a long frame to 250 ms, which
+    // is 2.5x the window, so a stalled cursor can fall arbitrarily far behind.
+    expect(MUSIC_LOOKAHEAD).toBeGreaterThanOrEqual(5 * STEP);
+    expect(MUSIC_LOOKAHEAD).toBeLessThan(0.25);
+    expect(0.25 / MUSIC_LOOKAHEAD).toBeCloseTo(2.5, 6);
+    // A three-second stall is 25.6 sixteenths — what the naive loop would dump
+    // into a single instant.
+    expect(3 / MUSIC_SIXTEENTH).toBeCloseTo(25.6, 1);
+    // The cross-fade is slower than the window, so no note can be scheduled
+    // with a gain that is already stale by the time it sounds.
+    expect(MUSIC_FADE).toBeGreaterThan(MUSIC_LOOKAHEAD);
+    expect(STEP / MUSIC_FADE).toBeCloseTo(0.0476, 4);
+  });
+
+  it('the gates are ordered, distinct, and the master swells between them', () => {
+    expect(MUSIC_GATE_HATS).toBeLessThan(MUSIC_GATE_BASS);
+    expect(MUSIC_GATE_BASS).toBeLessThan(MUSIC_GATE_ARP);
+    expect(MUSIC_GATE_ARP).toBeLessThan(1); // reachable — 0.7 is 224 px/s
+    expect(MUSIC_GATE_ARP * SPEED_REF).toBeLessThan(RUN_SPEED);
+    // The arp is the reward for moving faster than running: flat-out running is
+    // 0.8, and terminal fall is what saturates the whole range.
+    expect(RUN_SPEED / SPEED_REF).toBeCloseTo(0.8, 6);
+    expect(MUSIC_GAIN_MIN).toBeLessThan(MUSIC_GAIN_MAX);
+    expect(MUSIC_GAIN_MAX).toBeLessThan(1);
+    // Well below any layer gain the scheduler would call audible.
+    expect(MUSIC_GATE_EPS).toBeLessThan(0.05);
+  });
+
+  it('footfalls are five to the beat at RUN_SPEED — and only there', () => {
+    // STEP_SFX_DIST is a DISTANCE, so the cadence scales with speed for free.
+    // At flat-out running it lands 256/24 = 10.67 Hz against a 0.46875 s beat,
+    // exactly 5.0: a quintuplet over a 4/4 grid. Any other speed phases against
+    // the bed, which is the point — worth knowing before deciding it sounds
+    // wrong.
+    const beat = MUSIC_SIXTEENTH * 4;
+    expect(beat).toBeCloseTo(0.46875, 12);
+    expect((RUN_SPEED / STEP_SFX_DIST) * beat).toBeCloseTo(5, 6);
+    // A stride is comfortably under a tile, so a footfall is a footfall and not
+    // a punctuation mark.
+    expect(STEP_SFX_DIST).toBeLessThan(TILE);
+  });
+
+  it('the pad stream travels under two tiles, and the pool has a 4x margin', () => {
+    // 90 px/s for 0.45 s = 40.5 px = 1.27 tiles: it reads as an arrow leaving
+    // the pad, not as a jet reaching the far wall.
+    expect(PAD_STREAM_SPEED * PAD_STREAM_LIFE).toBeCloseTo(40.5, 6);
+    expect((PAD_STREAM_SPEED * PAD_STREAM_LIFE) / TILE).toBeCloseTo(1.27, 2);
+    expect(PAD_STREAM_SPEED * PAD_STREAM_LIFE).toBeLessThan(2 * TILE);
+
+    // Predicted peak occupancy, and the whole basis of the drop-newest overflow
+    // policy: a pool that starts evicting live sparks looks worse than one that
+    // quietly emits fewer, and this says it never has to.
+    const perPad = PAD_STREAM_LIFE / PAD_STREAM_INTERVAL;
+    expect(perPad).toBeCloseTo(6.43, 2);
+    const peak = perPad * 8 + SPLASH_COUNT_MAX + FLIP_RING_COUNT + JUMP_BURST_COUNT + 5 * DUST_COUNT;
+    expect(peak).toBeLessThan(MAX_PARTICLES / 2);
+    expect(MAX_PARTICLES / peak).toBeGreaterThan(4);
+  });
+
+  it('the splash ramp spans a landing worth the name to a terminal slam', () => {
+    // Impulse is per unit mass with RESTITUTION 0, so it IS the approach speed:
+    // the ramp's ends are the slowest contact that counts as an impact and the
+    // fastest the game can produce.
+    expect(SPLASH_COUNT_MIN).toBeLessThan(SPLASH_COUNT_MAX);
+    expect(SPLASH_COUNT_MAX / SPLASH_COUNT_MIN).toBe(10);
+    expect(IMPACT_SPEED_MIN).toBeLessThan(MAX_FALL_SPEED);
   });
 
   it('the charge tell and the fades are visible without being slow', () => {

@@ -11,7 +11,7 @@ Design decisions are settled in [GAME-DESIGN.md](GAME-DESIGN.md) — phases impl
 | 3 | Renderer & post-processing | ✅ done |
 | 4 | Rigid-body physics | ✅ done |
 | 5 | Player, world & level format | ✅ done |
-| 6 | Particles & audio | ⬜ |
+| 6 | Particles & audio | ✅ done |
 | 7 | Editor & shell | ⬜ |
 
 ---
@@ -468,7 +468,7 @@ Three things worth carrying to later phases. **`PlayScene`'s `index` defaults to
 
 ---
 
-## Phase 6 — Particles & audio ⬜
+## Phase 6 — Particles & audio ✅
 
 The layer that makes speed feel like something. Phase 3 built the visual half of `speedNorm` and phase 5 built the game underneath it; this phase adds the two channels that are still silent — the accent, which is the only colour the game has, and the audio, which is the only part of the design that has never once run.
 
@@ -588,6 +588,28 @@ Sound cannot be asserted, so this phase's browser pass carries more weight than 
 - **Particles are about to become the second-most expensive thing drawn each frame.** 512 `fillRect`s is not much, but it is 100× the count of everything else on screen, and the budget is measured, not assumed.
 
 **Exit:** running fast visibly and audibly escalates — vignette closing, colour fringing, sparks trailing, hats then bass then arp layering in — and stopping brings it back down; jumps burst, landings splash in proportion to the impact, flips ring, pads stream; nothing accumulates over three minutes and nothing dumps a bar of notes into one instant after a stall. `npm run typecheck` and `npm test` green; GAME-DESIGN §6 (the new block), §7 (gates moved into constants), §9 (resync, gating, scene scope) and §12 (`AudioSys`, `ParticleSystem`) amended, along with ARCHITECTURE.md's coordinate-policy table and its missing audio section.
+
+### As built
+
+Met, with one exit criterion left open and flagged at the end. Tests 311 → 364, typecheck clean. The nine decisions all held. For the first time in four phases the brief's headline assertion had teeth *as written* — and its predicted numbers were right for the audio and wrong for the particles, in both cases for reasons worth keeping.
+
+- **The stall resync was watched failing, and the browser found a bigger stall than the brief imagined.** Headless, against the naive `while` loop: **25 sixteenths / 59 note events, every one with a start time in the past**. The brief predicted 26 sixteenths; it is 25, because the cursor is already up to a sixteenth ahead of `now` when the stall begins — the prediction forgot the lookahead it was measuring. In the browser, against a real `AudioContext`, a **17.2 s stall = 146.5 missed sixteenths**: the naive loop would have queued 147 into a single instant, and the cursor answered with **3 notes, all in the future, still on the grid**.
+- **The crossfade bound's predicted factor of 21 was exactly right, which is new.** A hard switch moves a layer gain by 1.0 in one frame against the `STEP / MUSIC_FADE` = 0.0476 bound. Phases 3, 4 and 5 each found their named assertion vacuous; this one failed on the first try at precisely the stated margin. Removing the `MUSIC_GATE_EPS` skip likewise allocates **22 noise sources for a silent layer over two bars**, against 0.
+- **The step accumulator's whole point is the case a timer gets wrong, and the timer proves it: 14 footfalls emitted into a wall**, against 0, plus 8 during a slow crawl that should have produced none. The `wasGrounded &&` half of the gate is load-bearing too and is not in the brief: without it, the frame a long fall lands banks the entire fall as stride and fires a burst of footsteps underneath the landing sound.
+- **The un-ducked bed feeds intensity 0.875 during the death fade** — the music swelling as the corpse accelerates out of shot, exactly the failure decision 4 predicted, measured rather than argued.
+- **The predicted pool peak of ~120 is wrong by 2.4x, and the reason is the level, not the code: 49.** The prediction budgeted 51 for eight pads streaming at once and `01-first-steps` has **one**. The peak is dominated by the transient emitters — a 20-spark ring, a splash, a burst — not by the steady state, so the margin is 5.2x rather than 4.3x. The lower guard in the playthrough test moved to 40 accordingly; it exists so the ceiling assertion cannot pass on a build that never emitted.
+- **`spawn` and `ParticleOpts` were deleted, which the brief did not ask for.** Decision 6 deletes `ParticleOpts.color` because it has no caller; once the emitter set landed, the whole options bag had no caller in `src/` either — every emitter routes through `emitCone` → `emit`. Same rule, same fate. `emit(x, y, vx, vy, life, size, gravity, drag)` is now the single spawn primitive, and the pool/physics tests read *better* against exact velocities than they did against a sampled options bag.
+- **Sparks with identical lifetimes pop, and no test could see it.** `emitCone` originally gave every spark in a burst the same `life`, so a 20-spark splash vanished on one frame — a visible regression against phase 2's `burstDust`, which carried jitter for exactly this reason. Hence `SPARK_LIFE_JITTER`, applied to the sampled emitters only: **the ring is deliberately exempt**, because a ring is a shape and a shape has to leave as one. Found by reading the code during the browser pass, not by a failing test, and now guarded by one.
+- **Benchmarks, against the brief's predictions.** Particle render at a forced 512 alive: **0.0775 ms** (predicted under 0.15), which does make it the second-largest per-frame cost in the game as predicted — the post pass is 0.051 ms and the solver 0.0023 ms. Scheduler pump on an idle frame: **0.0072 ms** (predicted under 0.02). A pump that actually schedules a sixteenth: **0.0624 ms**. All three predictions held.
+- **Nothing accumulates.** A 139.5 s soak, 8,715 frames at 62.5 fps: **4,058 sources started, 4,058 stopped, 0 live**, zero console errors, and heap 6.1 MB → 5.0 MB (it went *down*; the GC is keeping up). The unit test's node accounting was confirmed against the real `AudioContext` rather than only the fake.
+- **Decision 6 confirmed on real pixels: 160 cool / 0 warm before a flip, 0 cool / 196 warm after.** Not one spark already in flight kept the outgoing colour, and the extra warm pixels are the flip's own ring — the case the decision exists for. A corollary found by accident: at `speedNorm` 0.8 an exact-colour match finds **zero** accent pixels, because the chromatic aberration genuinely splits the accent's channels. The post pass is doing real work on the sparks, not just on the geometry.
+- **RAF is suspended in a non-compositing tab, and that is a trap set for phase 7's browser pass.** Driving `stepFrame` in a synchronous loop advances the simulation without advancing the audio clock, so the bed simply never plays and the layer gains crawl — 0.12 after 420 frames, which looks exactly like a broken crossfade. The two clocks being unrelated is the design (GAME-DESIGN §9's one clock rule); manual frame-driving is the one place it becomes visible. Drive from a `setInterval` so real time passes between frames.
+- **A consequence of "a gate is a target gain" worth knowing: the bed fades in rather than snapping on.** The first pump after `startMusic` has `dt = 0`, so every gain starts at 0 and the kick reaches full over `MUSIC_FADE`. It reads as the bed starting rather than being switched on, so it stays.
+- **`PARAM_SMOOTH` = 0.02 s is a private const in `audio.ts`, not a tuning constant** — the smoothing on node parameters that track a frame-rate value. Flagged for the same reason phase 3 flagged `TINT_START`: it is the one number in the phase living outside `constants.ts`, and it is a graph detail rather than a feel knob.
+
+**Left open, and it is the phase's own stated risk: the ear.** "The only judge of this phase is an ear, and the tests cannot hear." Everything measurable was measured; nothing audible was judged. The recipes, the mix balance between the bed and the effects, `STEP_SFX_DIST`'s gain, and whether a 128 BPM four-layer loop is still tolerable after two minutes are **untuned and need a listening pass**. The step tick is the brief's own nomination for the most likely thing to grate, and it is the one constant in the phase with no derivation behind it.
+
+`docs/screenshot.png` was recaptured through the existing sink — the first one with the accent in it. `engine/particles.ts` was built by a subagent against a written contract, as `world/level.ts` was in phase 5; it came back with 21 tests, 19 watched-failing mutations, and two places where it argued the contract was wrong and was right both times (a sampled cone cannot carry a gravity-sign assertion, and "two fresh systems agree" is vacuous when the fallback `Rng` is fixed-seed).
 
 ---
 

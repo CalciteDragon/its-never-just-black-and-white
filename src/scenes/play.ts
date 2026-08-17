@@ -31,6 +31,8 @@ import {
   GOAL_PULSE_FREQ,
   PAD_CHEVRON_LEN,
   PAD_CHEVRON_WIDTH,
+  PAD_STREAM_INTERVAL,
+  PARTICLE_CULL_MARGIN,
   SPEED_REF,
   SPEED_SMOOTH_RATE,
   TILE,
@@ -40,7 +42,7 @@ import {
 import type { Input } from '../engine/input';
 import { palette } from '../engine/palette';
 import type { Phase } from '../engine/palette';
-import { ParticleSystem } from '../engine/particles';
+import { ParticleSystem, spawnStream } from '../engine/particles';
 import type { Renderer } from '../engine/renderer';
 import { Rng } from '../engine/rng';
 import { SAVE_KEYS } from '../engine/save';
@@ -79,6 +81,12 @@ export class PlayScene implements Scene {
   private timeSec = 0;
   /** Presentation clock, for the goal's pulse. */
   private clock = 0;
+  /**
+   * ONE accumulator drives every visible pad on the same tick — not one per
+   * pad. It is a single number instead of an array, it is deterministic, and
+   * pads pulsing in unison reads as intentional rather than as a race.
+   */
+  private streamT = 0;
   /** 0 = clear, 1 = fully covered by `ink`. */
   private fade = 0;
   /** The phase the fade colour was sampled in, held across the palette reset. */
@@ -92,8 +100,19 @@ export class PlayScene implements Scene {
     this.index = index;
   }
 
-  enter(): void {
+  /**
+   * The bed is SCENE-SCOPED, which is what `Scene.exit` has existed for since
+   * phase 2 without a user. The title screen stays silent but for its menu
+   * blips: a techno bed under a motionless title screen spends the escalation
+   * before the player has done anything to earn it.
+   */
+  enter(game: Game): void {
     this.reset();
+    game.audio.startMusic();
+  }
+
+  exit(game: Game): void {
+    game.audio.stopMusic();
   }
 
   /**
@@ -107,8 +126,12 @@ export class PlayScene implements Scene {
     timeSec: number;
     x: number;
     y: number;
+    vx: number;
+    vy: number;
     gravitySign: 1 | -1;
     flipCharged: boolean;
+    speedNorm: number;
+    particles: number;
   } {
     const b = this.player.body;
     return {
@@ -116,8 +139,12 @@ export class PlayScene implements Scene {
       timeSec: this.timeSec,
       x: b.x,
       y: b.y,
+      vx: b.vx,
+      vy: b.vy,
       gravitySign: this.player.gravitySign,
       flipCharged: this.player.flipCharged,
+      speedNorm: this.speedNorm,
+      particles: this.particles.aliveCount,
     };
   }
 
@@ -138,6 +165,7 @@ export class PlayScene implements Scene {
     this.state = 'running';
     this.stateT = 0;
     this.fade = 0;
+    this.streamT = 0;
     this.camera.snapTo(this.player.centerX, this.player.centerY);
     this.clampCamera();
   }
@@ -224,7 +252,46 @@ export class PlayScene implements Scene {
 
     this.camera.update(this.player.centerX, this.player.centerY, b.vx, this.speedNorm, dt);
     this.clampCamera();
+    this.padStreams(dt);
     this.particles.update(dt);
+
+    // The third and last consumer of the one number (GAME-DESIGN §7), and the
+    // scheduler's pump in the same call. Death and the goal are punctuated by
+    // the bed DROPPING OUT — and they have to be fed 0 rather than `speedNorm`,
+    // because the body keeps simulating through the death fade, so the
+    // un-ducked version would swell the music as the corpse accelerates out of
+    // shot.
+    const ducked = this.state === 'dying' || this.state === 'won';
+    game.audio.setIntensity(ducked ? 0 : this.speedNorm);
+  }
+
+  /**
+   * The pads' idle animation: one spark per visible pad every interval, drifting
+   * the way the pad fires. Culled against the view, so a level full of pads
+   * costs nothing off-screen — and `level.pads` exists precisely so this does
+   * not rescan the grid every frame.
+   */
+  private padStreams(dt: number): void {
+    this.streamT += dt;
+    if (this.streamT < PAD_STREAM_INTERVAL) {
+      return;
+    }
+    this.streamT -= PAD_STREAM_INTERVAL;
+    const x0 = this.camera.viewX - PARTICLE_CULL_MARGIN;
+    const y0 = this.camera.viewY - PARTICLE_CULL_MARGIN;
+    const x1 = x0 + VIEW_W + 2 * PARTICLE_CULL_MARGIN;
+    const y1 = y0 + VIEW_H + 2 * PARTICLE_CULL_MARGIN;
+    for (const pad of this.level.pads) {
+      const cx = pad.tx * TILE + TILE / 2;
+      const cy = pad.ty * TILE + TILE / 2;
+      if (cx < x0 || cx > x1 || cy < y0 || cy > y1) {
+        continue;
+      }
+      const dir = padDirection(pad.tile);
+      if (dir) {
+        spawnStream(this.particles, cx, cy, dir.dx, dir.dy, this.rng);
+      }
+    }
   }
 
   private stepPlay(dt: number, game: Game, inputs: PlayerInputs): void {
@@ -325,8 +392,12 @@ export class PlayScene implements Scene {
    * directions: the arms are the pad's direction rotated ±135°, so the whole
    * thing follows from `padDirection` with no per-facing branch.
    *
-   * Phase 6 replaces the static bars with the animated particle stream §5 calls
-   * for; the shape is the same either way.
+   * THE STREAM DOES NOT REPLACE THIS, it is added beside it. `PAD_CHEVRON_WIDTH`
+   * got its value from counting pure pixels against a pad flush in a floor row,
+   * because the chevron is what makes a pad identifiable at a glance and AT
+   * REST. Sparks are transient by construction — they thin out when the pool is
+   * busy, and there are none at all on the frame a level loads. The slab plus
+   * the static arms are the pad's identity; the stream is its idle animation.
    */
   private renderChevron(
     r: Renderer,

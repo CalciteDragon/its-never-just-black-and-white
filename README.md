@@ -4,9 +4,9 @@ A minimalist momentum platformer built from scratch with **TypeScript and the Ca
 
 **Zero runtime dependencies**: every level is readable JSON, every sound is synthesised WebAudio, every pixel is drawn by hand from two hex values.
 
-![The renderer at speed: row-merged geometry, the vignette closing in, and chromatic fringing on every edge.](docs/screenshot.png)
+![Mid-jump on the first level: the square tumbling with its paper core, row-merged geometry, the vignette closing in, chromatic fringing on every edge, and accent sparks trailing on the floor.](docs/screenshot.png)
 
-> **Under construction.** This is a total overhaul of Pixel Quest — the dungeon platformer this repo used to hold, preserved in git history before `d7a54ff` — rebuilt from the loop up. Phases 1–4 of 7 are complete: the design is settled, the look is decided, and the square is now a real rigid body that tumbles, catches on corners and rights itself. The levels, the flip's gravity half, and the editor are not built yet. The screenshot above is the test grid, dev overlay and all — an honest picture of where the build actually is. See [docs/PHASES.md](docs/PHASES.md) for the plan and what's landed.
+> **Under construction.** This is a total overhaul of Pixel Quest — the dungeon platformer this repo used to hold, preserved in git history before `d7a54ff` — rebuilt from the loop up. Phases 1–6 of 7 are complete: the design is settled, the look is decided, the square is a real rigid body that tumbles and catches on corners and rights itself, the first hand-authored level is playable start to finish, and the game now makes noise — a four-layer techno bed that layers in as you get fast, and sparks on every jump, landing and flip. Only the level editor and the shell around it are left. The screenshot above is the real first level, HUD and all. See [docs/PHASES.md](docs/PHASES.md) for the plan and what's landed.
 
 ## Play
 

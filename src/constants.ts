@@ -247,3 +247,135 @@ export const PAD_CHEVRON_WIDTH = 5;
 export const GOAL_OUTLINE_WIDTH = 2;
 export const GOAL_PULSE_AMP = 0.12;
 export const GOAL_PULSE_FREQ = 3.0;
+
+// --- Music (GAME-DESIGN §7/§9, PHASES phase 6). The bed runs on the AUDIO
+// clock, which is deliberately unrelated to STEP: nothing in the simulation may
+// ever read it, or determinism is gone. ---
+
+/** Tempo (beats/min). A beat is 60/128 = 0.46875 s. */
+export const MUSIC_BPM = 128;
+/**
+ * The scheduling grid (s). Every pattern is written in sixteenths, and the
+ * cursor advances an integer count of these from a fixed origin rather than
+ * accumulating — so a three-minute session is still exactly on the grid.
+ */
+export const MUSIC_SIXTEENTH = 60 / MUSIC_BPM / 4;
+/** Sixteenths per bar, and the length of the whole pattern (the arp is 2 bars). */
+export const MUSIC_BAR_STEPS = 16;
+export const MUSIC_PATTERN_STEPS = 32;
+/** One bar (s) = 1.875. NOT a whole number of frames, and it must not be. */
+export const MUSIC_BAR = MUSIC_SIXTEENTH * MUSIC_BAR_STEPS;
+/**
+ * Time constant of a layer's cross-fade (s). A gate is a TARGET GAIN, not a
+ * switch: gating at scheduling time would be a hard switch by construction,
+ * because a note carries the gain it was scheduled with up to MUSIC_LOOKAHEAD
+ * before it sounds. One frame may therefore move a gain by at most
+ * STEP / MUSIC_FADE = 0.0476.
+ */
+export const MUSIC_FADE = 0.35;
+/**
+ * How far ahead of the audio clock notes are scheduled (s) = 6 frames, so a
+ * five-frame hitch is invisible. FixedStepper.maxFrame is 250 ms — 2.5× this —
+ * which is the relation that FORCES the cursor's resync rather than merely
+ * recommending it: a stalled `while (next < now + LOOKAHEAD)` loop dumps every
+ * missed sixteenth into one instant, and a 3 s stall is 25.6 of them.
+ */
+export const MUSIC_LOOKAHEAD = 0.1;
+/** Layer gates on speedNorm (GAME-DESIGN §7). Strictly greater-than. */
+export const MUSIC_GATE_HATS = 0.25;
+export const MUSIC_GATE_BASS = 0.45;
+export const MUSIC_GATE_ARP = 0.7;
+/**
+ * Gain below which a layer is skipped at scheduling time, so a closed layer
+ * allocates no nodes at all. A fading one still plays and is audibly fading;
+ * the two facts stay consistent because they read the same number.
+ */
+export const MUSIC_GATE_EPS = 0.01;
+/** Master music gain at speedNorm 0 and 1 — the bed swells between the gates too. */
+export const MUSIC_GAIN_MIN = 0.1;
+export const MUSIC_GAIN_MAX = 0.34;
+
+// --- SFX send (GAME-DESIGN §9). One shared feedback delay is what gives every
+// effect the same room, instead of nine effects each with their own. ---
+
+/** Delay time (s), feedback at rest and at full speed, and the loop's lowpass (Hz). */
+export const SFX_DELAY_TIME = 0.18;
+export const SFX_DELAY_FEEDBACK = 0.35;
+export const SFX_DELAY_FEEDBACK_MAX = 0.55;
+export const SFX_DELAY_LOWPASS = 2000;
+/**
+ * Ground distance between footfalls (px). DISTANCE, not time: the cadence then
+ * scales with speed for free, and a body pinned against a wall at full throttle
+ * makes no sound at all. At RUN_SPEED this lands 256/24 = 10.67 Hz against a
+ * 0.46875 s beat — exactly five to the beat, a quintuplet over the 4/4 grid,
+ * and only at flat-out speed. The one constant in the phase with no derivation
+ * behind it; it got its value by ear.
+ */
+export const STEP_SFX_DIST = 24;
+
+// --- Particles (GAME-DESIGN §2). The only saturated colour in the game, so
+// every emitter is rationed and none of them is decoration. ---
+
+/** Spark edge (px). Kept integer-positioned, unlike every other world draw. */
+export const PARTICLE_SIZE = 2;
+/**
+ * Spark fall (px/s²) and velocity damping (1/s). Gravity is SIGNED AT SPAWN by
+ * the player's `gravitySign`: a flipped player kicking up dust that falls toward
+ * the ceiling they are standing on is the kind of wrongness nobody can name and
+ * everybody sees.
+ */
+export const SPARK_GRAVITY = 260;
+export const SPARK_DRAG = 3;
+/** Half-angle of the emission cone for dust, bursts and splashes (rad). */
+export const SPARK_SPREAD = Math.PI * 0.38;
+/**
+ * Fractional spread on a sampled spark's lifetime: it lives for
+ * `life × [1, 1 + this)`. Without it every spark of a burst dies on the SAME
+ * FRAME, and twenty of them vanishing together reads as a pop rather than as a
+ * splash dissipating. The flip ring is deliberately exempt — a ring is a shape
+ * and has to leave as one.
+ */
+export const SPARK_LIFE_JITTER = 0.5;
+/** Dust kicked up per footfall, and its speed range and life. */
+export const DUST_COUNT = 2;
+export const DUST_SPEED_MIN = 20;
+export const DUST_SPEED_MAX = 70;
+export const DUST_LIFE = 0.3;
+/** The directional burst under a jump — and the same recipe under a pad hit. */
+export const JUMP_BURST_COUNT = 8;
+export const BURST_SPEED_MIN = 60;
+export const BURST_SPEED_MAX = 170;
+export const BURST_LIFE = 0.35;
+/**
+ * The landing splash, sprayed along the CONTACT NORMAL and scaled by impact
+ * speed: `splashCount` ramps MIN at IMPACT_SPEED_MIN (a landing barely worth
+ * the name) to MAX at MAX_FALL_SPEED (terminal, and it should read as a slam).
+ */
+export const SPLASH_COUNT_MIN = 2;
+export const SPLASH_COUNT_MAX = 20;
+export const SPLASH_SPEED_MIN = 40;
+export const SPLASH_SPEED_MAX = 220;
+export const SPLASH_LIFE = 0.4;
+/**
+ * The flip's ring. Its angles are distributed BY INDEX, never by Rng — a
+ * randomly-angled ring is a puff, and the flip is the one moment in the game
+ * that deserves a shape.
+ */
+export const FLIP_RING_COUNT = 20;
+export const FLIP_RING_SPEED = 150;
+export const FLIP_RING_LIFE = 0.4;
+/**
+ * The pads' idle stream: one spark per pad every INTERVAL, drifting SPEED px/s
+ * in the pad's facing for LIFE seconds — 40.5 px = 1.27 tiles of travel, and
+ * 6.4 alive per pad. It is the pad's ANIMATION, not its identity: the static
+ * `paper` chevron is what identifies a pad at a glance and at rest, and sparks
+ * are transient by construction (there are none at all on the frame a level
+ * loads). Both, not one instead of the other.
+ */
+export const PAD_STREAM_INTERVAL = 0.07;
+export const PAD_STREAM_SPEED = 90;
+export const PAD_STREAM_LIFE = 0.45;
+/** Half-angle of the stream's cone (rad) — narrow, so it reads as an arrow. */
+export const PAD_STREAM_SPREAD = 0.25;
+/** How far outside the view a pad still streams (px). */
+export const PARTICLE_CULL_MARGIN = 64;

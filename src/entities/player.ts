@@ -23,25 +23,46 @@ import {
   GROUND_ACCEL,
   GROUND_FRICTION,
   GROUND_NORMAL_DOT,
+  IMPACT_SPEED_MIN,
   JUMP_BUFFER,
+  JUMP_BURST_COUNT,
   JUMP_CUT_FACTOR,
   JUMP_SPIN_BASE,
   JUMP_SPIN_PER_SPEED,
   JUMP_VELOCITY,
   MAX_ANG_SPEED,
+  MAX_FALL_SPEED,
   PAD_IMPULSE,
   PAD_SPIN_MAX,
   PLAYER_CORE_INSET,
   PLAYER_SIZE,
   RUN_SPEED,
+  SPLASH_COUNT_MAX,
+  SPLASH_COUNT_MIN,
+  STEP_SFX_DIST,
 } from '../constants';
 import { palette } from '../engine/palette';
-import { burstDust } from '../engine/particles';
+import { spawnBurst, spawnDust, spawnRing, spawnSplash } from '../engine/particles';
 import type { Renderer } from '../engine/renderer';
 import { createBody, stepBody } from '../world/physics';
 import type { Contact, RigidBody } from '../world/physics';
 import { Tile, padDirection } from '../world/tiles';
 import type { EntityWorld } from './context';
+
+/**
+ * How big a landing splash is, from the impulse the solver reports. Pure and
+ * exported so the ramp is testable the way `caOffset` is, rather than buried
+ * inside a call that only a browser could judge.
+ *
+ * `RESTITUTION` is 0 and the body is unit mass, so the normal impulse IS the
+ * approach speed: the ramp runs from the slowest contact that counts as an
+ * impact at all to the fastest the game can produce.
+ */
+export function splashCount(impulse: number): number {
+  const t = (impulse - IMPACT_SPEED_MIN) / (MAX_FALL_SPEED - IMPACT_SPEED_MIN);
+  const clamped = t > 0 ? (t < 1 ? t : 1) : 0;
+  return Math.round(SPLASH_COUNT_MIN + (SPLASH_COUNT_MAX - SPLASH_COUNT_MIN) * clamped);
+}
 
 export interface PlayerInputs {
   left: boolean;
@@ -85,6 +106,15 @@ export class Player {
   private coyote = 0;
   private buffer = 0;
   private jumpCutDone = true;
+  /**
+   * Ground distance since the last footfall (px). ONE accumulator drives both
+   * the dust and the `step` sound, and it counts DISTANCE rather than time:
+   * distance makes the cadence scale with speed for free, it cannot fire while
+   * a body is pinned against a wall at full throttle with zero displacement,
+   * and one accumulator means the spark and the tick can never disagree about
+   * when a footfall happened.
+   */
+  private stepDist = 0;
   private readonly events: PlayerEvents = { flipped: false, died: false };
 
   constructor(cx: number, cy: number) {
@@ -131,6 +161,7 @@ export class Player {
     this.coyote = 0;
     this.buffer = 0;
     this.jumpCutDone = true;
+    this.stepDist = 0;
   }
 
   update(dt: number, inp: PlayerInputs, world: EntityWorld): PlayerEvents {
@@ -151,6 +182,11 @@ export class Player {
       clampSpin(b);
       ev.flipped = true;
       world.sfx('flip');
+      // The ring is emitted HERE, and `PlayScene` flips the palette only after
+      // this call returns — so a spark that kept its spawn-time colour would
+      // make the flip's own ring the one thing on screen still wearing the
+      // outgoing phase. Particles render in the live accent for exactly this.
+      spawnRing(world.particles, b.x, b.y);
     }
     const gs = this.gravitySign;
 
@@ -172,7 +208,17 @@ export class Player {
       this.coyote = 0;
       this.jumpCutDone = false;
       world.sfx('jump');
-      burstDust(world.particles, b.x, b.y + (PLAYER_SIZE / 2) * gs);
+      // Kicked out along gravity, from the face you just pushed off.
+      spawnBurst(
+        world.particles,
+        b.x,
+        b.y + (PLAYER_SIZE / 2) * gs,
+        0,
+        gs,
+        JUMP_BURST_COUNT,
+        gs,
+        world.rng,
+      );
     }
 
     // Variable jump height: releasing jump while rising cuts the ascent once.
@@ -182,6 +228,9 @@ export class Player {
       this.jumpCutDone = true;
     }
 
+    const wasGrounded = this.onGround;
+    const px = b.x;
+    const py = b.y;
     const res = stepBody(b, world.map, dt, { gravitySign: gs });
     // AT MOST ONE PAD PER STEP. One tile can be resolved on two different
     // normals inside a single step — a fast corner clip on a free-standing slab
@@ -190,13 +239,22 @@ export class Player {
     // not: firing twice doubles it, and doubles the sound and the dust with it.
     // Contact order is pinned, so taking the first is deterministic.
     let padFired = false;
+    // The hardest ground contact of the step, for the splash. Phase 5 kept a
+    // landing impulse off `PlayerEvents` because nothing would have read it and
+    // `StepResult.contacts` already carries impulse per contact — and here is
+    // the consumer, reading it inside a loop that was being walked anyway.
+    let splash: Contact | null = null;
     for (let i = 0; i < res.contactCount; i++) {
       const c = res.contacts[i];
       // Ground is whichever surface opposes gravity, so this reads the same
       // predicate the solver does — but only a PLAIN SOLID recharges. A pad is
       // a ground-normal contact too, and §5 says a pad chain is a commitment.
-      if (c.onSolid && -c.ny * gs > GROUND_NORMAL_DOT) {
+      const isGroundNormal = -c.ny * gs > GROUND_NORMAL_DOT;
+      if (c.onSolid && isGroundNormal) {
         this.charged = true;
+      }
+      if (isGroundNormal && (!splash || c.impulse > splash.impulse)) {
+        splash = c;
       }
       if (!padFired && c.pad !== Tile.Empty) {
         this.firePad(c, world);
@@ -207,7 +265,34 @@ export class Player {
 
     if (res.landed) {
       world.sfx('land');
-      burstDust(world.particles, b.x, b.y + (PLAYER_SIZE / 2) * gs);
+      if (splash) {
+        // Along the CONTACT NORMAL, not along −y: landing on what is now the
+        // floor after a flip has to spray away from that surface, and the
+        // solver is the only thing that knows which surface it was.
+        spawnSplash(
+          world.particles,
+          splash.x,
+          splash.y,
+          splash.nx,
+          splash.ny,
+          splashCount(splash.impulse),
+          gs,
+          world.rng,
+        );
+      }
+    }
+
+    // A footfall is charged only for a step that started AND finished on the
+    // ground: without the first half, the whole of a long fall would be banked
+    // as stride on the frame it lands and fire a burst of footsteps under the
+    // landing sound.
+    if (wasGrounded && res.grounded) {
+      this.stepDist += Math.hypot(b.x - px, b.y - py);
+      while (this.stepDist >= STEP_SFX_DIST) {
+        this.stepDist -= STEP_SFX_DIST;
+        world.sfx('step');
+        spawnDust(world.particles, b.x, b.y + (PLAYER_SIZE / 2) * gs, gs, world.rng);
+      }
     }
 
     // Death is leaving the world vertically, and only once the body is ENTIRELY
@@ -291,7 +376,17 @@ export class Player {
     b.angVel += PAD_SPIN_MAX * Math.min(1, Math.max(-1, arm));
     clampSpin(b);
     world.sfx('pad');
-    burstDust(world.particles, c.x, c.y);
+    // Out along the pad's facing, from where it was actually struck.
+    spawnBurst(
+      world.particles,
+      c.x,
+      c.y,
+      dir.dx,
+      dir.dy,
+      JUMP_BURST_COUNT,
+      this.gravitySign,
+      world.rng,
+    );
   }
 
   /**

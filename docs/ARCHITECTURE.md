@@ -60,6 +60,7 @@ What delivers that is the **coordinate policy**, not `imageSmoothingEnabled` —
 | `setCamera` | yes | Tile coords are multiples of 32; a whole-pixel camera keeps static geometry crisp and stops seams appearing between adjacent runs. |
 | `rect`, `rectRotated`, `rectRotatedOutline` | no | Sub-pixel positioning is the whole point — this is what antialiases a rotated body. |
 | `text`, `textCentered` | yes | The 5×7 bitmap font is the one deliberately low-res element (GAME-DESIGN §2). Blurring it throws away the signature. |
+| `ParticleSystem.render` | yes | A spark is 1–3 px, and sub-pixel placement spreads a 2 px square into a dim 3×3 smear — on the only saturated colour in the game, whose whole job is to read as an event. A sanctioned exception, not an oversight. |
 | `present` | n/a — `imageSmoothingEnabled = false` | Smoothing an integer-scaled blit would soften the entire frame. The only place softness is wanted is inside `applyPost`, and the offscreen buffer sets the flag **on** for exactly that reason: the aberration pass blits it at sub-pixel offsets. |
 
 Draw order per frame:
@@ -70,6 +71,8 @@ Draw order per frame:
 4. Particles (the only accent-coloured pass).
 5. UI in `ink`, untranslated.
 6. `applyPost(speedNorm)` — vignette always, chromatic aberration only above `CA_THRESHOLD`.
+
+The particle pass also assigns `fillStyle` exactly **once** per frame and then issues N `fillRect`s, because particles store no colour of their own — they read the live accent. That is why a flip inverts every spark already in the air, including the flip's own ring.
 
 ### Colour
 
@@ -83,6 +86,31 @@ Full treatment in [PHYSICS.md](PHYSICS.md). Architecturally, it's a two-layer sp
 - **`world/physics.ts`** — integration, broadphase against the `TileMap`, resolution order, impulse response, grounded detection, damping and the auto-right spring.
 
 Linear motion is arcade (velocity set directly by input); angular motion is simulated. That split lives in the boundary between `entities/player.ts` (which owns linear intent) and `world/physics.ts` (which owns everything rotational).
+
+## Audio
+
+Two halves in one module, split on exactly the line `renderer.ts` splits `vignetteAlpha` from `applyPost`.
+
+The **upper half is pure**: a beat grid, four literal pattern tables, and `scheduleWindow(state, now, intensity, out)`, which advances the layer cross-fades, resyncs the cursor if it fell behind, and fills a caller-supplied buffer with the notes starting inside the lookahead window. It is arithmetic, it is node-safe, and it is unit-tested against hand-computed times.
+
+The **lower half is nodes**: `AudioSys` takes an injected context factory — defaulting to a guarded `new AudioContext()` — so the tests drive the real class through a ~90-line fake and count every source created against every `stop` scheduled. "The module imports without throwing under node" was the old test, and it was worth almost nothing.
+
+```
+destination ◀── master ◀┬── music ◀── layer gains (kick·hats·bass·arp)
+                        ├── per-voice envelopes (SFX, dry)
+                        └── lowpass ◀── delay ◀── send ◀── per-voice taps + arp
+                                └───── feedback ─────┘
+```
+
+One shared feedback-delay send gives every effect the same room instead of nine effects each with their own, and its feedback rises with `speedNorm`. The lowpass sits *inside* the loop, so successive repeats darken rather than merely quieten.
+
+Three rules the module is built on:
+
+- **No source is ever created without a scheduled `stop`.** WebAudio node lifetime is the classic leak here and it degrades slowly enough to ship; one node-making path with one rule is the mitigation, and a unit test counts the balance. Measured over 16 s of real play: 492 started, 492 stopped, 0 live.
+- **A stalled scheduler resyncs, it does not catch up.** See GAME-DESIGN §9 — this is the difference between a gap and a bar of notes fired into one instant.
+- **Nothing in the simulation may ever read the music clock.** The scheduler reads `AudioContext.currentTime`, which is legitimate for the same reason `dateIso` is on the persistence path: it is not a logic path. A "sync the jump to the beat" idea would break determinism outright.
+
+`setIntensity(speedNorm)` is the pump as well as the target-setter, called once per frame by `PlayScene` — which also starts the bed in `enter` and stops it in `exit`, and feeds **0** rather than `speedNorm` while dying or won, so death and the goal are punctuated by the bed dropping out.
 
 ## State & flow
 

@@ -14,10 +14,21 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { DEATH_FADE_IN, DEATH_FADE_OUT, GOAL_HOLD, STEP, TILE } from '../src/constants';
+import {
+  DEATH_FADE_IN,
+  DEATH_FADE_OUT,
+  GOAL_HOLD,
+  PAD_STREAM_INTERVAL,
+  PAD_STREAM_LIFE,
+  SPEED_REF,
+  STEP,
+  TILE,
+} from '../src/constants';
 import { AudioSys } from '../src/engine/audio';
+import type { SfxName } from '../src/engine/audio';
 import { Input } from '../src/engine/input';
 import { palette } from '../src/engine/palette';
+import { MAX_PARTICLES } from '../src/engine/particles';
 import { SAVE_KEYS, SaveStore } from '../src/engine/save';
 import type { Game, Scene } from '../src/game';
 import { LEVELS } from '../src/levels/index';
@@ -26,17 +37,54 @@ import { TitleScene } from '../src/scenes/title';
 import { parseLevel } from '../src/world/level';
 import type { Level } from '../src/world/level';
 
+/**
+ * The REAL AudioSys, given a factory that returns no context — so under node it
+ * is a total no-op — with every call recorded on the way through. Driving the
+ * real class matters: the bed's lifecycle and the intensity ducking are
+ * assertions about what this scene calls, and a hand-written stub would let the
+ * scene call something the class does not have.
+ */
+class SpyAudio extends AudioSys {
+  readonly intensities: number[] = [];
+  readonly calls: string[] = [];
+
+  constructor() {
+    super(() => null);
+  }
+
+  override setIntensity(n: number): void {
+    this.intensities.push(n);
+    super.setIntensity(n);
+  }
+
+  override startMusic(): void {
+    this.calls.push('start');
+    super.startMusic();
+  }
+
+  override stopMusic(): void {
+    this.calls.push('stop');
+    super.stopMusic();
+  }
+
+  override play(name: SfxName): void {
+    this.calls.push(`sfx:${name}`);
+    super.play(name);
+  }
+}
+
 interface Harness {
   game: Game;
   input: Input;
   save: SaveStore;
+  audio: SpyAudio;
   /** Scenes handed to setScene, in order. Nothing is entered — just recorded. */
   scenes: Scene[];
 }
 
 function fakeGame(): Harness {
   const input = new Input();
-  const audio = new AudioSys();
+  const audio = new SpyAudio();
   // Under node there is no localStorage, so SaveStore already falls back to an
   // in-memory Map — a fresh one per instance, which is what isolation needs.
   const save = new SaveStore();
@@ -53,7 +101,7 @@ function fakeGame(): Harness {
       audio.muted = !audio.muted;
     },
   };
-  return { game: game as unknown as Game, input, save, scenes };
+  return { game: game as unknown as Game, input, save, audio, scenes };
 }
 
 /** One frame: update, then clear the edges exactly as Game.stepFrame does. */
@@ -74,7 +122,7 @@ function tap(h: Harness, scene: Scene, code: string): void {
 function start(level: Level = LEVELS[0]): { h: Harness; scene: PlayScene } {
   const h = fakeGame();
   const scene = new PlayScene(level, 0);
-  scene.enter();
+  scene.enter(h.game);
   return { h, scene };
 }
 
@@ -267,7 +315,7 @@ describe('the goal, the timer and the best time', () => {
 
     // A slower second run must not overwrite it. Same store, fresh scene.
     const slower = new PlayScene(level, 0);
-    slower.enter();
+    slower.enter(h.game);
     step(h, slower, 90); // dawdle before setting off
     expect(runToGoal(h, slower)).toBe(true);
     expect(h.save.getBest(key)?.timeMs).toBe(best?.timeMs);
@@ -336,6 +384,7 @@ describe('THE SCRIPTED PLAYTHROUGH', () => {
     let holding: { code: string; until: number } | null = null;
     let furthest = 0;
     let steps = 0;
+    let peakParticles = 0;
 
     for (; steps < MAX_STEPS; steps++) {
       if (beat < SCRIPT.length && scene.status.x >= SCRIPT[beat].atX) {
@@ -349,6 +398,7 @@ describe('THE SCRIPTED PLAYTHROUGH', () => {
         holding = null;
       }
       furthest = Math.max(furthest, scene.status.x);
+      peakParticles = Math.max(peakParticles, scene.status.particles);
       if (scene.status.state === 'won') {
         break;
       }
@@ -370,5 +420,112 @@ describe('THE SCRIPTED PLAYTHROUGH', () => {
         `flip ${s.flipCharged ? 'charged' : 'spent'}`,
     ).toBe('won');
     expect(s.timeSec).toBeGreaterThan(0);
+
+    // THE POOL CEILING, under the only workload that is actually the game.
+    // The upper bound is what makes the drop-newest overflow policy safe; the
+    // LOWER one is phase 4's non-trivial-trajectory guard in a new place —
+    // without it the assertion passes on a build where nothing ever emitted a
+    // single spark.
+    //
+    // Measured 49, against the brief's predicted ~120. The prediction budgeted
+    // 51 for eight pads streaming at once and THIS STAGE HAS ONE, so the peak
+    // is dominated by the transient emitters (a 20-spark ring, a splash, a
+    // burst) rather than by the steady state. The margin is 5.2x, not 4.3x.
+    expect(peakParticles).toBeGreaterThan(40);
+    expect(peakParticles).toBeLessThan(MAX_PARTICLES / 2);
+  });
+});
+
+describe('the bed, and the one number that drives it', () => {
+  const WALK = ['..........', '..S.....G.', '####..####'];
+
+  it('is scene-scoped: enter starts it, exit stops it', () => {
+    // `Scene.exit` has existed since phase 2 with no user; this is it. The
+    // title screen stays silent but for its menu blips, because a techno bed
+    // under a motionless title spends the escalation before it is earned.
+    const { h, scene } = start(tinyLevel(WALK));
+    expect(h.audio.calls).toContain('start');
+    expect(h.audio.calls).not.toContain('stop');
+    scene.exit(h.game);
+    expect(h.audio.calls[h.audio.calls.length - 1]).toBe('stop');
+  });
+
+  it('pumps the scheduler exactly once per update, with the live speedNorm', () => {
+    const { h, scene } = start(tinyLevel(WALK));
+    const before = h.audio.intensities.length;
+    step(h, scene, 30);
+    expect(h.audio.intensities.length - before).toBe(30);
+    h.input.onKey('KeyD', true);
+    step(h, scene, 60);
+    h.input.onKey('KeyD', false);
+    const last = h.audio.intensities[h.audio.intensities.length - 1];
+    expect(last).toBeCloseTo(scene.status.speedNorm, 12);
+    expect(last).toBeGreaterThan(0.3); // it is running, so the bed should know
+  });
+
+  it('DUCKS TO ZERO while dying, sampled during the fade and not after it', () => {
+    // The body keeps simulating through the death fade — it flies out of shot —
+    // so the un-ducked version has the music SWELL as the corpse accelerates.
+    // The assertion therefore has to be taken while `speedNorm` is high, which
+    // is the whole reason this reads the status mid-fade.
+    const { h, scene } = start(tinyLevel(['..........', '..S.....G.', '####..####']));
+    h.input.onKey('KeyD', true);
+    for (let i = 0; i < 600 && scene.status.state === 'running'; i++) {
+      step(h, scene);
+    }
+    h.input.onKey('KeyD', false);
+    expect(scene.status.state).toBe('dying');
+
+    let sawFastAndSilent = false;
+    for (let i = 0; i < 10; i++) {
+      step(h, scene);
+      const st = scene.status;
+      if (st.state !== 'dying') {
+        break;
+      }
+      const raw = Math.hypot(st.vx, st.vy) / SPEED_REF;
+      if (raw > 0.5) {
+        expect(h.audio.intensities[h.audio.intensities.length - 1]).toBe(0);
+        sawFastAndSilent = true;
+      }
+    }
+    expect(sawFastAndSilent).toBe(true);
+  });
+
+  it('ducks on the goal too, so the fanfare is not fighting a swelling arp', () => {
+    const { h, scene } = start(tinyLevel(['..........', '..S.G.....', '##########']));
+    h.input.onKey('KeyD', true);
+    for (let i = 0; i < 600 && scene.status.state !== 'won'; i++) {
+      step(h, scene);
+    }
+    h.input.onKey('KeyD', false);
+    expect(scene.status.state).toBe('won');
+    step(h, scene, 3);
+    expect(h.audio.intensities[h.audio.intensities.length - 1]).toBe(0);
+  });
+
+  it('pads stream, and only while they are anywhere near the view', () => {
+    // One accumulator drives every visible pad on the same tick — a single
+    // number rather than an array, and pads pulsing in unison reads as
+    // intentional. `level.pads` exists so this never rescans the grid.
+    // 60 frames first: the spawn drops the body 6 px onto the floor, which is
+    // a real landing and splashes. Waiting past SPLASH_LIFE leaves the stream
+    // as the only thing that could still be alive.
+    const settle = 60;
+    const near = tinyLevel(['..........', '..S..^..G.', '##########'], 'pad-near');
+    const { h, scene } = start(near);
+    expect(near.pads.length).toBe(1);
+    step(h, scene, settle);
+    expect(scene.status.particles).toBeGreaterThan(0);
+    // One pad, one spark per interval, one life's worth alive: ~6.4.
+    expect(scene.status.particles).toBeLessThan(2 * (PAD_STREAM_LIFE / PAD_STREAM_INTERVAL));
+
+    // The same pad, far off the right-hand end of a long level: culled, and
+    // the pool is then EMPTY rather than merely smaller.
+    const rows = ['.'.repeat(120), `..S${'.'.repeat(114)}^G.`, '#'.repeat(120)];
+    const far = tinyLevel(rows, 'pad-far');
+    const r2 = start(far);
+    step(r2.h, r2.scene, settle);
+    expect(r2.scene.status.particles).toBe(0);
   });
 });

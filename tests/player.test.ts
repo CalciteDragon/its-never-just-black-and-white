@@ -12,7 +12,9 @@ import { describe, expect, it } from 'vitest';
 import {
   AIR_ACCEL,
   COYOTE_TIME,
+  FLIP_RING_COUNT,
   GROUND_FRICTION,
+  IMPACT_SPEED_MIN,
   JUMP_SPIN_BASE,
   JUMP_SPIN_PER_SPEED,
   JUMP_VELOCITY,
@@ -22,14 +24,17 @@ import {
   PAD_SPIN_MAX,
   PLAYER_SIZE,
   RUN_SPEED,
+  SPLASH_COUNT_MAX,
+  SPLASH_COUNT_MIN,
   STEP,
+  STEP_SFX_DIST,
   TILE,
 } from '../src/constants';
 import { ParticleSystem } from '../src/engine/particles';
 import { Rng } from '../src/engine/rng';
 import { nullWorldParts } from '../src/entities/context';
 import type { EntityWorld } from '../src/entities/context';
-import { NO_INPUTS, Player } from '../src/entities/player';
+import { NO_INPUTS, Player, splashCount } from '../src/entities/player';
 import type { PlayerInputs } from '../src/entities/player';
 import { Tile, TileMap } from '../src/world/tiles';
 
@@ -707,5 +712,150 @@ describe('spawnAt is the whole reset', () => {
     expect(p.onGround).toBe(false);
     expect(p.flipCharged).toBe(true);
     expect(p.gravitySign).toBe(1);
+  });
+});
+
+// --- Phase 6: the emitters the player owns, and the ramp behind the splash.
+
+/** A world that records what it was asked to play. */
+function recordingWorld(map: TileMap): { w: EntityWorld; sfx: string[] } {
+  const sfx: string[] = [];
+  const w: EntityWorld = {
+    map,
+    particles: new ParticleSystem(),
+    rng: new Rng(1),
+    sfx: (n) => {
+      sfx.push(n);
+    },
+  };
+  return { w, sfx };
+}
+
+describe('splashCount', () => {
+  it('ramps a barely-an-impact landing to a terminal slam, and clamps outside', () => {
+    expect(splashCount(IMPACT_SPEED_MIN)).toBe(SPLASH_COUNT_MIN);
+    expect(splashCount(MAX_FALL_SPEED)).toBe(SPLASH_COUNT_MAX);
+    expect(splashCount(0)).toBe(SPLASH_COUNT_MIN);
+    expect(splashCount(-500)).toBe(SPLASH_COUNT_MIN);
+    expect(splashCount(4000)).toBe(SPLASH_COUNT_MAX);
+    // Monotone between, and genuinely varying rather than a two-step staircase.
+    let prev = -1;
+    const seen = new Set<number>();
+    for (let v = IMPACT_SPEED_MIN; v <= MAX_FALL_SPEED; v += 5) {
+      const c = splashCount(v);
+      expect(c).toBeGreaterThanOrEqual(prev);
+      prev = c;
+      seen.add(c);
+    }
+    expect(seen.size).toBe(SPLASH_COUNT_MAX - SPLASH_COUNT_MIN + 1);
+  });
+});
+
+describe('the step cadence is DISTANCE-driven', () => {
+  /**
+   * Sum the path the same way the accumulator does — over steps that both began
+   * and ended grounded — reading `onGround`, which is public. The gate is
+   * mirrored; the RAMP is the property under test, and it is the thing a timer
+   * would get wrong.
+   */
+  function run(p: Player, w: EntityWorld, steps: number, held: (i: number) => PlayerInputs): {
+    path: number;
+    footfalls: number;
+    sfx: string[];
+  } {
+    const sfx: string[] = [];
+    const inner = { ...w, sfx: (n: string) => sfx.push(n) } as unknown as EntityWorld;
+    let path = 0;
+    for (let i = 0; i < steps; i++) {
+      const was = p.onGround;
+      const px = p.body.x;
+      const py = p.body.y;
+      p.update(STEP, held(i), inner);
+      if (was && p.onGround) {
+        path += Math.hypot(p.body.x - px, p.body.y - py);
+      }
+    }
+    return { path, footfalls: sfx.filter((n) => n === 'step').length, sfx };
+  }
+
+  it('emits exactly floor(distance / STEP_SFX_DIST) footfalls at full speed', () => {
+    const m = room();
+    const p = grounded(m);
+    const { w } = recordingWorld(m);
+    const r = run(p, w, 100, () => inp({ right: true }));
+    expect(r.footfalls).toBe(Math.floor(r.path / STEP_SFX_DIST));
+    expect(r.footfalls).toBeGreaterThan(10); // or the assertion proves nothing
+  });
+
+  it('emits proportionally fewer over the same duration when moving slower', () => {
+    const m = room();
+    const fast = grounded(m);
+    const slow = grounded(m, 3);
+    const a = run(fast, recordingWorld(m).w, 120, () => inp({ right: true }));
+    // Tap-and-coast: the same 120 frames at a fraction of the distance.
+    const b = run(slow, recordingWorld(m).w, 120, (i) => inp({ right: i % 10 === 0 }));
+    expect(b.path).toBeLessThan(a.path / 2);
+    expect(b.footfalls).toBe(Math.floor(b.path / STEP_SFX_DIST));
+    expect(b.footfalls).toBeLessThan(a.footfalls / 2);
+  });
+
+  it('emits NONE pressed into a wall at full throttle — the case a timer gets wrong', () => {
+    const m = room();
+    m.fillRect(6, 6, 1, 4, Tile.Solid); // a wall to the right of the spawn
+    const p = grounded(m, 5);
+    const r = run(p, recordingWorld(m).w, 200, () => inp({ right: true }));
+    expect(p.onGround).toBe(true); // still standing, still holding right
+    expect(r.path).toBeLessThan(STEP_SFX_DIST);
+    expect(r.footfalls).toBe(0);
+  });
+});
+
+describe('the emitters the player owns', () => {
+  it('a flip rings, and a REFUSED flip emits nothing at all', () => {
+    const m = room();
+    const { w } = recordingWorld(m);
+    const p = grounded(m);
+    w.particles.clear();
+    p.update(STEP, inp({ flipPressed: true }), w);
+    expect(w.particles.aliveCount).toBe(FLIP_RING_COUNT);
+
+    w.particles.clear();
+    const before = p.update(STEP, inp({ flipPressed: true }), w);
+    expect(before.flipped).toBe(false);
+    expect(w.particles.aliveCount).toBe(0);
+  });
+
+  it('a landing splashes in proportion to the impact', () => {
+    const m = room();
+    const drop = (fromY: number): number => {
+      const { w } = recordingWorld(m);
+      const p = new Player(0, 0);
+      p.spawnAt(5 * TILE + TILE / 2, fromY);
+      let landed = 0;
+      for (let i = 0; i < 300 && landed === 0; i++) {
+        w.particles.clear();
+        p.update(STEP, NO_INPUTS, w);
+        landed = w.particles.aliveCount;
+      }
+      return landed;
+    };
+    // A short drop is barely an impact; 600 px is long enough to arrive at
+    // MAX_FALL_SPEED, which is terminal and should read as a slam.
+    const gentle = drop(10 * TILE - PLAYER_SIZE / 2 - 6);
+    const slam = drop(10 * TILE - PLAYER_SIZE / 2 - 600);
+    expect(gentle).toBeGreaterThanOrEqual(SPLASH_COUNT_MIN);
+    expect(slam).toBe(SPLASH_COUNT_MAX);
+    expect(slam).toBeGreaterThan(gentle * 3);
+  });
+
+  it('PlayerEvents did NOT grow — the landing impulse is still read off the contacts', () => {
+    // Phase 5 kept a landing impulse off this object on the grounds that a
+    // field with no consumer is a placeholder. The consumer now exists and the
+    // object still has two fields, because the player was already walking the
+    // contacts for the recharge and the pad.
+    const m = room();
+    const p = grounded(m);
+    const ev = p.update(STEP, NO_INPUTS, recordingWorld(m).w);
+    expect(Object.keys(ev).sort()).toEqual(['died', 'flipped']);
   });
 });
