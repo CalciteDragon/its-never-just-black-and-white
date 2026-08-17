@@ -337,17 +337,116 @@ All met. Tests 165 → 226, typecheck clean. The eight decisions held; the brief
 
 ## Phase 5 — Player, world & level format ⬜
 
-Turn the simulation into a game.
+Turn the simulation into a game. Phase 4 built a body that falls, spins and settles in a room with no entrance and no exit; this phase gives it a level to be in, a reason to cross it, and the two verbs — the flip and the pad — that the level design is built around.
 
-- **`world/tiles.ts`** — pads, and the seal-sides / open-vertically bounds rule.
-- **`world/level.ts`** (new) — parse, validate, and serialise the row-string format from GAME-DESIGN §8. Validation returns a list of human-readable errors (the editor shows them verbatim).
-- **`entities/player.ts`** (rewritten) — input to horizontal velocity with accel/friction; jump with the spin impulse, coyote time, buffer, and cut; the flip with its charge and ground-only recharge; pad response including off-centre torque; out-of-bounds death detection.
+- **`world/tiles.ts`** — the blocking predicate, pad directions, and the char ↔ tile mapping.
+- **`world/level.ts`** (new) — parse, validate, and serialise the row-string format from GAME-DESIGN §8. Validation returns human-readable errors (the phase 7 editor shows them verbatim).
+- **`world/physics.ts`** — pads are collidable geometry, and contacts carry tile identity.
+- **`entities/player.ts`** (rewritten) — the flip with its charge and ground-only recharge; pad response including off-centre torque; out-of-bounds death; the hollow-core charge tell.
 - **`scenes/play.ts`** — level lifecycle, death and respawn fades, goal detection, timer, level advance.
 - **`src/levels/01-first-steps.json`** and `src/levels/index.ts` — the example stage from GAME-DESIGN §8.
 
-**Tests:** level parse round-trips, validation catches ragged rows and missing/duplicate `S`/`G`; flip charge cannot be spent twice without ground contact; pads override rather than add; death fires above the top row and below the bottom row; a scripted input sequence completes the example stage headlessly (the direct descendant of the old bot-playthrough test, and the best regression guard in the suite).
+### Eight decisions taken before writing any of it
 
-**Exit:** the example stage is playable start to finish in the browser.
+Four are structural changes to modules phase 4 finished, and each is derived from a conflict between two things GAME-DESIGN already says. The contradictions get amended in this phase's commit.
+
+1. **Pads are blocking geometry, and the blocking predicate has to reach the interior-face test as well as the collision test.** §5 gives pads an off-centre contact torque and §2 draws them as an `ink` slab — both require a real contact point, so a pad is a tile the solver collides with, not a trigger volume. That is a one-word change in `collectManifolds` (`=== Tile.Solid` → `isBlocking(t)`) and a four-word one in the `interior` neighbour lookups beside it — **and skipping the second is phase 4's tile-seam bug, rebuilt at every pad in the game.** A pad set into a floor row would leave its neighbours' faces toward it unmasked, so running over it would find a sideways cheapest-axis and shove the player along the floor, spinning. Phase 4 measured that failure at 8.07 rad/s; the prediction here is the same order, and it is written as a test that is watched failing with the old predicate before the new one lands. The masking also disposes of a rule that reads badly on paper: §5 fires a pad on *contact*, not on contact with its facing side, so brushing the side of an up-pad launches you upward — but a pad set into geometry has its sides masked as interior faces, so the case mostly cannot arise, and where it can (a free-standing pad slab) the simple rule is the readable one.
+
+2. **`StepResult.grounded` and "recharges the flip" are different predicates, so contacts have to carry tile identity.** §5 is explicit that pads do not recharge the flip and only ground contact does — but a pad is now collidable, so landing on one *is* a ground-normal contact and would recharge through the phase 4 API. `Contact` therefore gains `pad: Tile` (`Tile.Empty` when none) and `onSolid: boolean`, copied from the manifold that produced it; the manifold sets `pad` from the first pad tile pooled into it and `onSolid` from whether any plain solid was. Both bits are needed rather than one enum, because a body straddling a pad and the floor beside it must both launch (the pad fired) and recharge (it genuinely touched ground). The alternative — the player running its own positional overlap query for pads after the step — was rejected: the torque in decision 4 needs the contact *point*, and only the solver has one.
+
+3. **The controller's horizontal clamp becomes one-sided, or sideways pads do not exist.** `PAD_IMPULSE` is 820 px/s and the current controller re-clamps `vx` to ±`RUN_SPEED` = 256 on every frame the player holds a direction — so a left/right pad is erased within one frame of firing, and holding *toward* the launch is what erases it. Suppressing control for a few frames instead is not available: hard rule 7 says collision response never takes horizontal control away. The fix is that input may never push `|vx|` **past** `RUN_SPEED`, but may not brake an existing overspeed either: accelerate, then clamp to `max(RUN_SPEED, |vx| before this frame)` in the direction held. Pressing *against* an overspeed decelerates at the normal rate, so turning around at 820 px/s still works. Overspeed then bleeds off at `GROUND_FRICTION` whenever the body is grounded — held direction or not — and is preserved in the air: a pad is a launch, not a permanent speed upgrade, and the ground is where the controller is supposed to govern speed. **Below `RUN_SPEED` the new branch is arithmetically identical to the old one**, which is the prediction: every existing movement assertion in `tests/player.test.ts` passes unchanged.
+
+4. **Pad spin needs its own scale, because the physical impulse form saturates.** Reusing the solver's torque with `j = PAD_IMPULSE` gives `Δω = SPIN_TRANSFER · 820 · (r×n) / 66.7` = 73.7 rad/s at a full corner — five times `MAX_ANG_SPEED`, so it clamps to 14 for any contact more than ~2 px off centre and every off-centre pad hit looks identical. So the pad gets `PAD_SPIN_MAX` = 8.0 rad/s at a full-corner contact, scaled linearly by the arm: `Δω = PAD_SPIN_MAX · (r × n) / (PLAYER_SIZE / 2)`, clamped. `r` is from the **body's** centre (it is a torque arm, not a measure of where the pad was hit), so a flat landing anywhere on a pad gives `r × n = 0` and no spin at all, which is what makes "clip it with a corner and you leave spinning" a real distinction rather than a constant tumble. Sign, stated once so it can be asserted rather than discovered: for an up-pad, `n = (0, −1)` and `r × n = −r_x`, so contact right of centre sends ω **negative** — counter-clockwise on screen, right side lifting. New constant, added to GAME-DESIGN §6 in the same commit.
+
+5. **The palette flip is downstream of the charge check, so `Player.update` returns events.** The scene currently flips the palette straight off the key press. With a charge, a refused flip that still inverted every colour in the world would be the most confusing bug this game could ship — the palette is the only readout of gravity there is. So authority moves into the player (`flipPressed` joins `PlayerInputs`) and the scene learns what actually happened: `update` returns a reused `PlayerEvents { flipped, died }`, and `PlayScene` turns `flipped` into `palette.flip()`. This also keeps a global singleton out of the player's logic path, so headless tests do not mutate the world's colour as a side effect of stepping a body. Deliberately **not** on the events object: a landing impulse for phase 6's splash. Nothing in phase 5 would read it, `StepResult.contacts` already carries impulse per contact, and a field with no consumer is the placeholder the phase 3/4 rule exists to forbid.
+
+6. **No flip buffer, and the jump keeps its.** `JUMP_BUFFER` exists because a jump pressed just before landing is unambiguous — the player wants to leave the ground the instant they touch it. A *flip* buffer means "flip as soon as I can", and the moment the flip becomes possible is the moment you land, so a buffered flip fires you off the floor you just fought to reach. The cost is one frame of strictness: the flip is consumed before `stepBody`, the recharge is read from its result afterwards, so a flip pressed on the exact frame of landing is refused and has to be pressed again 16.7 ms later. That is the right side of the trade, and it is written down here so that if the browser pass disagrees, it is a decision being revisited rather than a bug being found.
+
+7. **`Level` owns a `TileMap`, and parsing returns a discriminated result.** §12 specifies `Level { …, tiles: Uint8Array, … }`, but every consumer downstream — the solver's broadphase, `forEachRun`, the phase 7 editor — takes a `TileMap`, so a raw array would be re-wrapped at every use site and the two would have to agree independently about stride and the seal-sides OOB rule. `Level` therefore holds `map: TileMap` plus `id`, `name`, `spawn`, `goal` (tile coords) and `pads` (positions and directions, kept as a list so phase 6's chevron emitters do not rescan the grid every frame). `parseLevel(raw: unknown)` returns `{ ok: true; level } | { ok: false; errors: string[] }` rather than §12's `Level | LevelError` — the union needs a discriminant to be usable in strict TS, and the editor wants the whole error list, not the first one. Both amended in §12. `S` and `G` are level metadata on `Tile.Empty` cells, not tile values; the enum does not grow.
+
+8. **`SfxName` is aligned with GAME-DESIGN §9 now; the synthesis still waits for phase 6.** The flip, pads, the goal and death all want a sound, and `audio.ts` still carries `coin`, `stomp`, `hurt`, `door` and `gameover` from a game that no longer exists — phase 2's *As built* flagged that module as its one remaining overshoot. Renaming the union to §9's set (`step jump land flip pad goal death menuMove menuPick`) and pointing the new names at the nearest existing recipes is ~10 lines, deletes the last residue of the old game, and means phase 6 rewrites the synthesis behind a name set that is already correct rather than changing every call site it finds.
+
+### Derived numbers worth recording
+
+- **Up-pad**: peak = 820²/(2·2200) = **152.8 px = 4.78 tiles**; rise 0.373 s, fall 0.295 s, **airtime 0.667 s = 40.0 steps**; horizontal clearance at `RUN_SPEED` = **170.9 px = 5.34 tiles**. Against the plain jump's 4.56 tiles, so a gap of 5 tiles is the smallest that *requires* a pad, which is what the example stage's pad section is sized to.
+- **A down-pad pointing along gravity delivers 768 px/s, not 820** — the directional `MAX_FALL_SPEED` clamp catches it on the next step, 93.7 % of nominal. Pointing against gravity it delivers the full 820. Not a bug to fix: terminal velocity is terminal, a down-pad under normal gravity is a slam rather than a launch, and level design should read it that way.
+- **A full-corner pad hit turns the square 268°** over its own airtime (8.0 rad/s decaying at `ANG_DAMP_AIR`), against 178° for a full-speed jump. Three-quarters of a turn: every corner pad hit lands on a different face.
+- **The flip's kick turns it ≈49°** across a 0.3 s ceiling crossing — a legible tilt, not a tumble, which is the intent: the flip's drama is the world inverting, not the square spinning.
+
+### The example stage
+
+`01-first-steps` is the phase's real deliverable and the only part of it no test can prove is *good*. Beats, in order, each sized from the numbers above: a flat run long enough to reach `RUN_SPEED` (~0.12 s, 2 tiles) and then some; a **3-tile gap** cleared by a plain jump with margin; a **ceiling section** whose slab sits within jump reach of the floor, crossed by flipping at the apex and running along what is now the floor; an **up-pad** under a 5-tile rise that the jump cannot clear; a **one-tile corridor** entered while spinning, which is the game's signature sensation and its most likely place to get stuck; and a goal placed so the final approach is a flip landing on the ceiling. Roughly 48 × 20 tiles — a screen and a half wide, one and a bit tall.
+
+### Order of work
+
+Bottom-up again, and for the same reason as phase 4: the layers that poison everything above them go first.
+
+1. **`tsconfig.json`** — add `"resolveJsonModule": true`. It is absent today, so the very first `import level from './01-first-steps.json'` fails `npm run typecheck` while vite and vitest both resolve it happily. Cheap to fix, confusing to hit at step 8.
+2. **`constants.ts`** — `PAD_IMPULSE` 820 px/s and `DEATH_FADE_OUT` / `DEATH_FADE_IN` 0.35 / 0.25 s (specified in §6, never yet implemented), plus this phase's additions: `PAD_SPIN_MAX` 8.0 rad/s (decision 4), `GOAL_HOLD` 1.2 s and `CORE_OUTLINE_WIDTH` (both shell-scoped; see below). The new ones join §6's table in the same commit.
+3. **`world/tiles.ts`** — `isBlocking(t)`, `padDirection(t): {dx, dy} | null`, and `tileFromChar` / `charFromTile` for the four pad chars plus `.` and `#`. The char mapping lives beside the enum because the phase 7 editor palette needs exactly the same table; `S` and `G` stay `level.ts`'s business.
+4. **`world/level.ts`** + tests, before anything depends on it.
+5. **`world/physics.ts`** — decisions 1 and 2. Small, and the riskiest edit in the phase.
+6. **`engine/audio.ts`** — decision 8.
+7. **`entities/player.ts`** — the flip and its charge, the pad response, the one-sided clamp, death detection, and the hollow core: §2 specifies the charge state as *the* readout (solid `paper` core when charged, a `paper` outline when spent — no HUD, no meter), so `render` branches on the charge, never on the palette phase.
+8. **`src/levels/01-first-steps.json`** and **`src/levels/index.ts`**, which parses eagerly and throws with the joined error list — a level that fails validation is a build-time bug and must never reach a player as a blank screen.
+9. **`scenes/play.ts`** — the lifecycle state machine (`Running → Dying → Respawning → Running`, plus `Won`), the timer, goal detection, best-time submission, level advance.
+10. **Tests, typecheck, browser pass, doc amendments.**
+
+### PlayScene specifics
+
+- **Spawn** is the `S` tile's centre, at rest and square. Not "feet on the floor" — that would require knowing where the floor is; the 6 px drop onto it costs two frames and is invisible.
+- **Goal** fires when the body's **centre** is inside the goal tile's rect. Rotation-independent, one condition, trivially testable, and it means the goal reads as "get *in* the square" rather than "graze it with a corner".
+- **Death** fires when the body is *entirely* past the top or bottom edge (`y + half < 0` or `y − half > heightPx`). The camera's `CAMERA_VSLACK` exists to keep that frame legible, so the body keeps simulating through the fade-out rather than freezing — it flies out of shot, which reads as a consequence instead of a pause.
+- **The fade is to `ink`.** Fading to `paper` is what the vignette already does, so a death that dimmed toward the background colour would read as a speed effect. It needs `palette.inkRgba(a)` alongside the existing `paperRgba` (hard rule 6: the hex stays in the palette), and the colour is **sampled once at the death instant and held**, because the palette resets to phase A at the fade's peak — under a held colour that reset is invisible, and under a live token the screen would jump from white to black at the covered moment.
+- **`R` restarts instantly, with no fade.** The fade is death's punctuation; a restart the player asked for does not need punctuating, and §5's promise is that failure is not a punishment.
+- **Gravity and palette phase are one piece of state in two places** — `gravitySign = +1 ⟺ palette.phase = 0` — maintained only by this scene, across flips, deaths, restarts and level advance. It gets a dedicated test because nothing in the type system holds it.
+- **The timer** accumulates fixed steps (hard rule 5: no wall-clock on a logic path), runs only in `Running`, and resets on death or restart. The `dateIso` written to `bw.best.<id>` on completion is a wall-clock read on a persistence path, which is not a logic path — noted here so it does not look like a violation later.
+- **Level advance and the completion readout are shell placeholders** and must look it, exactly like phase 2's test grid: freeze, hold `GOAL_HOLD`, fade, next level or back to the title. Phase 7 replaces them with `ResultsScene`, and `GOAL_HOLD` goes with them.
+
+### Test suite
+
+| Action | Files |
+| --- | --- |
+| Add | `level` (parse, validate, serialise, round-trip), `playscene` (lifecycle, and the scripted playthrough) |
+| Extend | `player` (flip, charge, pads, one-sided clamp, death — the existing movement assertions must survive **unchanged**, per decision 3), `physics` (pads block; interior faces; contact tile identity), `tiles` (`isBlocking`, pad directions, char mapping), `constants` (the pad derived numbers) |
+| Keep | `obb`, `camera`, `renderer`, `palette`, `font`, `game`, `input`, `save`, `rng`, `particles`, `audio` |
+
+`PlayScene` is node-testable without a canvas: `update` touches only `game.input`, `game.audio`, `game.save` and `game.setScene`, all three of which construct fine under node, and `render` is never called. A ~15-line `fakeGame()` helper cast through `unknown` is the whole harness — and the scripted playthrough then drives real `KeyboardEvent.code` strings through `Input.onKey`, so the binding table is on the tested path too. The alternative, extracting the lifecycle into a pure session module, is rejected: phase 7's editor playtest is specified to hand a level to the *real* `PlayScene`, and a second owner of the level lifecycle is exactly what it must not find.
+
+Assertions worth naming:
+
+- **The pad seam, watched failing.** A `PadUp` set into a floor row, run over at `RUN_SPEED`: no angular velocity is produced at any point. Then confirm the `=== Tile.Solid` interior predicate fails it — the prediction is spin of the same order as phase 4's 8.07 rad/s — before the new predicate lands. Phase 3 and phase 4 both found a named assertion in the brief that passed against the very implementation it was written to catch; this one is only worth writing if it is watched failing.
+- **Pads override, not add.** Approaching one pad at 100 px/s and at 700 px/s produces the identical launch velocity. And a down-pad along gravity settles to `MAX_FALL_SPEED`, not `PAD_IMPULSE`.
+- **Pad spin sign**, stated explicitly as in phase 4's ledge test: contact right of centre on an up-pad ⇒ ω negative. Plus: a flat landing centred on a pad produces exactly zero spin.
+- **The charge cannot be spent twice.** A second flip in the air is refused and leaves the body **bit-identical** — not merely un-flipped: `gravitySign`, `vy` and `angVel` all untouched, since the failure mode that matters is a partly-applied flip.
+- **Recharge discriminates by tile, not by normal.** Landing on solid recharges; landing on a pad does not; landing across a pad/floor seam does; and a body balanced on a corner within `GROUND_NORMAL_DOT` recharges, because §5 says standing on a corner is standing.
+- **The one-sided clamp**, four ways: input alone never exceeds `RUN_SPEED`; input held toward an 820 px/s overspeed preserves it; input held against it decelerates at the normal rate; and grounding bleeds the overspeed off at `GROUND_FRICTION` even with the direction held.
+- **Death planes** — fires fully above the top row and fully below the bottom row, does not fire on a body pressed against a sealed side, and does not fire on a body resting on the bottom row.
+- **Gravity/palette lockstep** across a scripted sequence of flips, a death, a restart and a level advance.
+- **Level validation** catches ragged rows, zero or two `S`, zero or two `G`, an unknown character (reporting its row and column), an empty `rows` array, and a non-string row — each with a message a human can act on. `parse(serialize(level))` deep-equals the original. **Every level in `LEVELS` parses with zero errors**, which is the assertion that stops a broken grid shipping.
+- **The scripted playthrough completes the example stage.** The direct descendant of the old bot-playthrough test and the best regression guard in the suite — but it asserts **completion, not trajectory**: a coarse program of held directions and timed presses with slack, so it fails when something meaningful changed rather than every time a constant moves by a percent. Bit-identity is already pinned by the physics determinism test and does not need pinning twice. On failure it reports how far it got and why it stopped (died where, or ran out of steps), because a bare `expect(won).toBe(true)` on a 40-second simulation is close to undebuggable.
+
+### Verification that isn't a unit test
+
+`npm run dev`, on the real level:
+
+- **The stage, start to finish**, more than once. This is the phase's headline and the one thing with no test behind it.
+- **Pads read as pads.** The chevron is two `paper` bars drawn through `rectRotated` at the pad's angle — one primitive, one code path, all four directions — and the check is that a pad set flush into a floor row is unmistakable at a glance, in both phases.
+- **The hollow core reads.** With `PLAYER_CORE_INSET` = 5 the core is 10×10, so a 1 px outline may be too thin to see at speed; `CORE_OUTLINE_WIDTH` gets its final value here, against ink geometry and while rotating, exactly as `PLAYER_CORE_INSET` did in phase 3.
+- **One flip per airtime is felt, not just true.** Flip mid-jump, land on the ceiling, confirm the recharge; then try to flip twice and confirm nothing at all happens — no colour twitch, no gravity stutter.
+- **The death fade**, including that the phase reset at its peak is invisible, and that dying while in phase B comes back in phase A cleanly.
+- **The one-frame flip strictness** (decision 6) — press flip on the landing frame repeatedly. If it reads as unresponsive rather than as strict, that is the decision to revisit, and the revision is `JUMP_BUFFER`'s three lines.
+- **A corner pad hit into the one-tile corridor**, which is the phase's worst case for wedging: 268° of turn arriving at 3.7 px of clearance.
+
+### Risks
+
+- **Decision 1 is a two-word edit in the solver and the only change in the phase that can break phase 4's work.** The existing physics tests all use `Tile.Solid`, so they will pass either way — which is precisely why the pad-seam test has to be watched failing rather than trusted.
+- **The example stage is authored, not derived, and "playable" is not "good".** The tests can prove it can be completed; nothing can prove it teaches the flip in the right order or that the corridor is thrilling rather than infuriating. Budget browser time for pacing, and expect the grid to change more than the code does.
+- **The playthrough script is authored by iteration and will be the most brittle file in the repo.** Slack in the script and a diagnostic failure message are the mitigation; committing the level and the script together is the other half. If it starts needing a re-record on every retune, the level geometry has margins that are too tight, and that is level feedback rather than a test problem.
+- **The one-sided clamp sits in the most-played code path in the game.** A sign error there means you cannot turn around at speed — a bug that would feel like ice physics and read like a physics bug rather than a controller bug. Its four assertions are cheap; write them first.
+- **`R` and death share a respawn path but not a presentation.** The reset is the thing to keep in one place: gravity, palette, charge, timer, camera snap, particles, `speedNorm`. A reset that forgets one field is the classic source of "the second attempt plays differently from the first".
+
+**Exit:** the example stage is playable start to finish in the browser — run, jump, flip across the ceiling, take the pad, thread the corridor, land on the goal — with a working timer, best time persisted under `bw.best.01-first-steps`, and death and respawn that read as intended. `npm run typecheck` and `npm test` green; GAME-DESIGN §5/§6/§12 and PHYSICS.md § Grounded / § Game feel amended where this phase contradicted them.
 
 ---
 
