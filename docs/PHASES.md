@@ -8,7 +8,7 @@ Design decisions are settled in [GAME-DESIGN.md](GAME-DESIGN.md) — phases impl
 | --- | --- | --- |
 | 1 | Design doc, docs, rename | ✅ done |
 | 2 | Demolition | ✅ done |
-| 3 | Renderer & post-processing | ⬜ |
+| 3 | Renderer & post-processing | ✅ done |
 | 4 | Rigid-body physics | ⬜ |
 | 5 | Player, world & level format | ⬜ |
 | 6 | Particles & audio | ⬜ |
@@ -97,7 +97,7 @@ All met. `src/` went 3866 → 1808 lines (47 %; the remaining overshoot is `audi
 
 ---
 
-## Phase 3 — Renderer & post-processing ⬜
+## Phase 3 — Renderer & post-processing ✅
 
 The look. Everything visible in the finished game is decided here.
 
@@ -191,6 +191,18 @@ Assertions worth naming:
 - **The `angle` field on the temporary player is a hook, not a feature.** It exists so phase 4 has somewhere to write. If phase 3 ends with anything animating it, that's a second rotation source for phase 4 to fight.
 
 **Exit:** the test grid renders in black and white at 960×540 with row-merged geometry, the vignette breathes with the player's real speed, chromatic aberration arrives above `CA_THRESHOLD` and stays under the frame budget, the camera leads and bounces without snapping, and pressing space inverts the world — palette only, gravity untouched. `npm run typecheck` and `npm test` green; GAME-DESIGN §6/§7 and ARCHITECTURE.md amended where this phase contradicted them.
+
+### As built
+
+All met. Tests 130 → 165, typecheck clean, `docs/screenshot.png` captured through the existing sink. Five findings worth carrying forward:
+
+- **The CA benchmark was not close: composite 0.054 ms vs `getImageData` 2.657 ms, a 49× margin.** The whole post pass measures **0.051 ms** at `speedNorm = 1` against a 2 ms budget — the vignette alone is 0.0008 ms, since it is two cached gradients and a `globalAlpha`. The prediction held and the half-resolution fallback was never needed. Both implementations and the harness are deleted; only the composite path ships.
+- **The brief's named assertion for decision 2 has no teeth, and the camera work caught it.** `no step moves the bounce offset by more than 2 · BOUNCE_AMP` is a ceiling *no bounded sine can breach* — it holds trivially for the broken implementation too. Measured: the naive `sin(t · FREQ · n)` form peaks at 4.00 px/step against a 5.0 px bound, so it would have **passed**. `tests/camera.test.ts` therefore asserts both that bound and a derived one with real teeth — `BOUNCE_AMP · (n·Δφ + Δn)` = 0.352 px for its jitter band — which the integrated form passes at 0.261 (26 % headroom) and the naive form fails by 11×. **A test named in a brief is still only a hypothesis until it is watched failing.**
+- **Decision 5's decomposition is exact, and was verified as such in both phases.** Running `aberrate(0)` over a rendered frame changes **zero** pixels — bit-identical reconstruction — while a 3 px split moves pixels by up to 232. Confirmed against the dark *and* the light background; the light one is the case that would have saturated to white under the naive additive version. One refinement over the brief: basing each staging canvas on the *unshifted* frame before drawing the shifted copy removes the uncovered edge strip entirely, so the vignette no longer has to mask an artifact — it just happens to.
+- **Run merging is pixel-identical to the per-tile renderer, so the risk it carried is closed rather than eyeballed.** Diffed at five fractional camera offsets (0, 0.37, 0.5, 0.99, 12.4): **0 differing pixels** every time, and **0 non-pure pixels** anywhere in the geometry — no seams, so the camera rounding does reach that path. The brief only asked for a screenshot comparison; the exact diff was cheaper and settles it.
+- **`TINT_START = 0.5` is a private const in `renderer.ts`, not a tuning constant.** GAME-DESIGN §7 *defines* the tint as arriving over the top half of the range, so the half is spec, not a knob — moving it would contradict the doc rather than retune the feel. Flagged here because it is the one number in the phase that lives outside `constants.ts`.
+
+The `angle` field on the player is a hook and nothing animates it, as the brief requires — the browser check drove it from the console only. `PLAYER_CORE_INSET` was confirmed at 5 against a wall: buried in the floor slab the ink body vanishes into the ink geometry and only the paper core reads, which is exactly the job it exists to do.
 
 ---
 

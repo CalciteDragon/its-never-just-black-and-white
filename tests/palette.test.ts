@@ -1,5 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { Palette, palette } from '../src/engine/palette';
+import { CHANNEL_BLUE, CHANNEL_GREEN, CHANNEL_RED, COMPOSITE_BLACK, Palette, palette } from '../src/engine/palette';
+
+/** Pull the three colour components out of an `rgba(r, g, b, a)` string. */
+function rgbOf(s: string): string {
+  const m = /^rgba\((\d+), ?(\d+), ?(\d+), ?[\d.]+\)$/.exec(s);
+  if (!m) {
+    throw new Error(`not an rgba string: ${s}`);
+  }
+  return `${m[1]},${m[2]},${m[3]}`;
+}
+
+function alphaOf(s: string): number {
+  const m = /^rgba\(\d+, ?\d+, ?\d+, ?([\d.]+)\)$/.exec(s);
+  if (!m) {
+    throw new Error(`not an rgba string: ${s}`);
+  }
+  return Number(m[1]);
+}
 
 describe('Palette', () => {
   it('starts in phase A', () => {
@@ -64,5 +81,88 @@ describe('Palette', () => {
   it('the shared instance is a Palette in phase A', () => {
     expect(palette).toBeInstanceOf(Palette);
     expect(palette.phase).toBe(0);
+  });
+});
+
+describe('Palette rgba accessors', () => {
+  it('alpha varies independently of the colour', () => {
+    const p = new Palette();
+    expect(rgbOf(p.paperRgba(0))).toBe(rgbOf(p.paperRgba(1)));
+    expect(alphaOf(p.paperRgba(0))).toBe(0);
+    expect(alphaOf(p.paperRgba(1))).toBe(1);
+  });
+
+  it('the flip moves the rgb, exactly as it moves the hex', () => {
+    const p = new Palette();
+    const before = rgbOf(p.paperRgba(0.5));
+    p.flip();
+    expect(rgbOf(p.paperRgba(0.5))).not.toBe(before);
+    p.flip();
+    expect(rgbOf(p.paperRgba(0.5))).toBe(before);
+  });
+
+  it('the rgb matches the hex token it is derived from', () => {
+    // The vignette's inner stop is transparent paper; if these ever disagreed,
+    // the gradient would fade toward a colour that is not the background.
+    const p = new Palette();
+    for (const phase of [0, 1] as const) {
+      p.phase = phase;
+      const hex = p.paper;
+      const rgb = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(',');
+      expect(rgbOf(p.paperRgba(1))).toBe(rgb);
+    }
+  });
+
+  it('accentRgba tracks the accent, not the paper', () => {
+    const p = new Palette();
+    expect(rgbOf(p.accentRgba(1))).not.toBe(rgbOf(p.paperRgba(1)));
+    const accentA = rgbOf(p.accentRgba(1));
+    p.flip();
+    expect(rgbOf(p.accentRgba(1))).not.toBe(accentA);
+  });
+
+  it('never emits a hex literal — a gradient stop is not a fillStyle', () => {
+    const p = new Palette();
+    for (const phase of [0, 1] as const) {
+      p.phase = phase;
+      for (const s of [p.paperRgba(0), p.paperRgba(0.37), p.accentRgba(1)]) {
+        expect(s).not.toContain('#');
+        expect(s).toMatch(/^rgba\(\d+, \d+, \d+, [\d.]+\)$/);
+      }
+    }
+  });
+
+  it('clamps alpha rather than emitting an invalid colour', () => {
+    const p = new Palette();
+    expect(alphaOf(p.paperRgba(-1))).toBe(0);
+    expect(alphaOf(p.paperRgba(4))).toBe(1);
+    expect(alphaOf(p.accentRgba(Number.NaN))).toBe(0);
+  });
+});
+
+describe('compositing operands', () => {
+  it('the channel masks are pure and mutually exclusive', () => {
+    // Multiplying a frame by (1,0,0) yields (r,0,0) — that decomposition is
+    // what makes chromatic aberration survive the flip, so these must be pure.
+    expect(CHANNEL_RED).toBe('#FF0000');
+    expect(CHANNEL_GREEN).toBe('#00FF00');
+    expect(CHANNEL_BLUE).toBe('#0000FF');
+    expect(new Set([CHANNEL_RED, CHANNEL_GREEN, CHANNEL_BLUE]).size).toBe(3);
+  });
+
+  it('the operands are not palette colours and do not move with the phase', () => {
+    // They are arguments to `multiply` and `lighter`, not things anyone sees.
+    const p = new Palette();
+    const before = [CHANNEL_RED, CHANNEL_GREEN, CHANNEL_BLUE, COMPOSITE_BLACK];
+    p.flip();
+    expect([CHANNEL_RED, CHANNEL_GREEN, CHANNEL_BLUE, COMPOSITE_BLACK]).toEqual(before);
+    for (const c of before) {
+      expect(c).not.toBe(p.paper);
+      expect(c).not.toBe(p.ink);
+    }
+  });
+
+  it('black is the additive identity the accumulator starts from', () => {
+    expect(COMPOSITE_BLACK).toBe('#000000');
   });
 });

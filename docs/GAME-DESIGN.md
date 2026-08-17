@@ -19,7 +19,9 @@ There is no combat, no collectibles, no score. There is a start, a goal, and the
 
 ## 2. Visual identity
 
-Internal resolution **960×540** (`VIEW_W`×`VIEW_H`), integer-scaled to the window with letterboxing. Unlike the old build, `imageSmoothingEnabled` stays **on** and shapes are drawn antialiased — a square that rests at 37° has to have a clean edge. Tiles are **32×32 px** (`TILE`), giving a 30×16.9 tile viewport.
+Internal resolution **960×540** (`VIEW_W`×`VIEW_H`), integer-scaled to the window with letterboxing. Unlike the old build, shapes are drawn **antialiased** — a square that rests at 37° has to have a clean edge. Tiles are **32×32 px** (`TILE`), giving a 30×16.9 tile viewport.
+
+> *(Amended in phase 3 — this originally credited the antialiasing to `imageSmoothingEnabled`.)* That flag is a no-op for `fillRect` and paths, which Canvas 2D antialiases unconditionally; it only affects `drawImage` and pattern scaling. What actually decides the edge is the **coordinate policy**: the camera origin and the bitmap font round to whole pixels, world shapes do not. See ARCHITECTURE.md § Rendering pipeline for the full split.
 
 ### Palette
 
@@ -148,6 +150,7 @@ All live in `src/constants.ts` with units in comments. Values below are the desi
 | `JUMP_BUFFER` | 0.12 s | early press honoured on landing |
 | `JUMP_CUT_FACTOR` | 0.45 | release mid-rise, once |
 | `MAX_SUBSTEP` | 8 px | anti-tunnelling sub-step cap |
+| `PLAYER_CORE_INSET` | 5 px | inset of the paper core from each edge of the body (§2) |
 
 Derived, and asserted by tests:
 
@@ -177,13 +180,26 @@ Derived, and asserted by tests:
 | Constant | Value | Meaning |
 | --- | --- | --- |
 | `SPEED_REF` | 320 px/s | speed that normalises to 1.0 for all effects |
+| `SPEED_SMOOTH_RATE` | 6 /s | exponential lag on `speedNorm`, so one frame of contact can't strobe |
 | `CA_THRESHOLD` | 0.45 | normalised speed where aberration becomes visible |
 | `CA_MAX_OFFSET` | 3.0 px | channel split at normalised speed 1 |
 | `VIGNETTE_MIN` / `VIGNETTE_MAX` | 0.15 / 0.55 | alpha at rest / at full speed |
+| `VIGNETTE_INNER` | 0.45 | fraction of the radius left fully clear at the centre |
+| `VIGNETTE_TINT_MAX` | 0.22 | peak alpha of the accent tint over the vignette |
 | `BOUNCE_AMP` | 2.5 px | screen bounce amplitude at full speed |
 | `BOUNCE_FREQ` | 9.0 rad/s | bounce frequency at full speed |
 | `PAD_IMPULSE` | 820 px/s | jump pad launch velocity |
 | `DEATH_FADE_OUT` / `DEATH_FADE_IN` | 0.35 / 0.25 s | respawn timing |
+
+### Camera
+
+| Constant | Value | Meaning |
+| --- | --- | --- |
+| `CAMERA_FOLLOW_RATE` | 8 /s | exponential follow rate; higher is tighter |
+| `LOOKAHEAD_TIME` | 0.35 s | the view leads the player by `vx ×` this |
+| `LOOKAHEAD_MAX` | 96 px | cap on the lead — a safety limit for pad launches, not a normal operating point (flat-out running reaches 89.6 px) |
+| `LOOKAHEAD_RATE` | 3 /s | smoothing on the lead itself, deliberately slower than the follow so a direction reversal slides instead of whipping |
+| `CAMERA_VSLACK` | 64 px | permitted vertical overshoot past the map edge, so the frame before an out-of-bounds death stays legible |
 
 ## 7. Speed-driven effects
 
@@ -191,11 +207,15 @@ One number drives all of them. `speedNorm = clamp(|v| / SPEED_REF, 0, 1)`, smoot
 
 | Effect | Response |
 | --- | --- |
-| Vignette | alpha lerps `VIGNETTE_MIN → VIGNETTE_MAX`; accent tint fades in over the top half of the range |
+| Vignette | alpha lerps `VIGNETTE_MIN → VIGNETTE_MAX`; accent tint fades in over the top half of the range, peaking at `VIGNETTE_TINT_MAX` |
 | Chromatic aberration | zero below `CA_THRESHOLD`, then ramps to `CA_MAX_OFFSET` px |
-| Screen bounce | vertical camera offset `sin(t · BOUNCE_FREQ · speedNorm) · BOUNCE_AMP · speedNorm` |
+| Screen bounce | vertical camera offset `sin(phase) · BOUNCE_AMP · speedNorm`, where `phase += BOUNCE_FREQ · speedNorm · dt` |
 | Music | layer gates at 0.0 / 0.25 / 0.45 / 0.70; master gain ramps across the range |
 | Movement SFX | step rate scales with speed; delay feedback rises slightly |
+
+> **The bounce integrates its phase; it cannot read absolute time.** *(Amended in phase 3 — the original spec here read `sin(t · BOUNCE_FREQ · speedNorm)`.)* With absolute `t`, a small change in `speedNorm` moves the sine argument by `t · BOUNCE_FREQ · Δn`: at t = 100 s a 0.01 speed change jumps the phase by 9 radians and the screen snaps. Frequency modulation has to be applied to the phase, not to the argument. The bug is invisible in a ten-second play session and glaring in a three-minute one, so `tests/camera.test.ts` guards it directly.
+
+`speedNorm` normalises the **full velocity magnitude**, so terminal fall (`MAX_FALL_SPEED`) saturates it and flat-out running (`RUN_SPEED / SPEED_REF` = 0.8) deliberately does not. The effects still have somewhere left to go when you stop merely running and start actually moving.
 
 Because they share an input, they arrive together — the game visibly and audibly "opens up" as you get fast, and closes back down when you stall.
 

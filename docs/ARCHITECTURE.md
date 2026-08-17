@@ -51,7 +51,16 @@ Input edge state (`pressed`/`released`) clears **after each consumed fixed step*
 
 Everything draws into an offscreen **960×540** canvas, then `present()` blits it to the visible canvas at the largest integer scale that fits, centred with letterbox bars.
 
-The significant break from the old build: `imageSmoothingEnabled` is **on** and shapes are antialiased. A square resting at 37° needs a clean edge, and the vignette needs a smooth gradient. Integer scaling survives only to keep the post-processing costs predictable and the bitmap font crisp.
+The significant break from the old build is that shapes are **antialiased**: a square resting at 37° needs a clean edge, and the vignette needs a smooth gradient. Integer scaling survives only to keep the post-processing costs predictable and the bitmap font crisp.
+
+What delivers that is the **coordinate policy**, not `imageSmoothingEnabled` — Canvas 2D antialiases `fillRect` and paths unconditionally, and the flag only affects `drawImage` and pattern scaling. The old build's crispness came from rounding every draw to whole pixels, so antialiasing is a question of where that rounding survives:
+
+| Path | Rounds? | Why |
+| --- | --- | --- |
+| `setCamera` | yes | Tile coords are multiples of 32; a whole-pixel camera keeps static geometry crisp and stops seams appearing between adjacent runs. |
+| `rect`, `rectRotated`, `rectRotatedOutline` | no | Sub-pixel positioning is the whole point — this is what antialiases a rotated body. |
+| `text`, `textCentered` | yes | The 5×7 bitmap font is the one deliberately low-res element (GAME-DESIGN §2). Blurring it throws away the signature. |
+| `present` | n/a — `imageSmoothingEnabled = false` | Smoothing an integer-scaled blit would soften the entire frame. The only place softness is wanted is inside `applyPost`, and the offscreen buffer sets the flag **on** for exactly that reason: the aberration pass blits it at sub-pixel offsets. |
 
 Draw order per frame:
 

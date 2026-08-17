@@ -39,5 +39,9 @@ export class TitleScene implements Scene {
     if (game.audio.muted) {
       r.text('MUTED', 16, 16, palette.ink);
     }
+
+    // At rest, so vignette only — but the frame is consistent from the very
+    // first screen rather than the post pass appearing when play starts.
+    r.applyPost(0);
   }
 }

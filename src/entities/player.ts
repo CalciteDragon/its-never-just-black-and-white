@@ -17,6 +17,7 @@ import {
   JUMP_BUFFER,
   JUMP_CUT_FACTOR,
   JUMP_VELOCITY,
+  PLAYER_CORE_INSET,
   PLAYER_SIZE,
   RUN_SPEED,
 } from '../constants';
@@ -44,6 +45,14 @@ export const NO_INPUTS: PlayerInputs = {
 export class Player {
   readonly body: Body;
   onGround = false;
+  /**
+   * Render-only body angle (radians). The simulation never writes it — phase 4
+   * drives it from the rigid body's real angular state. It exists now so the
+   * rotated draw path is live code on the screen rather than an untested
+   * primitive phase 4 discovers is wrong. Anything animating it before then is
+   * a second rotation source for phase 4 to fight.
+   */
+  angle = 0;
 
   private coyote = 0;
   private buffer = 0;
@@ -115,7 +124,18 @@ export class Player {
     this.onGround = res.onGround;
   }
 
+  /**
+   * An `ink` body with a `paper` core inset from every edge (GAME-DESIGN §2).
+   * The body is the same colour as the geometry it touches, so without the core
+   * a square flush against a wall would vanish into it — and a plain square
+   * gives no cue at all about its angle, where a square with a core reads at a
+   * glance. Both rotate together; neither branches on the phase.
+   */
   render(r: Renderer): void {
-    r.rect(this.body.x, this.body.y, this.body.w, this.body.h, palette.ink);
+    const cx = this.centerX;
+    const cy = this.centerY;
+    r.rectRotated(cx, cy, PLAYER_SIZE, PLAYER_SIZE, this.angle, palette.ink);
+    const core = PLAYER_SIZE - 2 * PLAYER_CORE_INSET;
+    r.rectRotated(cx, cy, core, core, this.angle, palette.paper);
   }
 }

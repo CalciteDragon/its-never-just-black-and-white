@@ -86,3 +86,55 @@ export class TileMap {
     return this.tiles.slice();
   }
 }
+
+/**
+ * Walks the visible tiles as merged horizontal runs, so a 40-tile floor draws
+ * as one rect instead of forty. `tx0..tx1` / `ty0..ty1` are *inclusive* tile
+ * coordinates describing the window.
+ *
+ * Three decisions worth keeping:
+ * - Runs merge over equal tile *values*, not over solidity, so a pad never
+ *   merges into the floor it sits in — it would draw in the floor's colour.
+ * - The window clips runs to itself, not to the map: a floor spanning 0..39
+ *   seen through 5..10 emits `tx = 5, len = 6`. Emitting off-screen geometry
+ *   is the cost this whole function exists to avoid.
+ * - The window is first intersected with the map, because `get` reports OOB
+ *   sides as Solid to seal the level; iterating there would invent phantom
+ *   floor runs off the edge of the map.
+ *
+ * Callback-based rather than array-returning on purpose: ~100 runs x 60 fps of
+ * throwaway objects is churn for nothing. Nothing is allocated per run.
+ * A degenerate or off-map window simply never invokes the callback.
+ */
+export function forEachRun(
+  map: TileMap,
+  tx0: number,
+  ty0: number,
+  tx1: number,
+  ty1: number,
+  cb: (tx: number, ty: number, len: number, tile: Tile) => void,
+): void {
+  // Floor rather than trust the caller: a fractional bound from a sloppy px
+  // conversion would otherwise emit runs at fractional tile coordinates.
+  const x0 = Math.max(0, Math.floor(tx0));
+  const x1 = Math.min(map.w - 1, Math.floor(tx1));
+  const y0 = Math.max(0, Math.floor(ty0));
+  const y1 = Math.min(map.h - 1, Math.floor(ty1));
+
+  for (let ty = y0; ty <= y1; ty++) {
+    let tx = x0;
+    while (tx <= x1) {
+      const tile = map.get(tx, ty);
+      if (tile === Tile.Empty) {
+        tx++;
+        continue;
+      }
+      let len = 1;
+      while (tx + len <= x1 && map.get(tx + len, ty) === tile) {
+        len++;
+      }
+      cb(tx, ty, len, tile);
+      tx += len;
+    }
+  }
+}

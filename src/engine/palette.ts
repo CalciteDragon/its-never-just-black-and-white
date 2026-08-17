@@ -16,6 +16,38 @@ const ACCENT = ['#4CC9F0', '#F0A44C'] as const;
 
 export type Phase = 0 | 1;
 
+/**
+ * Compositing OPERANDS, not palette colours — nobody ever sees these as a
+ * colour. The chromatic aberration pass multiplies the frame by a pure channel
+ * mask to decompose it ((1,0,0) × frame = (r,0,0)) and accumulates onto black
+ * with `lighter`. They live here only because hard rule 6 says every hex does;
+ * they are deliberately outside the Palette class and never move with a flip.
+ */
+export const CHANNEL_RED = '#FF0000';
+export const CHANNEL_GREEN = '#00FF00';
+export const CHANNEL_BLUE = '#0000FF';
+/** The additive identity the aberration accumulator starts from. */
+export const COMPOSITE_BLACK = '#000000';
+
+/** '#0A0A0A' → [10, 10, 10]. Runs once per constant at module load. */
+function hexToRgb(hex: string): readonly [number, number, number] {
+  return [
+    parseInt(hex.slice(1, 3), 16),
+    parseInt(hex.slice(3, 5), 16),
+    parseInt(hex.slice(5, 7), 16),
+  ];
+}
+
+const PAPER_RGB = PAPER.map(hexToRgb);
+const ACCENT_RGB = ACCENT.map(hexToRgb);
+
+function rgba(c: readonly [number, number, number], a: number): string {
+  // NaN fails both comparisons and falls through to 0 — an invalid alpha must
+  // never reach the context, where it would silently void the whole draw.
+  const clamped = a > 0 ? (a < 1 ? a : 1) : 0;
+  return `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${clamped})`;
+}
+
 export class Palette {
   phase: Phase = 0;
 
@@ -42,6 +74,20 @@ export class Palette {
   /** Particles only — the single saturated colour on screen. */
   get accent(): string {
     return ACCENT[this.phase];
+  }
+
+  /**
+   * `paper` at a given alpha, for gradient stops. The vignette's inner stop is
+   * transparent paper, which needs the colour in components — so the parsing
+   * lives here with the hex rather than leaking a `#` into the renderer.
+   */
+  paperRgba(a: number): string {
+    return rgba(PAPER_RGB[this.phase], a);
+  }
+
+  /** `accent` at a given alpha — the vignette's speed tint. */
+  accentRgba(a: number): string {
+    return rgba(ACCENT_RGB[this.phase], a);
   }
 }
 
