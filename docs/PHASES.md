@@ -615,15 +615,161 @@ Met, with one exit criterion left open and flagged at the end. Tests 311 → 364
 
 ## Phase 7 — Editor & shell ⬜
 
-Make it a thing you can build levels in and actually play.
+Make it a thing you can build levels in and actually play. Six phases have built a game with one way in and one way out: `main.ts` boots the title, the title starts level 1, and level 1 ends in a placeholder that says COMPLETE. This phase gives the game its shell — a menu, a level select, a results screen, a pause — and gives the *author* a tool, which is the deliverable that outlives the phase: everything after 0.2 is levels, and levels are made in the editor or they are not made at all.
 
-- **`editor/grid.ts`** (new, pure) — grid model, paint/erase/flood, resize from any edge, whole-snapshot undo stack, validation. Unit-tested in node with no DOM.
-- **`scenes/editor.ts`** — mouse painting, char palette on 1–7, pan and zoom, in-place playtest on `Enter` returning to the editor with edits intact.
-- **Persistence** — a `levelSink` Vite middleware (`POST /__level`) modelled directly on the existing `screenshotSink` in `vite.config.ts`, writing `src/levels/<id>.json`. Production builds fall back to `localStorage` plus clipboard JSON export. No new dependencies either way.
-- **Shell** — `TitleScene` (the logo, a menu, controls in the footer), `LevelSelectScene`, `ResultsScene` (time, best time, next level). Minimal, monochrome, consistent with everything else.
-- **Docs & verification** — refresh `ARCHITECTURE.md` and `PHYSICS.md` from as-built code, capture a new `docs/screenshot.png` through the existing screenshot sink, browser-verify the whole flow.
+- **`editor/grid.ts`** (new, pure) — the grid model: paint, erase, flood, resize from any edge, whole-snapshot undo, and the warnings that `validateLevel` deliberately does not raise. Unit-tested in node with no DOM.
+- **`engine/input.ts`** — a pointer core and a raw key-code layer beside the action layer, both pure, so the editor is as headlessly testable as `PlayScene` is.
+- **`engine/renderer.ts`** — `screenToView`, the exact inverse of `present`'s integer-scaled letterboxed blit.
+- **`engine/levelio.ts`** (new) — the save transport: `POST /__level` in dev, `localStorage` + clipboard export everywhere else, with the payload building and the id validation pure and tested.
+- **`vite.config.ts`** — a `levelSink` middleware modelled directly on the existing `screenshotSink`, writing `src/levels/<id>.json`.
+- **`scenes/`** — `EditorScene`, `LevelSelectScene`, `ResultsScene`; `TitleScene` gets its menu; `PlayScene` gets an explicit campaign context and a pause.
+- **`src/levels/`** — a second level, authored **in the editor**, which is this phase's only honest proof that the tool works.
+- **Docs & verification** — `ARCHITECTURE.md` and `PHYSICS.md` refreshed from as-built code, `CLAUDE.md`'s demolition banner retired, a fresh `docs/screenshot.png`, and a browser pass over the whole flow including a production build.
 
-**Exit:** a level can be drawn in the browser, saved to disk, and played from the title screen without touching an editor outside the game.
+### Nine decisions taken before writing any of it
+
+Two contradict something already written down — one in GAME-DESIGN §10, one in this file's own phase 7 outline above — and each is amended in this phase's commit.
+
+1. **The editor edits *characters*, not tiles, and `world/level.ts` is therefore its entire format layer.** The obvious model is a `TileMap` plus a spawn and a goal beside it. It is wrong, and the reason is `S` and `G`: they are metadata on an empty cell in a `Level`, but they are *paintable cells* in an editor, and a `TileMap` cannot hold them. Model the grid as `readonly string[]` — §8's own on-disk shape — and five things fall out that would otherwise each need building and agreeing separately:
+   - **validation is `validateLevel(rows)` verbatim**, already written in phase 5 and already returning the human-readable list §10 wants to show;
+   - **saving is `JSON.stringify({ id, name, rows })`**, byte-identical to `serializeLevel`'s output, so what the editor writes is what `git diff` shows;
+   - **playtesting is `parseLevel({ id, name, rows })`**, which hands the *real* `PlayScene` the *real* `Level`, with no second parser and no preview mode;
+   - **a resize from the left or the top moves the spawn and the goal for free**, because they are characters in the rows being shifted. Under a `TileMap` model they are two coordinate pairs that have to be fixed up by hand at every edge, and the one that gets forgotten is the one nobody notices until a level spawns you inside a wall;
+   - **undo is a `string[]` copy**, 1200 characters for a 60×20 level.
+
+   The palette is **eight** entries, not §10's "1–7": `. # ^ v < > S G`, which is §8's table plus the two markers. Six is the tile enum and eight is what an author paints; seven is neither. §10 amended.
+
+   Two edits the model makes *unrepresentable*, which is worth more than any panel: painting `S` **moves** the spawn rather than adding a second one (same for `G`), and a rectangular array of equal-length rows cannot go ragged. Between those and a fixed palette, **every error `validateLevel` can report is unreachable except one** — a resize that crops the spawn or the goal off the grid. That is not an argument for dropping the panel; it is the argument for what the panel is *for*. It is a safety net over one reachable mistake, it is free, and it is the same function the campaign's eager load runs.
+
+2. **The mouse goes into `Input`, and the letterbox inverse is a pure function in `renderer.ts`.** The editor needs pointer state, and hard rule 2 says a scene may not touch the DOM — so either `Input` grows a pointer or the rule breaks, and the rule is what makes `PlayScene` unit-testable. `Input` gains a pure core (`onPointerDown/Move/Up(vx, vy, button)`, `pointerX/pointerY/pointerIn`, and `down`/`pressed`/`released` edges per button, cleared by the same `update()` that clears the keys) plus the browser half in `attach`, which is already one of the four sanctioned places. It also gains a **raw code layer** — every `KeyboardEvent.code` recorded whether or not it is bound, exposed as `codeDown` / `codePressed` — because the editor needs `Digit1`–`Digit8` for the palette, `ShiftLeft` for flood, and letters for the id field, none of which are `Action`s and none of which should become `Action`s (§12 pins that list, and "paint" is not a game verb). The raw layer also settles `Space`, which is bound to *both* `flip` and `confirm`: the editor's space-drag pan reads the code, not either action.
+
+   **`attach` converts to view space on the way in**, so the pure core never learns that a scale exists. The arithmetic is `screenToView(canvasW, canvasH, clientX, clientY)` in `renderer.ts` beside `computeScale`, exported, node-tested, and returning an `inFrame` flag rather than clamping — a press that lands in the letterbox is not a press on the edge tile, it is not a press at all (decision 4's stroke rule depends on that being true).
+
+3. **Zoom is two discrete steps, `1×` and `½×`, on a key — no wheel, no fractional scale.** This file's own outline asks for "pan and zoom" and GAME-DESIGN §10 asks for neither; the resolution is derived rather than split. A 60×20 level is 1920×640 px against a 960×540 view — two screens wide and 1.19 tall, so you cannot see a level you are building, and pan alone does not fix that. But `½` is not one option among many: **60 tiles × 16 px = 960 px = `VIEW_W` exactly**, so half zoom is precisely "one screen per sixty tiles", and `01-first-steps` is 60 wide. A continuous or cursor-anchored zoom buys nothing over that and costs a wheel path in `Input`, fractional tile geometry, and seams between adjacent cells at every non-integer scale — the exact problem phase 3's coordinate policy was written to avoid. Two steps, both integer tile sizes (32 and 16 px), and the editor draws cells itself rather than reusing `forEachRun`'s world path.
+
+4. **The undo granularity is the *stroke*, and the snapshot is pushed before the first cell of it.** Per-cell snapshots make `Ctrl+Z` undo one pixel of a drag, which is not an undo stack, it is a diary. A snapshot is pushed on pointer-*down* (and before a resize, a flood, or a clear), so one `Ctrl+Z` reverts a whole drag however many frames it spanned. Two rules go with it, and both are the classic bugs: **a stroke that changed nothing pushes nothing** — dragging across cells that already hold the selected character must not fill the stack with identical snapshots — and **the redo stack clears on any new edit**. `EDITOR_UNDO_MAX` bounds it at 64 (see the derived numbers; the ceiling is memory, but the *reason* for a cap is that an unbounded stack is a leak nobody measures).
+
+5. **Campaign membership becomes explicit, which is phase 5's flagged bug and a save-corruption bug behind it.** Phase 5's *As built* left this open: `PlayScene`'s `index` defaults to 0, so a level that is not in `LEVELS` — exactly what the editor's playtest hands it — advances into `LEVELS[1]` on completion. The honest fix is not a better default; it is to stop defaulting. `PlayScene(level, ctx: PlayContext)` where `PlayContext` is `{ kind: 'campaign'; index: number } | { kind: 'playtest'; back: Scene }`, and the union decides three things at once: where a win goes (`ResultsScene` vs straight back to the editor instance, edits intact), whether `bw.progress` advances, and **whether a best time is written at all**. That last one is the bug under the bug: a draft carrying the id of a shipped level would otherwise overwrite `bw.best.01-first-steps` with a time set on a grid that exists only in someone's browser. A playtest writes nothing.
+
+6. **Warnings belong to the editor; errors belong to `level.ts`; conflating them would throw the campaign's eager load on a legal level.** Phase 5's *As built* documented the down-pad trap — a pad whose facing points into its own geometry re-fires every step and pins the body — and nominated the editor's validation as the place to warn about it. It cannot be an *error*: the grid is well-formed, `parseLevel` must accept it, and `src/levels/index.ts` throws on anything `validateLevel` rejects, so promoting a level-design footgun to a format error would make a shipped level a build failure. So `editor/grid.ts` exports `gridWarnings(rows): string[]`, pure and separate, covering the cases that are legal-but-probably-wrong: a pad facing into blocking geometry, a spawn or goal inside a solid tile, and a spawn or goal on the top or bottom row (where the death planes are). The panel shows errors and warnings in two lists, and **only errors block the save**.
+
+7. **The save transport is behaviour-detected, not build-flag gated, and the sink derives its path from the id.** `import.meta.env.DEV` would work and is the wrong shape: it makes the fallback path — the one that only ever runs in a build — the path nobody exercises until it is shipped. Instead `saveLevel` attempts `POST /__level` and falls back to `localStorage` + clipboard on any non-200 or network failure, reporting which happened so the editor can say so on screen. `vite preview` and a real build then take the *same* code path they will in production, and dev takes it too the moment the plugin is missing. The middleware mirrors `screenshotSink` in every respect but one: it takes **no path from the caller**. `screenshotSink` accepts `?file=` and defends with a `..` check; the level sink accepts an `id`, validates it against `^[a-z0-9][a-z0-9-]*$`, and constructs `src/levels/<id>.json` itself — the same defence, one layer earlier, and it is the same charset the editor's id field enforces. It also does **not** touch `src/levels/index.ts`: a middleware that rewrites a TypeScript source file to add an import is codegen, and the honest alternative is a one-line manual edit which the save's on-screen confirmation names.
+
+8. **Pause is spec, not scope creep, and Escape's double binding is resolved by who reads it.** §4's control table has had `Pause / back` on `Esc`/`P` since phase 1 and nothing has implemented it; `PlayScene` currently reads `back` and quits to the title mid-run, silently discarding the attempt. Once there is a shell to quit *to*, that is a bug. `PlayState` gains `paused`: the simulation freezes, the timer stops (it already only runs in `running`), the frame dims through the fade path that already exists, and the bed is fed intensity **0** through the same duck as `dying` and `won` — three lines, all of them already written for something else. `Esc` toggles; the overlay offers RESUME / RESTART / QUIT. Since `back` and `pause` are bound to the same two keys, **`PlayScene` reads `pause` and nothing else**, and the editor reads `back`; a scene that read both would fire twice on one keypress.
+
+9. **The phase's proof that the editor works is a level built with it.** No test can show that a tool is usable, and the failure mode of an authoring tool is not a crash — it is being technically complete and miserable, which a browser pass measured in minutes will not surface either. So the exit criterion is a **second level, authored end to end in the editor**, saved through `POST /__level`, committed as `src/levels/02-*.json`, and added to `LEVELS`. It is also the only way the rest of the phase means anything: `LevelSelectScene` with one entry, `bw.progress` with one level to be furthest through, and `ResultsScene`'s NEXT with nowhere to go are all untestable *as designs* against a single-level campaign. Authoring the remaining set is **not** in this phase — that is the work phase 7 exists to enable, not to do.
+
+### Derived numbers worth recording
+
+- **Half zoom is exactly one screen per sixty tiles.** 60 × 32 × ½ = 960 = `VIEW_W`, and `01-first-steps` is 60 wide, so it fits the frame horizontally with 220 px of vertical slack (20 × 16 = 320 against 540). At `1×` the same level is 2.0 screens wide and 1.19 tall.
+- **Worst-case editor draw is 2040 cells** — 60 × 34 visible at ½ zoom, all non-empty. At phase 6's measured fill rate (512 sparks in 0.0775 ms = 0.151 µs per `fillRect`) that predicts **0.31 ms**, which would make it the largest per-frame cost in the game — but only in a scene with no solver, no particles and a vignette-only post pass (0.0008 ms). Budget 1 ms. If it overruns, the fallback is `forEachRun` over a `TileMap` rebuilt on edit, not a cleverer draw.
+- **An undo snapshot is 1200 characters ≈ 2.4 KB** at 60×20; `EDITOR_UNDO_MAX` = 64 puts the ceiling at 154 KB, and at the `EDITOR_MAX_W`×`EDITOR_MAX_H` cap of 200×60 at **1.5 MB**. The cap on the grid itself is not a memory argument: 200 tiles is 6400 px, 6.7 screens at `1×` and 3.3 at ½, and a level you cannot see three screens of is one the tool has stopped helping with.
+- **Dropping the letterbox offset from the pointer conversion is a 15-tile error, not a sub-pixel one.** At a 1920×1000 window, `computeScale` gives scale 1 (⌊min(2.0, 1.85)⌋), `offX` 480, `offY` 230 — so a naive `clientX / scale` lands 480 px right and 230 px down, 15 tiles and 7.2 rows off. This is the prediction the round-trip test is watched failing against.
+- **A serialised 60×20 level is ~1.3 KB of JSON**, so `bw.editor.draft` is 0.03 % of a 5 MB localStorage quota. Autosaving on every stroke end is free.
+- **The campaign's save surface is four keys**: `bw.progress`, `bw.muted`, `bw.editor.draft`, and one `bw.best.<id>` per level. Phase 2 defined all four; after this phase all four have a writer, which is the first time that has been true.
+
+### The shell, concretely
+
+```
+Title ─┬─▶ Play(campaign i) ─▶ Results ─┬─▶ Play(campaign i+1)
+       │        ▲                       └─▶ Level select
+       ├─▶ Level select ────────────────────▶ Play(campaign i)
+       │        └── E on an entry ─▶ Editor
+       └─▶ Editor ⇄ Play(playtest)
+```
+
+- **`TitleScene`** — the two-line logo it already draws, plus a vertical menu (PLAY · LEVELS · EDITOR) driven by `up`/`down`/`confirm`, and the controls footer rendered **from `BINDINGS`** rather than from a hardcoded string, so a rebinding cannot silently lie. `menuMove` and `menuPick` finally have both their call sites (phase 6 synthesised them for a screen that only ever picked).
+- **`LevelSelectScene`** — one row per level: name, best time from `bw.best.<id>`, and a lock past `bw.progress`. `confirm` plays it, `back` returns to the title, and the raw `KeyE` opens that level in the editor. Locked entries are drawn at `inkRgba(0.35)` — the palette already has the accessor, and dimming is the only two-colour way to say "not yet".
+- **`ResultsScene(stats)`** — level name, the time just set, the previous best, `NEW BEST` when it is one, and NEXT / RETRY / LEVELS. It owns no clock: `GOAL_HOLD` stays in `PlayScene`, where it is the frozen frame's punctuation, and §6's description of it is amended from "how long the completion readout holds" to "how long the frozen frame holds before the results screen". The placeholder readout in `renderHud` is deleted, which is the whole of phase 5's promise about it.
+- **`SaveStore`** gains `getProgress()` / `setProgress(n)` over `bw.progress` — the one key phase 2 defined and nothing has ever written. Corrupt or missing reads as 0, and `setProgress` is monotone (`max`), because completing an early level again must not lock the later ones.
+
+### The editor, concretely
+
+| Input | Verb |
+| --- | --- |
+| left-drag | paint the selected character |
+| right-drag | erase (paint `.`) |
+| `Shift`+click | flood-fill the connected region of equal character (4-connected) |
+| middle-drag, `Space`-drag, arrows | pan |
+| `1`–`8` | select `. # ^ v < > S G` |
+| `Z` | toggle `1×` / `½×` |
+| `Ctrl+Z` / `Ctrl+Y` | undo / redo |
+| `[` `]` `,` `.` | grow / shrink from an edge (with `Shift` for the opposite edge) |
+| `N` | edit the id and name (single-line entry, `a-z0-9-` and `A-Z0-9 ` respectively) |
+| `Enter` | playtest in place |
+| `Ctrl+S` | save |
+| `Esc` | back to the title |
+
+The palette bar draws **the tiles themselves** — an `ink` slab plus the real chevron — not their characters. It is WYSIWYG for free, and it sidesteps the fact that `^` has no glyph in the 5×7 font (`v` resolves to `V`, which is worse: it looks deliberate). That means the chevron draw moves out of `PlayScene`'s private method into a shared `scenes/tiledraw.ts` used by both; a second copy of it in the editor is a second thing to retune the next time `PAD_CHEVRON_WIDTH` moves.
+
+Entry points: `E` or the menu from the title opens the draft if `bw.editor.draft` holds one, else a blank `EDITOR_DEFAULT_W`×`EDITOR_DEFAULT_H` grid; `E` on a level-select row opens that level; `?editor=1` in `main.ts` boots straight into it. The draft is written on every stroke end, so a reload never costs more than the stroke in progress.
+
+### Order of work
+
+Bottom-up, as in every phase since 4: the layers that poison everything above them go first, and the pure ones before the scenes that consume them.
+
+1. **`constants.ts`** — the editor block: `EDITOR_ZOOM_STEPS` (1, 0.5), `EDITOR_PAN_SPEED` (px/s for the keyboard pan), `EDITOR_GRID_ALPHA` 0.15, `EDITOR_UNDO_MAX` 64, `EDITOR_DEFAULT_W`/`_H` 40/20, `EDITOR_MAX_W`/`_H` 200/60. They join a new §6 table in the same commit; `GOAL_HOLD`'s description is amended there per decision 8's sibling above.
+2. **`engine/input.ts`** — the raw code layer and the pointer core (decision 2), and `attach`'s pointer wiring including `contextmenu` suppression for the right-drag erase.
+3. **`engine/renderer.ts`** — `screenToView`, tested against `computeScale` before anything calls it.
+4. **`engine/save.ts`** — `getProgress` / `setProgress`.
+5. **`editor/grid.ts`** + tests, complete and green before a scene exists — paint, erase, flood, resize from four edges, the stroke-scoped undo stack, `gridWarnings`.
+6. **`engine/levelio.ts`** and **`vite.config.ts`'s `levelSink`** — the pure payload/id half tested, the transport half guarded (decision 7).
+7. **`scenes/tiledraw.ts`** — the chevron and the tile-run draw, lifted out of `PlayScene` with no behaviour change.
+8. **`scenes/play.ts`** — `PlayContext` (decision 5) and `paused` (decision 8). Both are small and both are the riskiest edits in the phase, because this is the one file with 531 lines of tests already pointed at it.
+9. **`scenes/results.ts`**, **`scenes/levelselect.ts`**, **`scenes/title.ts`** — the shell, in that order, so each is built against a screen that already exists to return to.
+10. **`scenes/editor.ts`** — last, because it consumes every layer above.
+11. **The second level, authored in the editor**, and `src/levels/index.ts`.
+12. **Tests, typecheck, browser pass (dev *and* a production build), doc refresh, screenshot.**
+
+### Test suite
+
+| Action | Files |
+| --- | --- |
+| Add | `grid` (the phase's largest new file: paint, flood, resize, undo, warnings), `editorscene` (headless, mouse included), `levelio` (payload, id charset, fallback selection), `shell` (title menu, level select gating, results) |
+| Extend | `input` (raw codes, pointer edges), `renderer` (`screenToView` against `computeScale`), `save` (progress), `playscene` (`PlayContext`, pause, the playtest writing nothing), `constants` (the editor block and the ½-zoom relation) |
+| Keep | `obb`, `physics`, `camera`, `palette`, `tiles`, `level`, `font`, `game`, `rng`, `particles`, `audio`, `player` |
+
+`EditorScene` is node-testable for exactly the reason `PlayScene` is, and that is decision 2's real payoff: the mouse arrives as `Input.onPointerDown(vx, vy, 0)` rather than as a DOM event, so a test paints a stroke, undoes it, resizes the grid, playtests it and comes back **without a canvas anywhere**. The `fakeGame()` helper from `tests/playscene.test.ts` is lifted into a shared `tests/harness.ts` rather than copied — it is about to have four consumers.
+
+Phases 3, 4 and 5 each found the brief's headline assertion vacuous as written, and phase 6 was the first where it had teeth on the first try. So, as ever: **each of these is worth writing only if it is watched failing first.**
+
+- **The pointer round-trip, watched failing.** For a grid of window sizes including ones with a large letterbox, `screenToView(present(p))` returns `p`, and a point inside the letterbox reports `inFrame: false`. Against the naive `clientX / scale` the prediction is stated above and is loud: **480 px / 15 tiles** at 1920×1000. If the naive version passes, the test is choosing window sizes that happen to fit exactly.
+- **One `Ctrl+Z` undoes a whole stroke.** Paint a 20-cell drag across 20 frames, undo once, assert the grid is bit-identical to before the drag. Against a per-cell snapshot it takes 20 undos, so the assertion fails at 19 cells still painted.
+- **A no-op stroke pushes nothing.** Drag across cells that already hold the selected character; the undo depth is unchanged, and one `Ctrl+Z` still reaches past it to the previous real edit. This is the half of decision 4 that a stack-depth assertion alone would miss.
+- **A resize from the left carries the spawn and the goal with it.** Grow two columns from the left edge, and `S` and `G` are two columns further right — which is free under decision 1's model and is the assertion that fails against a `TileMap`-plus-coordinates model, so it is worth writing even though nothing in the phase implements one.
+- **A crop that loses the spawn is an error, and the save refuses it.** The one reachable member of `validateLevel`'s error list; assert the message reaches the panel verbatim and that `saveLevel` is never called.
+- **The playtest writes nothing.** Run phase 5's scripted completion of `01-first-steps` through a `playtest` context and assert `bw.best.01-first-steps` and `bw.progress` are untouched, then assert the same script through a `campaign` context writes both. Watched failing against `PlayScene` as it stands today, which writes the best time *and* advances into `LEVELS[1]`.
+- **Editor → playtest → `Esc` → editor preserves the grid and the undo stack.** §10's requirement, stated as an object identity: the scene returned to is the same instance, not a rebuilt one.
+- **The down-pad warning fires, and is not an error.** A `v` set into a floor row produces a warning naming its row and column; `validateLevel` returns **zero** errors for the same grid; and `parseLevel` accepts it. All three, because the failure mode is a warning that quietly became a build break.
+- **Progress gating.** `bw.progress` = 1 unlocks exactly two entries; a corrupt or absent value unlocks exactly one (not zero, which would lock the player out of their own game, and not all, which would make the key pointless); `setProgress` never moves backward.
+- **Raw codes and actions do not leak into each other.** `Digit1` gives `codePressed('Digit1')` and no action at all; `Space` gives `codeDown('Space')` *and* both `flip` and `confirm`; every edge clears on the same `update()` as the keys, per fixed step.
+- **A press in the letterbox never paints**, and a drag that leaves the frame stops painting rather than clamping to the edge tile — clamping would smear a wall of tiles down the border, which is the visible version of the same bug.
+- **`saveLevel` picks its transport by behaviour.** With no `fetch` defined it reports `local` and writes the draft key; with a fake `fetch` returning 200 it reports `disk` and posts the exact bytes `serializeLevel` would produce; with one returning 404 it falls back rather than throwing. And the id charset rejects `../evil`, `A-Z`, and the empty string.
+- **Pause is a freeze.** Ten frames paused advance neither the timer nor the body by any amount, `setIntensity` is fed 0 throughout, and resuming continues the same trajectory — bit-identically, which is the assertion that catches a pause that steps the world with `dt = 0` instead of not stepping it.
+
+### Verification that isn't a unit test
+
+`npm run dev`, and — for the first time in the project — `npm run build && npx vite preview`, because decision 7's fallback path only exists in a build:
+
+- **Author the second level end to end**, from a blank grid to a file in `src/levels/`, and play it from the title screen without touching a text editor. This is the phase's headline and its exit criterion in one. Expect the *tool* to change while doing it; that is what the exercise is for.
+- **The whole flow, twice**: title → level select → play → results → next → results → level select → title, and title → editor → playtest → editor → save. Every `back` goes where it should, no scene leaks the bed (the music must be silent on every screen but play), and no screen fails to invert on a flip.
+- **The production build takes the fallback**: save in `vite preview`, confirm it reports `local`, confirm the JSON is on the clipboard and pastes into a file that `parseLevel` accepts.
+- **`?editor=1` with no gesture**, which is phase 6's flagged autoplay trap: the context is suspended, and the first playtest must resync onto the grid rather than dumping a bar of notes.
+- **A 200×60 grid** at both zooms — the draw budget, and whether the tool is still usable at three screens per view. Benchmark the editor draw at a full ½-zoom viewport against the 0.31 ms prediction, record it, delete the harness (phase 3's rule).
+- **The palette bar reads at a glance in both phases**, including that `^` and `v` are distinguishable — the reason the bar is tiles rather than text.
+- **Pause under every state**: pause mid-air, pause during the death fade, pause on the winning frame. The last two are where a naive freeze desynchronises the fade from the state clock.
+- **Fresh `docs/screenshot.png`** through the existing sink, and a second one of the editor if the README wants it.
+
+### Risks
+
+- **`PlayScene` has 531 lines of tests pointed at it and this phase changes its constructor.** That is the good kind of breakage — every call site is a typecheck error — but decision 5 also changes *behaviour* (no best time on a playtest), and behaviour is what the existing suite pins. Expect to retune `tests/playscene.test.ts` rather than extend it, and do decision 5 before the pause so the two are separable when something fails.
+- **The pointer conversion is this phase's `obb.ts`**: the one layer where a wrong constant produces plausible-looking behaviour instead of a crash. Every paint lands on the wrong tile by a fixed offset, which reads as "the editor feels off" and not as an arithmetic bug — until the window is a size where the offset is fifteen tiles. Over-invest in its tests, and choose window sizes that do not fit exactly.
+- **An authoring tool's failure mode is being complete and miserable**, and nothing in the test suite can see it. Decision 9 is the mitigation and it is deliberately expensive: building a real level is the only pass that finds the missing verb, the wrong default, and the shortcut that should exist.
+- **The editor is the first scene in the project with modal state** — a text field that swallows every key, a pan that owns the mouse, a stroke in progress. Mode bugs are the ones that survive a browser pass, because the tester knows which mode they are in. State the modes explicitly and make them visible on screen; an editor whose current mode is invisible is one that will paint a level's worth of `S` into a grid.
+- **`Escape` now means four things** across four scenes (quit, pause, cancel a text field, leave the editor). Decision 8 settles the `back`/`pause` half; the rest is that each scene reads exactly one of them, and a scene that grows a second reader is where the double-fire returns.
+- **The docs refresh is a deliverable, not a chore.** `ARCHITECTURE.md` says in its own header that it is rewritten from as-built code at the end of this phase, `CLAUDE.md` still opens with a demolition banner for an overhaul that ends here, and both have been true-ish for six phases. Leaving them is how a repo starts lying to the next person to open it.
+
+**Exit:** a level can be drawn in the browser, saved to disk, and played from the title screen without touching an editor outside the game — proven by a second level that was built exactly that way and is in the campaign. The shell is complete: title menu, level select with progress and best times, pause, results with a next level. `npm run typecheck` and `npm test` green; `ARCHITECTURE.md`, `PHYSICS.md`, `README.md` and `CLAUDE.md` refreshed from as-built code, GAME-DESIGN §6/§10/§12 amended where this phase contradicted them, and a fresh `docs/screenshot.png`.
 
 ---
 
