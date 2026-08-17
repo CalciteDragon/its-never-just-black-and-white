@@ -43,7 +43,7 @@ import {
   satOverlap,
 } from './obb';
 import type { Aabb, Obb, SatResult } from './obb';
-import { Tile } from './tiles';
+import { Tile, isBlocking } from './tiles';
 import type { TileMap } from './tiles';
 
 const HALF_PI = Math.PI / 2;
@@ -62,7 +62,10 @@ export interface RigidBody {
   size: number;
 }
 
-/** A resolved contact, for effects that scale with how hard you hit. */
+/**
+ * A resolved contact, for effects that scale with how hard you hit — and for
+ * the two questions the player asks that `grounded` alone cannot answer.
+ */
 export interface Contact {
   /** World-space contact point. */
   x: number;
@@ -72,6 +75,17 @@ export interface Contact {
   ny: number;
   /** Normal impulse magnitude, per unit mass (px/s). */
   impulse: number;
+  /**
+   * The pad tile that produced this contact, or Tile.Empty for none.
+   *
+   * Pads are collidable geometry (decision 1), so landing on one IS a
+   * ground-normal contact — but GAME-DESIGN §5 says a pad does not recharge the
+   * flip and only ground does. `grounded` and "recharges" are therefore
+   * different predicates, and the difference is which tile you touched.
+   */
+  pad: Tile;
+  /** Whether any plain Tile.Solid pooled into this contact. */
+  onSolid: boolean;
 }
 
 export interface StepResult {
@@ -140,16 +154,29 @@ interface Manifold {
   depth: number;
   candCount: number;
   cand: number[];
+  /** First pad tile pooled in, Tile.Empty for none. */
+  pad: Tile;
+  /** Whether any plain solid pooled in. Both bits are needed: a body straddling
+   * a pad and the floor beside it must launch AND recharge. */
+  onSolid: boolean;
 }
 
 const manifolds: Manifold[] = [];
 for (let i = 0; i < MAX_MANIFOLDS; i++) {
-  manifolds.push({ nx: 0, ny: 0, depth: 0, candCount: 0, cand: new Array<number>(CAND_STRIDE).fill(0) });
+  manifolds.push({
+    nx: 0,
+    ny: 0,
+    depth: 0,
+    candCount: 0,
+    cand: new Array<number>(CAND_STRIDE).fill(0),
+    pad: Tile.Empty,
+    onSolid: false,
+  });
 }
 const order: number[] = new Array<number>(MAX_MANIFOLDS).fill(0);
 const contactPool: Contact[] = [];
 for (let i = 0; i < MAX_CONTACTS; i++) {
-  contactPool.push({ x: 0, y: 0, nx: 0, ny: 0, impulse: 0 });
+  contactPool.push({ x: 0, y: 0, nx: 0, ny: 0, impulse: 0, pad: Tile.Empty, onSolid: false });
 }
 
 const result: StepResult = {
@@ -303,7 +330,8 @@ function collectManifolds(body: RigidBody, map: TileMap): void {
 
   for (let ty = ty0; ty <= ty1; ty++) {
     for (let tx = tx0; tx <= tx1; tx++) {
-      if (map.get(tx, ty) !== Tile.Solid) {
+      const tile = map.get(tx, ty);
+      if (!isBlocking(tile)) {
         continue;
       }
       tileBox.cx = tx * TILE + TILE / 2;
@@ -313,17 +341,24 @@ function collectManifolds(body: RigidBody, map: TileMap): void {
       // with sideways-facing edges between them. OOB reads do the right thing
       // for free: the sealed sides mask their own outward faces, and the open
       // top and bottom leave theirs exposed.
+      //
+      // The neighbour test asks isBlocking, NOT `=== Tile.Solid`. That is the
+      // second half of decision 1, and skipping it rebuilds phase 4's tile-seam
+      // bug at every pad in the game: a pad set into a floor row would leave
+      // its neighbours' faces toward it unmasked, so landing across the seam
+      // finds a sideways cheapest-axis and shoves the body along the floor.
+      // Measured at 8.32 rad/s before this line said isBlocking.
       let interior = 0;
-      if (map.get(tx - 1, ty) === Tile.Solid) {
+      if (isBlocking(map.get(tx - 1, ty))) {
         interior |= FACE_LEFT;
       }
-      if (map.get(tx + 1, ty) === Tile.Solid) {
+      if (isBlocking(map.get(tx + 1, ty))) {
         interior |= FACE_RIGHT;
       }
-      if (map.get(tx, ty - 1) === Tile.Solid) {
+      if (isBlocking(map.get(tx, ty - 1))) {
         interior |= FACE_UP;
       }
-      if (map.get(tx, ty + 1) === Tile.Solid) {
+      if (isBlocking(map.get(tx, ty + 1))) {
         interior |= FACE_DOWN;
       }
       if (!satOverlap(box, tileBox, sat, interior)) {
@@ -340,13 +375,13 @@ function collectManifolds(body: RigidBody, map: TileMap): void {
       if (count === 0) {
         continue;
       }
-      addToManifold(count);
+      addToManifold(count, tile);
     }
   }
 }
 
 /** Pool this tile's candidates into the manifold sharing its normal, or a new one. */
-function addToManifold(count: number): void {
+function addToManifold(count: number, tile: Tile): void {
   let m: Manifold | null = null;
   for (let i = 0; i < manifoldCount; i++) {
     const cand = manifolds[i];
@@ -364,6 +399,15 @@ function addToManifold(count: number): void {
     m.ny = sat.ny;
     m.depth = 0;
     m.candCount = 0;
+    m.pad = Tile.Empty;
+    m.onSolid = false;
+  }
+  // Tile identity travels with the manifold, because the merge is where a pad
+  // and the floor beside it stop being distinguishable by anything else.
+  if (tile === Tile.Solid) {
+    m.onSolid = true;
+  } else if (m.pad === Tile.Empty) {
+    m.pad = tile;
   }
   if (sat.depth > m.depth) {
     m.depth = sat.depth;
@@ -470,20 +514,30 @@ function applyManifold(body: RigidBody, m: Manifold, gs: 1 | -1): boolean {
   }
 
   if (acted) {
-    recordContact(px, py, m.nx, m.ny, j);
+    recordContact(px, py, m, j);
   }
   return acted;
 }
 
-/** One entry per distinct normal, keeping the largest impulse seen on it. */
-function recordContact(x: number, y: number, nx: number, ny: number, impulse: number): void {
+/**
+ * One entry per distinct normal, keeping the largest impulse seen on it — and
+ * accumulating tile identity, since a normal can be re-resolved across
+ * sub-steps and passes against a different tile each time.
+ */
+function recordContact(x: number, y: number, m: Manifold, impulse: number): void {
   for (let i = 0; i < result.contactCount; i++) {
     const c = contactPool[i];
-    if (c.nx * nx + c.ny * ny > 0.9999) {
+    if (c.nx * m.nx + c.ny * m.ny > 0.9999) {
       c.x = x;
       c.y = y;
       if (impulse > c.impulse) {
         c.impulse = impulse;
+      }
+      if (c.pad === Tile.Empty) {
+        c.pad = m.pad;
+      }
+      if (m.onSolid) {
+        c.onSolid = true;
       }
       return;
     }
@@ -494,9 +548,11 @@ function recordContact(x: number, y: number, nx: number, ny: number, impulse: nu
   const c = contactPool[result.contactCount++];
   c.x = x;
   c.y = y;
-  c.nx = nx;
-  c.ny = ny;
+  c.nx = m.nx;
+  c.ny = m.ny;
   c.impulse = impulse;
+  c.pad = m.pad;
+  c.onSolid = m.onSolid;
 }
 
 /**

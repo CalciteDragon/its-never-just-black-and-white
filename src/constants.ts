@@ -198,3 +198,52 @@ export const VIGNETTE_TINT_MAX = 0.22;
 export const BOUNCE_AMP = 2.5;
 /** Screen bounce frequency at full speed (rad/s). */
 export const BOUNCE_FREQ = 9.0;
+
+// --- Jump pads, death and the goal (GAME-DESIGN §5/§6, PHASES phase 5). ---
+
+/**
+ * Jump pad launch speed (px/s). It OVERRIDES the relevant velocity component
+ * rather than adding to it, so a pad's launch is the same however fast you
+ * arrived. Up-pad peak = 820²/(2·GRAVITY_RISE) = 152.8 px = 4.78 tiles; airtime
+ * 0.667 s, which carries 170.9 px = 5.34 tiles at RUN_SPEED — against the plain
+ * jump's 4.56, so five tiles is the smallest gap that *requires* a pad.
+ */
+export const PAD_IMPULSE = 820;
+/**
+ * Angular velocity (rad/s) a pad imparts at a full-corner contact, scaled
+ * linearly by the torque arm and clamped. It needs its own scale because the
+ * physical impulse form saturates: SPIN_TRANSFER · PAD_IMPULSE · (r×n) /
+ * PLAYER_INERTIA is 73.7 rad/s at a corner, five times MAX_ANG_SPEED, so every
+ * off-centre hit more than ~2 px from centre would clamp and look identical.
+ * The arm is measured from the BODY's centre, so a flat landing anywhere on a
+ * pad gives exactly zero — "clip it with a corner and you leave spinning" is
+ * then a real distinction rather than a constant tumble.
+ */
+export const PAD_SPIN_MAX = 8.0;
+/** Death fade out, then back in after the respawn (s). */
+export const DEATH_FADE_OUT = 0.35;
+export const DEATH_FADE_IN = 0.25;
+
+// --- Shell placeholders (scenes/play.ts). Phase 7's ResultsScene takes these
+// with it; they are here so the numbers are not scattered through a scene. ---
+
+/** How long the completion readout holds before the level advances (s). */
+export const GOAL_HOLD = 1.2;
+/**
+ * Stroke width of the player's paper core when the flip is SPENT (px). The core
+ * is PLAYER_SIZE − 2·PLAYER_CORE_INSET = 10 px square, so a 1 px outline is too
+ * thin to read at speed; this is the charge tell and there is no HUD behind it.
+ */
+export const CORE_OUTLINE_WIDTH = 2;
+/**
+ * Pad chevron arm length and bar thickness (px). Two `paper` bars per pad,
+ * drawn at ±135° from its facing. The width was set against a pad flush in a
+ * floor row: the arms sit at 45°, so a 3 px bar antialiases almost entirely
+ * into mid-grey and the chevron reads as a smudge rather than an arrow.
+ */
+export const PAD_CHEVRON_LEN = 14;
+export const PAD_CHEVRON_WIDTH = 5;
+/** Goal outline stroke (px), and the scale pulse it breathes with. */
+export const GOAL_OUTLINE_WIDTH = 2;
+export const GOAL_PULSE_AMP = 0.12;
+export const GOAL_PULSE_FREQ = 3.0;

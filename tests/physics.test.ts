@@ -28,19 +28,21 @@ import {
 import { Rng } from '../src/engine/rng';
 import { createBody, rightAngleError, stepBody, subStepCount } from '../src/world/physics';
 import type { RigidBody, StepOptions } from '../src/world/physics';
-import { Tile, TileMap } from '../src/world/tiles';
+import { Tile, TileMap, tileFromChar } from '../src/world/tiles';
 
 const DOWN: StepOptions = { gravitySign: 1 };
 const UP: StepOptions = { gravitySign: -1 };
 
-/** Build a map from ASCII art: '#' solid, '.' empty. */
+/** Build a map from ASCII art, using the level format's own characters. */
 function mapFrom(rows: string[]): TileMap {
   const m = new TileMap(rows[0].length, rows.length);
   rows.forEach((row, ty) => {
     for (let tx = 0; tx < row.length; tx++) {
-      if (row[tx] === '#') {
-        m.set(tx, ty, Tile.Solid);
+      const t = tileFromChar(row[tx]);
+      if (t === null) {
+        throw new Error(`mapFrom: unknown char '${row[tx]}' at ${tx},${ty}`);
       }
+      m.set(tx, ty, t);
     }
   });
   return m;
@@ -622,5 +624,180 @@ describe('the phase exit condition', () => {
     expect(b.x).toBeLessThan(16 * TILE);
     // Still spinning when it got there — that is the headline of the phase.
     expect(Math.abs(b.angle)).toBeGreaterThan(2);
+  });
+});
+
+describe('pads are blocking geometry (phase 5, decision 1)', () => {
+  /** A floor with a PadUp set into it at column 10, and open sky above. */
+  function padFloor(): TileMap {
+    return mapFrom([
+      '..................',
+      '..................',
+      '..................',
+      '##########^#######',
+      '##################',
+    ]);
+  }
+
+  const FLOOR_TOP = 3 * TILE;
+
+  /** A body settled flat on that floor, well left of the pad. */
+  function settledOnFloor(map: TileMap, tx = 4): RigidBody {
+    const b = body(tx * TILE + TILE / 2, FLOOR_TOP - PLAYER_SIZE / 2);
+    for (let i = 0; i < 20; i++) {
+      stepBody(b, map, STEP, DOWN);
+    }
+    return b;
+  }
+
+  it('THE PAD SEAM: landing across a pad and the floor beside it produces no spin', () => {
+    // The assertion the phase exists to protect, and the one that is actually
+    // load-bearing: straddle the boundary so the FLOOR tile is the one left
+    // with a sliver of horizontal overlap. If its face toward the pad is not
+    // masked as interior — because the mask still asks `=== Tile.Solid` and a
+    // pad is not Solid — then that tile's cheapest separating axis is sideways,
+    // the landing is shoved ALONG the floor from a single corner, and the
+    // square leaves spinning. Phase 4 measured the identical failure between
+    // two plain tiles at 8.07 rad/s.
+    const map = padFloor();
+    const b = body(10 * TILE + 9, FLOOR_TOP - 72);
+    let worstSpin = 0;
+    let worstDrift = 0;
+    for (let i = 0; i < 120; i++) {
+      stepBody(b, map, STEP, DOWN);
+      worstSpin = Math.max(worstSpin, Math.abs(b.angVel));
+      worstDrift = Math.max(worstDrift, Math.abs(b.x - (10 * TILE + 9)));
+    }
+    expect(worstSpin).toBe(0);
+    expect(worstDrift).toBe(0); // not shoved sideways either
+    expect(b.y + PLAYER_SIZE / 2).toBeCloseTo(FLOOR_TOP + CONTACT_SLOP, 6);
+  });
+
+  it('running over a pad set into a floor produces no spin, ever', () => {
+    // This is the assertion the phase exists to protect. A pad is collidable,
+    // so its neighbours' faces toward it must be masked as interior — exactly
+    // as two plain floor tiles mask each other. Miss that and the pad's own
+    // cheapest separating axis is sideways: the landing gets shoved ALONG the
+    // floor and answers with several rad/s of spin conjured out of a seam.
+    // Phase 4 measured the identical failure on plain tiles at 8.07 rad/s.
+    const map = padFloor();
+    const b = settledOnFloor(map);
+    expect(b.angVel).toBe(0);
+
+    let worstSpin = 0;
+    let worstSink = 0;
+    for (let i = 0; i < 60; i++) {
+      b.vx = RUN_SPEED; // the controller holds it; the tangent must be untouched
+      stepBody(b, map, STEP, DOWN);
+      worstSpin = Math.max(worstSpin, Math.abs(b.angVel));
+      worstSink = Math.max(worstSink, b.y + PLAYER_SIZE / 2 - FLOOR_TOP);
+    }
+    // Crossed the pad and kept going.
+    expect(b.x).toBeGreaterThan(12 * TILE);
+    expect(worstSpin).toBeLessThan(1e-9);
+    expect(b.angle).toBe(0);
+    // And it stayed on top of the pad rather than dipping into it: the pad is
+    // floor, not a hole in the floor.
+    expect(worstSink).toBeLessThan(1);
+  });
+
+  it('the seam is masked in both directions — the same run leftward is as clean', () => {
+    const map = padFloor();
+    const b = settledOnFloor(map, 15);
+    for (let i = 0; i < 60; i++) {
+      b.vx = -RUN_SPEED;
+      stepBody(b, map, STEP, DOWN);
+      expect(Math.abs(b.angVel)).toBeLessThan(1e-9);
+    }
+    expect(b.x + PLAYER_SIZE / 2).toBeLessThan(10 * TILE); // fully past the pad
+  });
+
+  it('a free-standing pad stops a falling body like any other tile', () => {
+    const map = mapFrom(['....', '....', '....', '.^..']);
+    const b = body(TILE + TILE / 2, TILE / 2, 0, 0);
+    for (let i = 0; i < 120; i++) {
+      stepBody(b, map, STEP, DOWN);
+    }
+    expect(b.y + PLAYER_SIZE / 2).toBeCloseTo(3 * TILE, 1);
+    expect(b.vy).toBe(0);
+  });
+
+  it('all four pad kinds block; only Empty does not', () => {
+    for (const ch of ['^', 'v', '<', '>', '#']) {
+      const map = mapFrom(['....', '....', `.${ch}..`]);
+      const b = body(TILE + TILE / 2, TILE / 2);
+      for (let i = 0; i < 60; i++) {
+        stepBody(b, map, STEP, DOWN);
+      }
+      expect(b.y + PLAYER_SIZE / 2).toBeCloseTo(2 * TILE, 1);
+    }
+    const open = mapFrom(['....', '....', '....']);
+    const b = body(TILE + TILE / 2, TILE / 2);
+    for (let i = 0; i < 60; i++) {
+      stepBody(b, open, STEP, DOWN);
+    }
+    expect(b.y).toBeGreaterThan(3 * TILE); // fell straight out of the world
+  });
+});
+
+describe('contacts carry tile identity (phase 5, decision 2)', () => {
+  /** The contact whose normal opposes gravity, i.e. the one you landed on. */
+  function groundContact(res: ReturnType<typeof stepBody>) {
+    for (let i = 0; i < res.contactCount; i++) {
+      if (res.contacts[i].ny < -0.7) {
+        return res.contacts[i];
+      }
+    }
+    return null;
+  }
+
+  function dropOnto(rows: string[], cx: number): { pad: Tile; onSolid: boolean } {
+    const map = mapFrom(rows);
+    const b = body(cx, TILE / 2);
+    let seen = { pad: Tile.Empty, onSolid: false };
+    for (let i = 0; i < 90; i++) {
+      const res = stepBody(b, map, STEP, DOWN);
+      const c = groundContact(res);
+      if (c) {
+        seen = { pad: c.pad, onSolid: c.onSolid };
+        break;
+      }
+    }
+    return seen;
+  }
+
+  it('landing on plain solid reports onSolid and no pad', () => {
+    expect(dropOnto(['....', '....', '####'], TILE + TILE / 2)).toEqual({
+      pad: Tile.Empty,
+      onSolid: true,
+    });
+  });
+
+  it('landing on a pad reports the pad and NOT onSolid — pads must not recharge', () => {
+    // StepResult.grounded is true either way; that is exactly why one bit is
+    // not enough and the contact has to carry which tile produced it.
+    expect(dropOnto(['....', '....', '.^..'], TILE + TILE / 2)).toEqual({
+      pad: Tile.PadUp,
+      onSolid: false,
+    });
+    expect(dropOnto(['....', '....', '.>..'], TILE + TILE / 2)).toEqual({
+      pad: Tile.PadRight,
+      onSolid: false,
+    });
+  });
+
+  it('landing across a pad/floor seam reports BOTH — it launches and recharges', () => {
+    // Straddling the boundary between column 1 (solid) and column 2 (pad).
+    expect(dropOnto(['.....', '.....', '.#^##'], 2 * TILE)).toEqual({
+      pad: Tile.PadUp,
+      onSolid: true,
+    });
+  });
+
+  it('a contact away from any pad keeps pad Empty even while a pad is nearby', () => {
+    expect(dropOnto(['......', '......', '###^##'], 1 * TILE + TILE / 2)).toEqual({
+      pad: Tile.Empty,
+      onSolid: true,
+    });
   });
 });

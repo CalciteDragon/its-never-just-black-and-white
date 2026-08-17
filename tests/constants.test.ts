@@ -13,11 +13,17 @@ import {
   CLIP_TOL,
   CONTACT_SLOP,
   CONTACT_TOL,
+  CORE_OUTLINE_WIDTH,
+  DEATH_FADE_IN,
+  DEATH_FADE_OUT,
+  FLIP_SPIN_KICK,
   GRAVITY_FALL,
+  GRAVITY_RISE,
   GROUND_NORMAL_DOT,
   IMPACT_SPEED_MIN,
   JUMP_SPIN_BASE,
   JUMP_SPIN_PER_SPEED,
+  JUMP_VELOCITY,
   LOOKAHEAD_MAX,
   LOOKAHEAD_RATE,
   LOOKAHEAD_TIME,
@@ -25,6 +31,8 @@ import {
   MAX_CONTACT_ITERS,
   MAX_FALL_SPEED,
   MAX_SUBSTEP,
+  PAD_IMPULSE,
+  PAD_SPIN_MAX,
   PLAYER_CORE_INSET,
   PLAYER_INERTIA,
   PLAYER_SIZE,
@@ -246,5 +254,77 @@ describe('solver constants', () => {
     const travel = Math.hypot(RUN_SPEED * STEP, MAX_FALL_SPEED * STEP);
     expect(Math.ceil(travel / MAX_SUBSTEP)).toBe(2);
     expect(travel / 2).toBeLessThan(TILE / 2);
+  });
+});
+
+describe('the jump pad (phase 5)', () => {
+  it('an up-pad out-climbs and out-flies the plain jump, by the design margins', () => {
+    const padPeak = (PAD_IMPULSE * PAD_IMPULSE) / (2 * GRAVITY_RISE);
+    const jumpPeak = (JUMP_VELOCITY * JUMP_VELOCITY) / (2 * GRAVITY_RISE);
+    expect(padPeak).toBeCloseTo(152.8, 1);
+    expect(padPeak / TILE).toBeCloseTo(4.78, 2);
+    expect(jumpPeak / TILE).toBeCloseTo(3.48, 2);
+
+    // Airtime is rise + fall, and the fall is 1.6× heavier so it is shorter.
+    const rise = PAD_IMPULSE / GRAVITY_RISE;
+    const fall = Math.sqrt((2 * padPeak) / GRAVITY_FALL);
+    expect(rise).toBeCloseTo(0.373, 3);
+    expect(fall).toBeCloseTo(0.295, 3);
+    expect(rise + fall).toBeCloseTo(0.667, 3);
+    expect((rise + fall) / STEP).toBeCloseTo(40.0, 1);
+
+    // Five tiles is the smallest gap the plain jump cannot answer, which is
+    // what the example stage's pad section is sized against.
+    const padReach = (rise + fall) * RUN_SPEED;
+    const jumpReach = (JUMP_VELOCITY / GRAVITY_RISE + Math.sqrt((2 * jumpPeak) / GRAVITY_FALL)) * RUN_SPEED;
+    expect(padReach / TILE).toBeCloseTo(5.34, 2);
+    expect(jumpReach / TILE).toBeCloseTo(4.56, 2);
+    expect(jumpReach).toBeLessThan(5 * TILE);
+    expect(padReach).toBeGreaterThan(5 * TILE);
+  });
+
+  it('a down-pad along gravity is a slam, not a launch — terminal velocity is terminal', () => {
+    // Pointing WITH gravity the directional clamp catches it on the next step;
+    // pointing against it, the full impulse survives. Not a bug to fix.
+    expect(MAX_FALL_SPEED).toBeLessThan(PAD_IMPULSE);
+    expect(MAX_FALL_SPEED / PAD_IMPULSE).toBeCloseTo(0.937, 3);
+  });
+
+  it('PAD_SPIN_MAX exists because the physical impulse form saturates', () => {
+    // Reusing the solver's torque with j = PAD_IMPULSE at a full corner arm.
+    // 73.8, not the brief's 73.7 — that number was taken against the rounded
+    // 66.7 rather than PLAYER_INERTIA's exact 400/6. Same conclusion.
+    const physical = (SPIN_TRANSFER * PAD_IMPULSE * (PLAYER_SIZE / 2)) / PLAYER_INERTIA;
+    expect(physical).toBeCloseTo(73.8, 1);
+    expect(physical).toBeGreaterThan(5 * MAX_ANG_SPEED);
+    // Anything past ~2 px off centre would clamp, so every hit would look the
+    // same. PAD_SPIN_MAX keeps the whole arm range distinguishable instead.
+    expect((physical * 2) / (PLAYER_SIZE / 2)).toBeGreaterThan(MAX_ANG_SPEED);
+    expect(PAD_SPIN_MAX).toBeLessThan(MAX_ANG_SPEED);
+
+    // A full-corner pad hit turns the square ~268° over its own airtime —
+    // three quarters of a turn, against 178° for a full-speed jump.
+    const airtime = PAD_IMPULSE / GRAVITY_RISE + Math.sqrt(PAD_IMPULSE ** 2 / GRAVITY_RISE / GRAVITY_FALL);
+    const turn = ((PAD_SPIN_MAX / ANG_DAMP_AIR) * (1 - Math.exp(-ANG_DAMP_AIR * airtime)) * 180) / Math.PI;
+    expect(turn).toBeCloseTo(268, 0);
+  });
+
+  it("the flip's kick is a legible tilt across a ceiling crossing, not a tumble", () => {
+    // 0.3 s is about what a ceiling crossing takes; the flip's drama is the
+    // world inverting, not the square spinning.
+    const cross = 0.3;
+    const turn =
+      ((FLIP_SPIN_KICK / ANG_DAMP_AIR) * (1 - Math.exp(-ANG_DAMP_AIR * cross)) * 180) / Math.PI;
+    expect(turn).toBeCloseTo(49, 0);
+  });
+
+  it('the charge tell and the fades are visible without being slow', () => {
+    // The core is 10 px square; a 1 px outline is not readable at speed.
+    expect(PLAYER_SIZE - 2 * PLAYER_CORE_INSET).toBe(10);
+    expect(CORE_OUTLINE_WIDTH).toBeGreaterThan(1);
+    expect(CORE_OUTLINE_WIDTH).toBeLessThan(PLAYER_SIZE / 2 - PLAYER_CORE_INSET);
+    // Death is punctuation, not punishment: the whole round trip is under 1 s.
+    expect(DEATH_FADE_OUT + DEATH_FADE_IN).toBeLessThan(1);
+    expect(DEATH_FADE_OUT).toBeGreaterThan(DEATH_FADE_IN);
   });
 });

@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { TILE } from '../src/constants';
-import { forEachRun, Tile, TileMap, toTile } from '../src/world/tiles';
+import {
+  PAD_TILES,
+  Tile,
+  TileMap,
+  charFromTile,
+  forEachRun,
+  isBlocking,
+  isPad,
+  padDirection,
+  tileFromChar,
+  toTile,
+} from '../src/world/tiles';
 
 interface Run {
   tx: number;
@@ -213,5 +224,67 @@ describe('forEachRun', () => {
     m.fillRect(3, 1, 4, 1, Tile.Solid); // tiles 3..6
     expect(collect(m, 0, 1, 6, 1)).toEqual([{ tx: 3, ty: 1, len: 4, tile: Tile.Solid }]);
     expect(collect(m, 6, 1, 9, 1)).toEqual([{ tx: 6, ty: 1, len: 1, tile: Tile.Solid }]);
+  });
+});
+
+describe('the blocking predicate (decision 1)', () => {
+  it('every tile but Empty is geometry the solver collides with', () => {
+    // Pads have an off-centre contact torque and draw as an ink slab, so they
+    // are tiles, not trigger volumes. Only Empty is not there.
+    expect(isBlocking(Tile.Empty)).toBe(false);
+    expect(isBlocking(Tile.Solid)).toBe(true);
+    for (const t of PAD_TILES) {
+      expect(isBlocking(t)).toBe(true);
+    }
+  });
+
+  it('isPad separates pads from plain solid, which is what the recharge reads', () => {
+    expect(isPad(Tile.Empty)).toBe(false);
+    expect(isPad(Tile.Solid)).toBe(false);
+    for (const t of PAD_TILES) {
+      expect(isPad(t)).toBe(true);
+    }
+  });
+});
+
+describe('pad directions', () => {
+  it('names the four facings as unit vectors in canvas orientation', () => {
+    expect(padDirection(Tile.PadUp)).toEqual({ dx: 0, dy: -1 });
+    expect(padDirection(Tile.PadDown)).toEqual({ dx: 0, dy: 1 });
+    expect(padDirection(Tile.PadLeft)).toEqual({ dx: -1, dy: 0 });
+    expect(padDirection(Tile.PadRight)).toEqual({ dx: 1, dy: 0 });
+  });
+
+  it('is null for anything that is not a pad', () => {
+    expect(padDirection(Tile.Empty)).toBeNull();
+    expect(padDirection(Tile.Solid)).toBeNull();
+  });
+
+  it('returns shared vectors, so reading one per contact allocates nothing', () => {
+    expect(padDirection(Tile.PadUp)).toBe(padDirection(Tile.PadUp));
+  });
+});
+
+describe('the char <-> tile mapping (GAME-DESIGN §8)', () => {
+  it('maps the six grid characters both ways', () => {
+    const pairs: readonly [string, Tile][] = [
+      ['.', Tile.Empty],
+      ['#', Tile.Solid],
+      ['^', Tile.PadUp],
+      ['v', Tile.PadDown],
+      ['<', Tile.PadLeft],
+      ['>', Tile.PadRight],
+    ];
+    for (const [ch, t] of pairs) {
+      expect(tileFromChar(ch)).toBe(t);
+      expect(charFromTile(t)).toBe(ch);
+    }
+  });
+
+  it('does not know S or G — those are level metadata on an empty cell', () => {
+    expect(tileFromChar('S')).toBeNull();
+    expect(tileFromChar('G')).toBeNull();
+    expect(tileFromChar('x')).toBeNull();
+    expect(tileFromChar('')).toBeNull();
   });
 });

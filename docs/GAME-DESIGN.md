@@ -93,6 +93,14 @@ Pressing `Space`:
 
 One flip per airtime is therefore the hard rule, and level design is built around it: every gap is either a jump, a flip, or a jump-then-flip.
 
+> *(Amended in phase 5 — three consequences of the charge that the list above leaves open.)*
+>
+> **The palette is downstream of the charge check.** `Player.update` decides whether the flip fired and returns `PlayerEvents { flipped, died }`; `PlayScene` is what turns `flipped` into `palette.flip()`. A refused flip that still inverted every colour in the world would be the most confusing bug this game could ship, because the palette is the only readout of gravity there is. It also keeps the palette singleton off the player's logic path, so a headless test cannot recolour the world by stepping a body.
+>
+> **A refused flip changes nothing at all.** Not merely "does not invert" — `gravitySign`, `vy` and `angVel` all come through untouched, because the failure mode that matters is a *partly* applied flip.
+>
+> **There is no flip buffer, and that is deliberate.** `JUMP_BUFFER` exists because a jump pressed just before landing is unambiguous: you want to leave the ground the instant you touch it. A *flip* buffer would mean "flip as soon as I can", and the moment the flip becomes possible is the moment you land — so it would fire you off the floor you just fought to reach. The cost is one frame of strictness: the flip is consumed before the physics step and the recharge is read from its result, so a flip pressed on the exact landing frame is refused and has to be pressed again 16.7 ms later.
+
 ### Jumping and rotation
 
 Jump applies `JUMP_VELOCITY` against gravity **and** an angular impulse — `JUMP_SPIN_BASE` plus a term proportional to horizontal speed, signed by travel direction so the square appears to roll forward. Accounting for air damping, a standing jump turns the square ≈ 73° and a full-speed jump ≈ 178°, so a fast jump lands on the opposite face.
@@ -123,6 +131,13 @@ A tile that applies a fixed impulse in its facing direction (`up`, `down`, `left
 - Emit a continuous animated particle chevron in their direction (the pad's idle state), plus a burst on trigger.
 - Do **not** recharge the flip. Only ground contact does. A pad chain is a real commitment.
 - Impart angular velocity proportional to how off-centre the contact was — hitting a pad with a corner sends you spinning.
+
+> *(Amended in phase 5.)* **A pad is a tile, not a trigger volume.** The off-centre torque above needs a real contact *point*, and §2 draws a pad as an `ink` slab, so the solver collides with pads exactly as it does with solid. Two consequences:
+>
+> - "Fires on contact, not on contact with its facing side" survives, because a pad set into geometry has its buried faces masked as interior and the case mostly cannot arise. Where it can — a free-standing slab — the simple rule is the readable one.
+> - Because landing on a pad is a ground-*normal* contact, "does not recharge" cannot be expressed through `grounded`. Contacts carry tile identity instead; see [PHYSICS.md](PHYSICS.md) § Grounded. A body straddling a pad and the floor beside it both launches and recharges, which is the case that forces two bits rather than one.
+>
+> The spin needs its own scale (`PAD_SPIN_MAX`) because the physical impulse form saturates at five times `MAX_ANG_SPEED`, and the arm is measured from the **body's** centre — see PHYSICS.md § Game feel for both, and for why the controller's horizontal clamp had to become one-sided before sideways pads could exist at all.
 
 ### Hazards & death
 
@@ -206,6 +221,19 @@ Added in phase 4. These are not feel knobs — each one is the answer to a speci
 | `BOUNCE_FREQ` | 9.0 rad/s | bounce frequency at full speed |
 | `PAD_IMPULSE` | 820 px/s | jump pad launch velocity |
 | `DEATH_FADE_OUT` / `DEATH_FADE_IN` | 0.35 / 0.25 s | respawn timing |
+| `PAD_SPIN_MAX` | 8.0 rad/s | spin at a full-corner pad contact, scaled by the arm and clamped (added in phase 5; the physical impulse form saturates — see PHYSICS.md § Game feel) |
+
+### Presentation
+
+Added in phase 5. Cosmetic, but real tuning numbers, so they live in `constants.ts` like everything else. The last three are **shell-scoped**: phase 7's `ResultsScene` takes `GOAL_HOLD` with it.
+
+| Constant | Value | Meaning |
+| --- | --- | --- |
+| `CORE_OUTLINE_WIDTH` | 2 px | stroke of the paper core when the flip is spent. The core is 10 px square, so a 1 px outline is unreadable at speed; at 2 the hollow reads as a 64 px window in an 80 px ring |
+| `PAD_CHEVRON_LEN` / `PAD_CHEVRON_WIDTH` | 14 / 5 px | the two `paper` bars drawn at ±135° from a pad's facing. The arms sit at 45°, so a 3 px bar antialiases almost entirely into mid-grey and reads as a smudge rather than an arrow |
+| `GOAL_OUTLINE_WIDTH` | 2 px | stroke of the goal's pulsing ink outline |
+| `GOAL_PULSE_AMP` / `GOAL_PULSE_FREQ` | 0.12 / 3.0 rad/s | scale pulse of that outline |
+| `GOAL_HOLD` | 1.2 s | how long the completion readout holds before the level advances |
 
 ### Camera
 
@@ -267,7 +295,15 @@ Bounds behaviour: out-of-bounds reads are **solid** to the left and right, **emp
 
 ### The example stage
 
-`01-first-steps` ships with phase 5 and exercises every feature in one screen-and-a-bit: a flat run to build speed, a 3-tile gap (plain jump), a ceiling section that requires a flip to cross, an up-pad, a tight one-tile corridor that only clears if you're spinning through it cleanly, and a goal placed so the final approach is a flip landing on the ceiling.
+`01-first-steps` ships with phase 5 and exercises every feature: a flat run to build speed, a 3-tile gap (plain jump), a ceiling section that requires a flip to cross, an up-pad, a one-tile corridor, and a goal placed so the final approach is a flip landing on the ceiling.
+
+> *(Amended in phase 5, from the grid as built.)* Three numbers here did not survive contact with the derived ones.
+>
+> **It is 60 × 20 tiles, not "a screen and a bit".** Two screens wide. The beats are sized from the tuning constants — a 3-tile gap needs 4.56 tiles of clearance behind it, the chasm has to be 6 so a jump cannot cheat it, the pad's plateau needs 3 tiles of run-up and 4 of landing — and they do not fit in 48.
+>
+> **The pad section is a 4-tile rise, not a 5-tile one.** An up-pad peaks at 152.8 px = 4.78 tiles, so it cannot clear a 5-tile step; 4 is the largest rise it answers, and the plain jump's 3.48 tiles cannot. (5 tiles remains the smallest *gap* that requires a pad, which is the number the pad's 5.34-tile horizontal reach is measured against.)
+>
+> **A one-tile corridor entered on the ground always fits, at any angle.** The worst case is 45°, where the vertical extent is the 28.3 px diagonal and 3.7 px of clearance remain — so the corridor scrapes but can never wedge a grounded body. Its tension is real and its danger is not; a corridor that genuinely tests you has to be entered *airborne*, at the end of a launch rather than after a landing. This one is placed after the pad's landing, so it teaches the shape rather than punishing it — appropriate for the first level, and a note for later ones.
 
 ## 9. Audio
 
@@ -304,17 +340,17 @@ Signatures are binding; phase briefs fill in the detail.
 - **`engine/rng.ts`** — unchanged `Rng` (mulberry32). Now serving particles, editor jitter, and test determinism rather than level generation. `hashStringToSeed`, `mixSeeds` stay; `dailySeed` / `dailyDateString` are deleted.
 - **`engine/input.ts`** — `class Input` as before, minus the two-player split. Actions: `left right up down jump flip restart confirm back pause mute fullscreen`. `onKey` stays pure.
 - **`engine/font.ts`** — unchanged 5×7 bitmap font.
-- **`engine/palette.ts`** *(new)* — `class Palette { phase: 0 | 1; flip(): void; paper: string; ink: string; accent: string }`. Pure. The single source of every colour in the game.
+- **`engine/palette.ts`** *(new)* — `class Palette { phase: 0 | 1; flip(): void; paper: string; ink: string; accent: string }`, plus `paperRgba(a)` / `accentRgba(a)` and `inkRgba(a, phase?)`. Pure. The single source of every colour in the game. *(Phase 5 adds `inkRgba`, whose optional `phase` exists so the death fade can be sampled once and held: the palette resets to phase A at the fade's peak, and under a live token the screen would jump from white to black at exactly the covered moment.)*
 - **`engine/renderer.ts`** — 960×540 offscreen buffer, antialiased, integer-scaled present. Adds `applyPost(speedNorm)` for vignette + chromatic aberration, and world/UI space draws.
 - **`engine/particles.ts`** — pooled system, reworked for accent-coloured emitters: `spawnDust`, `spawnBurst`, `spawnStream` (jump pads), `update(dt)`, `render(r)`.
 - **`engine/audio.ts`** — `class AudioSys { sfx(name); setIntensity(speedNorm); setMuted(b) }` with the delay send and the layered music scheduler.
 - **`engine/save.ts`** — `SaveStore` with injectable storage, `bw.` keys: `bw.progress`, `bw.best.<levelId>`, `bw.muted`, `bw.editor.draft`.
 - **`world/obb.ts`** *(new, pure)* — `vertices(box, out)`, `projectRadius(box, ax, ay)`, `tileRadius(tile, ax, ay)`, `deepestVertex(box, nx, ny, out)`, `satOverlap(box, tile, out, interiorFaces): boolean`, `contactCandidates(box, tile, nx, ny, tileAxis, out): number`, and the `FACE_*` flags with `faceBlocked`. No tilemap knowledge, fully unit-tested. *(Amended in phase 4: `satOverlap` writes into a caller-supplied result and returns a boolean rather than allocating `{ hit, normal, depth } | null` — the doc's shape was redundant with itself, and this keeps the hot path allocation-free, consistent with `forEachRun`. `projectOnto` is named for what it returns.)*
-- **`world/physics.ts`** — rewritten: `interface RigidBody { x, y, vx, vy, angle, angVel, size }` (centre origin), `stepBody(body, map, dt, opts): StepResult { grounded, landed, hitCeiling, contacts, contactCount }`, plus `createBody`, `rightAngleError` and `subStepCount`. Sub-stepped, SAT-resolved, impulse response. Node-safe. *(Amended in phase 4: `stepBody` owns gravity — it needs `opts.gravitySign` and the rise/fall split anyway — which deletes `applyGravity`, `moveBody` and `isSupported`; support stops being a positional query, because "the floor" is whichever surface opposes gravity this instant. `StepResult.contacts` is a **fixed-capacity buffer reused across calls**, valid only until the next `stepBody`, carrying point, normal and impulse per contact so phase 6's landing splash has somewhere to read impact strength.)*
-- **`world/level.ts`** *(new)* — `parseLevel(json): Level | LevelError`, `Level { id, name, w, h, tiles: Uint8Array, spawn, goal, pads }`, `serializeLevel(level): string`, `validateLevel(rows): string[]`.
-- **`world/tiles.ts`** — `enum Tile { Empty, Solid, PadUp, PadDown, PadLeft, PadRight }`, `class TileMap` with the seal-sides / open-vertically bounds rule.
+- **`world/physics.ts`** — rewritten: `interface RigidBody { x, y, vx, vy, angle, angVel, size }` (centre origin), `stepBody(body, map, dt, opts): StepResult { grounded, landed, hitCeiling, contacts, contactCount }`, plus `createBody`, `rightAngleError` and `subStepCount`. Sub-stepped, SAT-resolved, impulse response. Node-safe. *(Amended in phase 4: `stepBody` owns gravity — it needs `opts.gravitySign` and the rise/fall split anyway — which deletes `applyGravity`, `moveBody` and `isSupported`; support stops being a positional query, because "the floor" is whichever surface opposes gravity this instant. `StepResult.contacts` is a **fixed-capacity buffer reused across calls**, valid only until the next `stepBody`, carrying point, normal and impulse per contact so phase 6's landing splash has somewhere to read impact strength.)* *(Amended in phase 5: `Contact` also carries `pad: Tile` and `onSolid: boolean`, because pads became collidable and `grounded` can no longer answer "does this recharge the flip?" — see PHYSICS.md § Grounded.)*
+- **`world/level.ts`** *(new)* — `parseLevel(raw: unknown): { ok: true; level } | { ok: false; errors: string[] }`, `Level { id, name, map: TileMap, spawn, goal, pads }`, `serializeLevel(level): string`, `validateLevel(rows: unknown): string[]`. *(Amended in phase 5, twice. `Level` holds a **`TileMap`**, not a raw `Uint8Array`: every consumer downstream — the solver's broadphase, `forEachRun`, the phase 7 editor — already takes one, so an array would be re-wrapped at each use site with the stride and the OOB rule agreed independently in every one of them. And `parseLevel` returns a **discriminated** union rather than `Level | LevelError`, because an untagged union of two object types cannot be narrowed in strict TS without a hand-written guard, and the editor's validation panel wants the whole error list rather than the first thing wrong. It never throws.)*
+- **`world/tiles.ts`** — `enum Tile { Empty, Solid, PadUp, PadDown, PadLeft, PadRight }`, `class TileMap` with the seal-sides / open-vertically bounds rule. *(Phase 5 adds `isBlocking(t)`, `isPad(t)`, `padDirection(t)` and the `tileFromChar` / `charFromTile` mapping over §8's six grid characters. The char table lives beside the enum because the phase 7 editor's palette needs exactly this one; `S` and `G` stay `level.ts`'s business and the enum does not grow.)*
 - **`world/camera.ts`** — follow with lookahead, clamp horizontally to the level, screen bounce, no shake.
-- **`entities/player.ts`** — the controller: input → linear velocity, jump + spin, flip + charge, pad response, death detection. Owns no rendering beyond a small `render(r)`.
+- **`entities/player.ts`** — the controller: input → linear velocity, jump + spin, flip + charge, pad response, death detection. Owns no rendering beyond a small `render(r)`. *(Amended in phase 5: `update(dt, inputs, world)` **returns** a reused `PlayerEvents { flipped, died }`, so the scene — not the player — moves the palette. `spawnAt` is the whole reset, including `gravitySign` and the charge.)*
 - **`scenes/`** — `TitleScene`, `LevelSelectScene`, `PlayScene(level)`, `ResultsScene(stats)`, `EditorScene`.
 - **`editor/grid.ts`** *(new, pure)* — grid model, paint/erase/resize, undo stack, validation. Unit-tested in node.
 - **`game.ts`** — unchanged fixed-step loop and `Scene` interface. Still the most reusable thing in the repo.

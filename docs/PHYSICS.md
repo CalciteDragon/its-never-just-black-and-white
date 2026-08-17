@@ -174,6 +174,19 @@ The threshold exists because tiles are axis-aligned but the *box* isn't: a squar
 
 Because `up` is derived from `gravitySign`, landing on what was the ceiling is ground in every sense: it stops you, it recharges the flip, it triggers the landing particles and sound.
 
+*(Amended in phase 5.)* **Grounded and "recharges the flip" are different predicates.** Pads became collidable geometry in phase 5, so landing on one *is* a ground-normal contact — and GAME-DESIGN §5 is explicit that a pad does not recharge you. `StepResult.grounded` therefore cannot answer the recharge question, and each `Contact` carries two extra bits instead:
+
+| Field | Meaning |
+| --- | --- |
+| `pad: Tile` | the pad tile that produced this contact, `Tile.Empty` for none |
+| `onSolid: boolean` | whether any plain `Tile.Solid` pooled into it |
+
+Both are needed rather than one enum, because a body straddling a pad and the floor beside it must **launch** (the pad fired) *and* **recharge** (it genuinely touched ground). They are set on the manifold as tiles pool into it — `pad` from the first pad seen, `onSolid` from any plain solid — and accumulate across sub-steps in `recordContact`, since one normal can be re-resolved against a different tile each pass.
+
+The recharge is then `onSolid && n · up > GROUND_NORMAL_DOT`: the same threshold as `grounded`, so balancing on a corner still recharges you.
+
+Pads are blocking geometry to the broadphase in **both** places it asks — the collision test *and* the interior-face mask. Masking only the first rebuilds the tile-seam bug of § Interior faces at every pad in the game: the pad's neighbours would leave their faces toward it exposed, and landing across the seam finds a sideways cheapest-axis. Measured at **8.32 rad/s** with the mask still reading `=== Tile.Solid`, against the 8.07 the same failure produced between two plain tiles.
+
 ## Rotational damping and settling
 
 Three mutually exclusive cases per step. *(Amended in phase 4: keyed on **impact**, not on contact — see above. Keyed on contact, the middle row is permanently true for anything standing on the ground, so the spring would never run in the one place it exists to run.)*
@@ -266,7 +279,19 @@ The hard ceiling is `PLAYER_SIZE ≤ TILE/√2 = 22.6`. Above that, one-tile gap
 
 The player controller (`entities/player.ts`) layers the classics on top of the solver: coyote time (`COYOTE_TIME`), jump buffering (`JUMP_BUFFER`), and a one-shot jump cut (`JUMP_CUT_FACTOR`) for variable height. These matter *more* on a rigid body than on an AABB, because the visual is busier — the spin makes the exact frame of takeoff harder to read, and the grace windows absorb that.
 
-Jump pads override the relevant velocity component rather than adding to it, so launch height is predictable regardless of approach speed, and impart angular velocity proportional to contact offset from the pad's centre — clip a pad with a corner and you leave it spinning.
+Jump pads override the relevant velocity component rather than adding to it, so launch height is predictable regardless of approach speed, and impart angular velocity proportional to how off-centre the contact was — clip a pad with a corner and you leave it spinning.
+
+*(Amended in phase 5.)* Two details the sentence above got wrong, both derived rather than preferred:
+
+**The pad's spin needs its own scale.** Reusing the solver's torque with `j = PAD_IMPULSE` gives `Δω = SPIN_TRANSFER · 820 · (r×n) / PLAYER_INERTIA` = **73.8 rad/s** at a full corner — over five times `MAX_ANG_SPEED`, so anything more than ~2 px off centre clamps and every off-centre hit looks identical. So the pad uses `PAD_SPIN_MAX` = 8.0 rad/s at a full-corner arm, scaled linearly and clamped:
+
+```
+Δω = PAD_SPIN_MAX · clamp( (r × n) / (PLAYER_SIZE/2),  −1, +1 )
+```
+
+`r` is measured from the **body's** centre, not the pad's — it is a torque arm, not a measure of where the pad was hit. A flat landing anywhere on a pad is `r × n = 0` and produces no spin at all, which is what makes "clip it with a corner and you leave spinning" a distinction rather than a constant tumble. Sign, stated so it can be asserted: for an up-pad `n = (0, −1)`, so `r × n = −r_x` and a contact right of centre sends ω **negative** — counter-clockwise on screen, right side lifting.
+
+**The horizontal clamp is one-sided.** `PAD_IMPULSE` is 820 and `RUN_SPEED` is 256, so a controller that re-clamps `vx` to ±`RUN_SPEED` every frame a direction is held erases a sideways pad within one frame of firing — and holding *toward* the launch is what erases it. Suppressing control for a few frames instead is not available (hard rule 7). So input may never push `|vx|` **past** `RUN_SPEED`, but may not brake an existing overspeed either; pressing *against* one decelerates at the normal rate, so turning around at 820 px/s still works. Overspeed then bleeds off at `GROUND_FRICTION` whenever the body is grounded, held direction or not, and is preserved in the air: a pad is a launch, not a permanent speed upgrade, and the ground is where the controller governs speed. Below `RUN_SPEED` the branch is arithmetically identical to a symmetric clamp, which is why every phase 4 movement assertion survived it unchanged.
 
 ## Determinism
 

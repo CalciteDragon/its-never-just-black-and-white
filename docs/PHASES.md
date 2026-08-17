@@ -10,7 +10,7 @@ Design decisions are settled in [GAME-DESIGN.md](GAME-DESIGN.md) — phases impl
 | 2 | Demolition | ✅ done |
 | 3 | Renderer & post-processing | ✅ done |
 | 4 | Rigid-body physics | ✅ done |
-| 5 | Player, world & level format | ⬜ |
+| 5 | Player, world & level format | ✅ done |
 | 6 | Particles & audio | ⬜ |
 | 7 | Editor & shell | ⬜ |
 
@@ -335,7 +335,7 @@ All met. Tests 165 → 226, typecheck clean. The eight decisions held; the brief
 
 ---
 
-## Phase 5 — Player, world & level format ⬜
+## Phase 5 — Player, world & level format ✅
 
 Turn the simulation into a game. Phase 4 built a body that falls, spins and settles in a room with no entrance and no exit; this phase gives it a level to be in, a reason to cross it, and the two verbs — the flip and the pad — that the level design is built around.
 
@@ -447,6 +447,24 @@ Assertions worth naming:
 - **`R` and death share a respawn path but not a presentation.** The reset is the thing to keep in one place: gravity, palette, charge, timer, camera snap, particles, `speedNorm`. A reset that forgets one field is the classic source of "the second attempt plays differently from the first".
 
 **Exit:** the example stage is playable start to finish in the browser — run, jump, flip across the ceiling, take the pad, thread the corridor, land on the goal — with a working timer, best time persisted under `bw.best.01-first-steps`, and death and respawn that read as intended. `npm run typecheck` and `npm test` green; GAME-DESIGN §5/§6/§12 and PHYSICS.md § Grounded / § Game feel amended where this phase contradicted them.
+
+### As built
+
+All met. Tests 226 → 311, typecheck clean, the stage completes in **405 steps / 6.77 s** headlessly and in the browser at the same step count. The eight decisions all held. What the brief got wrong was arithmetic about its own level, and — for the third phase running — the assertion it named as the phase's headline.
+
+- **The named pad-seam assertion was watched failing, and this time it had teeth: 8.32 rad/s**, against the brief's prediction of "the same order as phase 4's 8.07". But only after the test was rewritten. The obvious version — *run over a pad set into a floor and assert no spin* — **passes against the broken predicate**, because a sliding body penetrates by half a pixel and the sideways axis is never the cheapest one. The failure needs a body *landing* across the seam, straddled so the floor tile (not the pad) is the one left with a sliver of horizontal overlap; then its unmasked face toward the pad wins and shoves the landing sideways off one corner. Phases 3, 4 and 5 have now each found a brief's headline assertion to be vacuous as written. **The rule is not "write the test the brief names" — it is "watch it fail, and if it does not, the test is wrong before the code is."**
+- **The brief's example stage does not exist, because two of its numbers are impossible.** "An up-pad under a **5-tile rise**" cannot work: the pad peaks at 152.8 px = 4.78 tiles, so 4 is the largest rise it answers (and the plain jump's 3.48 cannot, which is the property that matters). And "roughly 48 × 20" does not hold the beats at their derived sizes — the chasm has to be 6 tiles so a jump cannot cheat it, and the pad needs 3 tiles of run-up plus 4 of landing. **60 × 20** as built. GAME-DESIGN §8 amended with both.
+- **A one-tile corridor entered on the ground cannot be tight, and the brief's worst case is unreachable.** The auto-right spring settles a grounded body in ~0.35 s ≈ 3 tiles, and the pad's landing needs at least that much runway to be legible, so the body is always square by the corridor mouth: measured **12.0 px of clearance**, and moving the corridor two tiles closer bought 0.55 px. Driving it in deliberately hostile — entering at `MAX_ANG_SPEED` backwards and tilted — still gives 11.45 px and zero stalled frames. The 3.7 px figure is real but only at 45°, where a grounded body scrapes and passes. **The corridor's danger is only available to a body arriving airborne**, which is a note for later levels rather than a fix for this one.
+- **The timer was charging the winning frame's `dt` after recording the result**, so the persisted best time was one step behind the clock the player watched — a 16.7 ms lie on every entry. Caught by the best-time test, not by the playthrough. The timer now charges before the step.
+- **Every beat of the playthrough script is load-bearing, and that was verified by deleting them one at a time.** Removing the jump dies in the 3-tile gap; removing the first flip dies in the chasm; removing the second flies out of the *top* off the end of the ceiling slab; removing the last runs to the far wall and never reaches the goal. A completion test that passes with a beat removed is testing the level's shape, not the player's.
+- **Two constants got their final values from pixels, exactly as `PLAYER_CORE_INSET` did in phase 3.** `PAD_CHEVRON_WIDTH` went 3 → 5: the arms sit at 45°, so a 3 px bar antialiased into mid-grey — 70 dark pixels in the tile but only **2** pure ones. At 5 it is 129 dark and 30 pure, against 0 for a plain solid tile, and the whole thing inverts exactly on a flip (131/893 → 893/131). `CORE_OUTLINE_WIDTH` = 2 holds: the spent core measures an 80 px ring around a 64 px window against the charged core's 100 px fill, and the gap survives rotation.
+- **The death fade lands on the respawn background for free.** Dying in phase B fades to phase-B `ink`, which *is* phase-A `paper` — the tokens swap, so the held colour and the world revealed under it are the same hex. Measured across the fade: mean luminance 232.9 → 10, the palette resets to phase A at exactly the frame the screen reads 10, and the reveal ramps back out. The phase reset at the peak is not merely hidden, it is a no-op on screen.
+
+- **A pad could fire twice in one step, and only a count could see it.** Found in review, not by any test written from the brief. `StepResult.contacts` is keyed by *normal*, and one tile can be resolved on two normals inside a single `stepBody` — a body clipping the corner of a free-standing slab at 800 px/s does exactly that. The velocity override is idempotent, so the launch looked right; the spin is not, and it took two full `PAD_SPIN_MAX` terms, two sounds and two dust bursts. The fix is one flag: at most one pad per step, first contact wins, which is deterministic because contact order is pinned. **The regression test had to count `sfx('pad')` calls, because the obvious assertion cannot work** — a bound on `angVel` of `2 · PAD_SPIN_MAX` = 16 sits *above* `MAX_ANG_SPEED` = 14, so the clamp swallows the whole second term and the test passes against the bug. Written the tight way it fails at 2 and passes at 1.
+
+Three things worth carrying to later phases. **`PlayScene`'s `index` defaults to 0**, so a level that is not in `LEVELS` — which is exactly what phase 7's editor playtest hands it — would advance into `LEVELS[1]` on completion instead of returning to the editor. Harmless today because there is one level and `nextLevel(0)` is null; phase 7 owns the fix, and the honest one is to make "part of the campaign" explicit rather than defaulting it. **A down-pad set into a floor is a trap**: its impulse drives the body back into the tile it is embedded in, so it re-fires every step and pins you. The same is true of any pad whose facing points into its own geometry. That is a level-authoring footgun rather than a code bug — §5 fires a pad on contact and being pressed into one is a legitimate consequence — so it is documented rather than special-cased, and the editor's validation in phase 7 is the right place to warn about it. And the brief's claim that `73.7` rad/s is the saturating physical pad torque is **73.8**: it was computed against the rounded 66.7 rather than `PLAYER_INERTIA`'s exact 400/6. Same conclusion, and `tests/constants.test.ts` now pins the exact one.
+
+`world/level.ts` was built by a subagent against a written contract and needed no correction; its 31 tests and the round-trip property came back clean on the first integration.
 
 ---
 

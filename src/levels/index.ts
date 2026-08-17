@@ -1,0 +1,30 @@
+/**
+ * The level set, in play order. One JSON file per level, imported directly —
+ * Vite handles JSON natively, so there is no loader and no new dependency.
+ *
+ * Parsing is EAGER and a failure THROWS with the whole error list. A level that
+ * fails validation is a build-time bug in a file that lives in this repo, and
+ * the alternative — skipping it, or handing the scene a half-built map — puts a
+ * blank screen in front of a player instead of a message in front of whoever
+ * broke the grid. `tests/level.test.ts` asserts every level here parses clean,
+ * so the throw is a backstop and not the first line of defence.
+ */
+
+import { parseLevel } from '../world/level';
+import type { Level } from '../world/level';
+import firstSteps from './01-first-steps.json';
+
+function load(raw: unknown): Level {
+  const res = parseLevel(raw);
+  if (!res.ok) {
+    throw new Error(`invalid level:\n  ${res.errors.join('\n  ')}`);
+  }
+  return res.level;
+}
+
+export const LEVELS: readonly Level[] = [load(firstSteps)];
+
+/** The level after `index`, or null at the end of the set. */
+export function nextLevel(index: number): Level | null {
+  return LEVELS[index + 1] ?? null;
+}

@@ -39,6 +39,7 @@ function hexToRgb(hex: string): readonly [number, number, number] {
 }
 
 const PAPER_RGB = PAPER.map(hexToRgb);
+const INK_RGB = INK.map(hexToRgb);
 const ACCENT_RGB = ACCENT.map(hexToRgb);
 
 function rgba(c: readonly [number, number, number], a: number): string {
@@ -83,6 +84,20 @@ export class Palette {
    */
   paperRgba(a: number): string {
     return rgba(PAPER_RGB[this.phase], a);
+  }
+
+  /**
+   * `ink` at a given alpha, for the death fade. Fading to `paper` is what the
+   * vignette already does, so a death that dimmed toward the background colour
+   * would read as a speed effect rather than as dying.
+   *
+   * `phase` is explicit because the fade has to be SAMPLED ONCE at the death
+   * instant and held: the palette resets to phase A at the fade's peak, and
+   * under a live token the screen would jump from white to black at exactly the
+   * covered moment. Under a held colour the reset is invisible.
+   */
+  inkRgba(a: number, phase: Phase = this.phase): string {
+    return rgba(INK_RGB[phase], a);
   }
 
   /** `accent` at a given alpha — the vignette's speed tint. */

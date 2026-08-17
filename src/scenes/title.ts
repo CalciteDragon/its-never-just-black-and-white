@@ -7,6 +7,7 @@ import { VIEW_H, VIEW_W } from '../constants';
 import { palette } from '../engine/palette';
 import type { Renderer } from '../engine/renderer';
 import type { Game, Scene } from '../game';
+import { LEVELS } from '../levels/index';
 import { PlayScene } from './play';
 
 export class TitleScene implements Scene {
@@ -20,7 +21,7 @@ export class TitleScene implements Scene {
     }
     if (input.pressed('confirm')) {
       game.audio.play('menuPick');
-      game.setScene(new PlayScene());
+      game.setScene(new PlayScene(LEVELS[0], 0));
     }
   }
 

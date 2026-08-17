@@ -19,6 +19,74 @@ export enum Tile {
   PadRight = 5,
 }
 
+/** The four pad tiles, in enum order. */
+export const PAD_TILES: readonly Tile[] = [Tile.PadUp, Tile.PadDown, Tile.PadLeft, Tile.PadRight];
+
+/**
+ * Is this tile geometry the solver collides with?
+ *
+ * Pads are, and that is the whole of decision 1: GAME-DESIGN §5 gives them an
+ * off-centre contact torque and §2 draws them as an `ink` slab, and both need a
+ * real contact point. A pad is a tile, not a trigger volume. The predicate has
+ * to reach the interior-face test in the broadphase as well as the collision
+ * test — masking only one of the two rebuilds phase 4's tile-seam bug at every
+ * pad in the game.
+ */
+export function isBlocking(t: Tile): boolean {
+  return t !== Tile.Empty;
+}
+
+/** Is this tile a jump pad? Separate from isBlocking: the flip's recharge reads it. */
+export function isPad(t: Tile): boolean {
+  return t >= Tile.PadUp;
+}
+
+/** A pad's facing, as a unit vector in canvas orientation (negative y is up). */
+export interface PadDir {
+  readonly dx: number;
+  readonly dy: number;
+}
+
+// Shared, so reading a direction per contact allocates nothing.
+const DIR_UP: PadDir = { dx: 0, dy: -1 };
+const DIR_DOWN: PadDir = { dx: 0, dy: 1 };
+const DIR_LEFT: PadDir = { dx: -1, dy: 0 };
+const DIR_RIGHT: PadDir = { dx: 1, dy: 0 };
+
+/** The pad's facing, or null if the tile is not a pad. */
+export function padDirection(t: Tile): PadDir | null {
+  switch (t) {
+    case Tile.PadUp:
+      return DIR_UP;
+    case Tile.PadDown:
+      return DIR_DOWN;
+    case Tile.PadLeft:
+      return DIR_LEFT;
+    case Tile.PadRight:
+      return DIR_RIGHT;
+    default:
+      return null;
+  }
+}
+
+/**
+ * The level format's grid characters (GAME-DESIGN §8), indexed by tile value.
+ * The table lives beside the enum because the phase 7 editor's palette needs
+ * exactly this one. `S` and `G` are NOT here: they are level metadata written
+ * onto an empty cell, and `level.ts` owns them — the enum does not grow.
+ */
+const TILE_CHARS = '.#^v<>';
+
+/** Grid character → tile, or null if the character is not one of the six. */
+export function tileFromChar(ch: string): Tile | null {
+  const i = TILE_CHARS.indexOf(ch);
+  return i < 0 || ch.length !== 1 ? null : (i as Tile);
+}
+
+export function charFromTile(t: Tile): string {
+  return TILE_CHARS[t];
+}
+
 /** px → tile coordinate. */
 export function toTile(px: number): number {
   return Math.floor(px / TILE);
