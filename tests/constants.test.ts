@@ -18,6 +18,14 @@ import {
   DEATH_FADE_IN,
   DEATH_FADE_OUT,
   DUST_COUNT,
+  EDITOR_DEFAULT_H,
+  EDITOR_DEFAULT_W,
+  EDITOR_GRID_ALPHA,
+  EDITOR_MAX_H,
+  EDITOR_MAX_W,
+  EDITOR_PAN_SPEED,
+  EDITOR_UNDO_MAX,
+  EDITOR_ZOOM_STEPS,
   FLIP_RING_COUNT,
   FLIP_SPIN_KICK,
   GRAVITY_FALL,
@@ -52,6 +60,7 @@ import {
   PAD_STREAM_INTERVAL,
   PAD_STREAM_LIFE,
   PAD_STREAM_SPEED,
+  PAUSE_DIM,
   PLAYER_CORE_INSET,
   PLAYER_INERTIA,
   PLAYER_SIZE,
@@ -431,5 +440,71 @@ describe('the jump pad (phase 5)', () => {
     // Death is punctuation, not punishment: the whole round trip is under 1 s.
     expect(DEATH_FADE_OUT + DEATH_FADE_IN).toBeLessThan(1);
     expect(DEATH_FADE_OUT).toBeGreaterThan(DEATH_FADE_IN);
+  });
+});
+
+describe('the editor block (phase 7)', () => {
+  it('half zoom is exactly one screen per sixty tiles', () => {
+    // Not one option among many. 60 x 32 x 1/2 = 960 = VIEW_W, and the example
+    // stage is 60 wide, so half zoom is precisely "one screen per sixty tiles".
+    expect(EDITOR_ZOOM_STEPS).toEqual([1, 0.5]);
+    expect(60 * TILE * EDITOR_ZOOM_STEPS[1]).toBe(VIEW_W);
+    // At 1x the same level is two screens wide, which is the problem zoom exists
+    // to answer -- and is why pan alone would not have been enough.
+    expect((60 * TILE * EDITOR_ZOOM_STEPS[0]) / VIEW_W).toBe(2);
+  });
+
+  it('both zoom steps are whole-pixel cells', () => {
+    // A fractional cell seams between adjacent cells at every non-integer
+    // scale, which is the exact problem the coordinate policy was written to
+    // avoid. Two steps, 32 px and 16 px, and nothing between them.
+    for (const z of EDITOR_ZOOM_STEPS) {
+      expect(Number.isInteger(TILE * z)).toBe(true);
+      expect(z).toBeGreaterThan(0);
+    }
+    expect(EDITOR_ZOOM_STEPS.length).toBe(2);
+  });
+
+  it('a default grid fits the frame at half zoom, and the cap deliberately does not', () => {
+    // The default is a level you can see all of while you learn the tool.
+    expect(EDITOR_DEFAULT_W * TILE * EDITOR_ZOOM_STEPS[1]).toBeLessThanOrEqual(VIEW_W);
+    expect(EDITOR_DEFAULT_H * TILE * EDITOR_ZOOM_STEPS[1]).toBeLessThanOrEqual(VIEW_H);
+    expect(EDITOR_DEFAULT_W).toBeLessThan(EDITOR_MAX_W);
+    expect(EDITOR_DEFAULT_H).toBeLessThan(EDITOR_MAX_H);
+    // The cap is not a memory argument: 200 tiles is 3.3 screens even at half
+    // zoom, and a level you cannot see a third of is one the tool has stopped
+    // helping with.
+    expect((EDITOR_MAX_W * TILE * EDITOR_ZOOM_STEPS[1]) / VIEW_W).toBeCloseTo(3.33, 2);
+  });
+
+  it('the undo stack is bounded, and its worst case is kilobytes not megabytes', () => {
+    // An unbounded stack is a leak nobody measures. A snapshot is one character
+    // per cell; the ceiling is EDITOR_UNDO_MAX of them at the largest grid.
+    expect(EDITOR_UNDO_MAX).toBe(64);
+    const typicalChars = 60 * 20 * EDITOR_UNDO_MAX;
+    const worstChars = EDITOR_MAX_W * EDITOR_MAX_H * EDITOR_UNDO_MAX;
+    expect((typicalChars * 2) / 1024).toBeCloseTo(150, 0); // ~154 KB at 2 bytes/char
+    expect((worstChars * 2) / (1024 * 1024)).toBeCloseTo(1.46, 1); // ~1.5 MB
+  });
+
+  it('the grid overlay and the pause dim are both legible, in opposite directions', () => {
+    // The grid is an aid, not a texture: it has to be visible over paper and
+    // invisible over a wall of ink.
+    expect(EDITOR_GRID_ALPHA).toBeGreaterThan(0);
+    expect(EDITOR_GRID_ALPHA).toBeLessThan(0.25);
+    // The pause veil has the opposite job -- it is `paper` flooding back in over
+    // the frame, and it must beat the strongest vignette the frame can already
+    // be wearing or a pause at speed would not read as one, while still leaving
+    // the frozen frame visible underneath.
+    expect(PAUSE_DIM).toBeGreaterThan(VIGNETTE_MAX);
+    expect(PAUSE_DIM).toBeLessThan(0.75);
+  });
+
+  it('the keyboard pan crosses a screen in a second and a half', () => {
+    // Faster than running, because navigating a level you are building is not
+    // the same act as playing it.
+    expect(EDITOR_PAN_SPEED).toBeGreaterThan(RUN_SPEED);
+    expect(VIEW_W / EDITOR_PAN_SPEED).toBeCloseTo(1.5, 2);
+    expect(EDITOR_PAN_SPEED / TILE).toBe(20); // 20 tiles/s at 1x
   });
 });

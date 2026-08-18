@@ -132,3 +132,61 @@ describe('SAVE_KEYS', () => {
     expect(SAVE_KEYS.best('01-first-steps')).toBe('bw.best.01-first-steps');
   });
 });
+
+/**
+ * `bw.progress` is the one key phase 2 defined and nothing had ever written.
+ * Its whole job is gating the level select, so both failure directions are
+ * player-visible: a corrupt read that locks someone out of their own game, and
+ * a non-monotone write that re-locks levels when you replay an early one.
+ */
+describe('SaveStore progress', () => {
+  it('reads 0 when the key has never been written', () => {
+    expect(new SaveStore(new FakeStorage()).getProgress()).toBe(0);
+  });
+
+  it('round-trips, and stores under bw.progress', () => {
+    const storage = new FakeStorage();
+    const store = new SaveStore(storage);
+    store.setProgress(3);
+    expect(store.getProgress()).toBe(3);
+    expect(storage.getItem(SAVE_KEYS.progress)).toBe('3');
+  });
+
+  it('NEVER MOVES BACKWARD', () => {
+    // Completing an early level again must not lock the later ones.
+    const store = new SaveStore(new FakeStorage());
+    store.setProgress(4);
+    store.setProgress(1);
+    expect(store.getProgress()).toBe(4);
+    store.setProgress(0);
+    expect(store.getProgress()).toBe(4);
+    store.setProgress(5);
+    expect(store.getProgress()).toBe(5);
+  });
+
+  it('treats every kind of corrupt value as 0 rather than as a lockout', () => {
+    const storage = new FakeStorage();
+    const store = new SaveStore(storage);
+    for (const junk of ['', 'garbage', 'NaN', '-2', '1e999', '{}', 'Infinity']) {
+      storage.setItem(SAVE_KEYS.progress, junk);
+      expect(store.getProgress(), junk).toBe(0);
+    }
+    // A float is floored rather than discarded -- it is still an ordinal.
+    storage.setItem(SAVE_KEYS.progress, '2.7');
+    expect(store.getProgress()).toBe(2);
+  });
+
+  it('ignores a nonsense write instead of persisting it', () => {
+    const store = new SaveStore(new FakeStorage());
+    store.setProgress(2);
+    store.setProgress(Number.NaN);
+    store.setProgress(Number.POSITIVE_INFINITY);
+    expect(store.getProgress()).toBe(2);
+  });
+
+  it('never throws when the storage itself throws', () => {
+    const store = new SaveStore(new ThrowingStorage());
+    expect(store.getProgress()).toBe(0);
+    expect(() => store.setProgress(3)).not.toThrow();
+  });
+});

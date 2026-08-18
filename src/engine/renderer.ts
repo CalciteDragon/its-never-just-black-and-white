@@ -45,6 +45,42 @@ export function computeScale(winW: number, winH: number): ScaleFit {
   };
 }
 
+/** A canvas point mapped back into view space, and whether it landed in frame. */
+export interface ViewPoint {
+  vx: number;
+  vy: number;
+  inFrame: boolean;
+}
+
+/**
+ * The exact inverse of `present`'s blit: canvas pixels back to the 960×540 view
+ * (PHASES phase 7, decision 2). `Input.attach` runs it on every pointer event,
+ * so it is the one and only place in the project where the letterbox arithmetic
+ * lives — and the one place it can be wrong.
+ *
+ * **Dropping the offset is a fifteen-tile error, not a sub-pixel one.** At a
+ * 1920×1000 window `computeScale` gives scale 1, offX 480, offY 230, so the
+ * naive `clientX / scale` lands 480 px right and 230 px down — 15 tiles across
+ * on a 32 px grid. That failure reads as "the editor feels off" rather than as
+ * an arithmetic bug, which is why the round-trip test picks window sizes that
+ * deliberately do not fit exactly.
+ *
+ * It reports `inFrame` rather than clamping. A press in the letterbox is not a
+ * press on the edge tile; clamping would smear a wall of tiles down the border,
+ * which is the visible version of the same mistake.
+ */
+export function screenToView(
+  canvasW: number,
+  canvasH: number,
+  clientX: number,
+  clientY: number,
+): ViewPoint {
+  const { scale, offX, offY } = computeScale(canvasW, canvasH);
+  const vx = (clientX - offX) / scale;
+  const vy = (clientY - offY) / scale;
+  return { vx, vy, inFrame: vx >= 0 && vx < VIEW_W && vy >= 0 && vy < VIEW_H };
+}
+
 // --- Post ramps (PHASES decision 7). Pure functions of speedNorm, so the
 // numbers are testable and applyPost is left with nothing but drawing. ---
 

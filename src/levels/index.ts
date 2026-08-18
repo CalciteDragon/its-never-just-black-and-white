@@ -13,6 +13,7 @@
 import { parseLevel } from '../world/level';
 import type { Level } from '../world/level';
 import firstSteps from './01-first-steps.json';
+import secondNature from './02-second-nature.json';
 
 function load(raw: unknown): Level {
   const res = parseLevel(raw);
@@ -22,7 +23,13 @@ function load(raw: unknown): Level {
   return res.level;
 }
 
-export const LEVELS: readonly Level[] = [load(firstSteps)];
+/**
+ * Play order. The editor's save writes `src/levels/<id>.json` and stops there —
+ * a middleware that rewrote this file to add an import would be codegen against
+ * a source file under version control, so the one-line edit is deliberate and
+ * the save's on-screen confirmation names it.
+ */
+export const LEVELS: readonly Level[] = [load(firstSteps), load(secondNature)];
 
 /** The level after `index`, or null at the end of the set. */
 export function nextLevel(index: number): Level | null {

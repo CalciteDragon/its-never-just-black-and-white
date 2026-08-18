@@ -1,14 +1,8 @@
 /**
- * The level lifecycle, driven headlessly. `PlayScene.update` touches only
- * `game.input`, `game.audio`, `game.save` and `game.setScene`, all of which
- * construct fine under node, and `render` is never called — so a ~20-line
- * `fakeGame()` cast through `unknown` is the entire harness.
- *
- * Presses go in as real `KeyboardEvent.code` strings through `Input.onKey`, so
- * the binding table is on the tested path too rather than being assumed.
+ * The level lifecycle, driven headlessly through `tests/harness.ts`.
  *
  * Extracting the lifecycle into a pure "session" module and testing that
- * instead was rejected: phase 7's editor playtest hands a level to the REAL
+ * instead was rejected: the editor's playtest hands a level to the REAL
  * PlayScene, and a second owner of the level lifecycle is exactly what it must
  * not find.
  */
@@ -24,115 +18,29 @@ import {
   STEP,
   TILE,
 } from '../src/constants';
-import { AudioSys } from '../src/engine/audio';
-import type { SfxName } from '../src/engine/audio';
-import { Input } from '../src/engine/input';
 import { palette } from '../src/engine/palette';
 import { MAX_PARTICLES } from '../src/engine/particles';
-import { SAVE_KEYS, SaveStore } from '../src/engine/save';
-import type { Game, Scene } from '../src/game';
+import { SAVE_KEYS } from '../src/engine/save';
+import type { Scene } from '../src/game';
 import { LEVELS } from '../src/levels/index';
 import { PlayScene, formatTime } from '../src/scenes/play';
+import type { PlayContext } from '../src/scenes/play';
+import { ResultsScene } from '../src/scenes/results';
 import { TitleScene } from '../src/scenes/title';
-import { parseLevel } from '../src/world/level';
 import type { Level } from '../src/world/level';
+import { fakeGame, step, tap, tinyLevel } from './harness';
+import type { Harness } from './harness';
 
-/**
- * The REAL AudioSys, given a factory that returns no context — so under node it
- * is a total no-op — with every call recorded on the way through. Driving the
- * real class matters: the bed's lifecycle and the intensity ducking are
- * assertions about what this scene calls, and a hand-written stub would let the
- * scene call something the class does not have.
- */
-class SpyAudio extends AudioSys {
-  readonly intensities: number[] = [];
-  readonly calls: string[] = [];
+const CAMPAIGN_0: PlayContext = { kind: 'campaign', index: 0 };
 
-  constructor() {
-    super(() => null);
-  }
-
-  override setIntensity(n: number): void {
-    this.intensities.push(n);
-    super.setIntensity(n);
-  }
-
-  override startMusic(): void {
-    this.calls.push('start');
-    super.startMusic();
-  }
-
-  override stopMusic(): void {
-    this.calls.push('stop');
-    super.stopMusic();
-  }
-
-  override play(name: SfxName): void {
-    this.calls.push(`sfx:${name}`);
-    super.play(name);
-  }
-}
-
-interface Harness {
-  game: Game;
-  input: Input;
-  save: SaveStore;
-  audio: SpyAudio;
-  /** Scenes handed to setScene, in order. Nothing is entered — just recorded. */
-  scenes: Scene[];
-}
-
-function fakeGame(): Harness {
-  const input = new Input();
-  const audio = new SpyAudio();
-  // Under node there is no localStorage, so SaveStore already falls back to an
-  // in-memory Map — a fresh one per instance, which is what isolation needs.
-  const save = new SaveStore();
-  const scenes: Scene[] = [];
-  const game = {
-    input,
-    audio,
-    save,
-    time: 0,
-    setScene(s: Scene): void {
-      scenes.push(s);
-    },
-    toggleMute(): void {
-      audio.muted = !audio.muted;
-    },
-  };
-  return { game: game as unknown as Game, input, save, audio, scenes };
-}
-
-/** One frame: update, then clear the edges exactly as Game.stepFrame does. */
-function step(h: Harness, scene: Scene, n = 1): void {
-  for (let i = 0; i < n; i++) {
-    scene.update(STEP, h.game);
-    h.input.update();
-  }
-}
-
-/** Press for exactly one frame, the way a human tap arrives. */
-function tap(h: Harness, scene: Scene, code: string): void {
-  h.input.onKey(code, true);
-  step(h, scene);
-  h.input.onKey(code, false);
-}
-
-function start(level: Level = LEVELS[0]): { h: Harness; scene: PlayScene } {
+function start(
+  level: Level = LEVELS[0],
+  ctx: PlayContext = CAMPAIGN_0,
+): { h: Harness; scene: PlayScene } {
   const h = fakeGame();
-  const scene = new PlayScene(level, 0);
+  const scene = new PlayScene(level, ctx);
   scene.enter(h.game);
   return { h, scene };
-}
-
-/** A tiny purpose-built stage: floor, a lethal pit, and a goal on the floor. */
-function tinyLevel(rows: string[], id = 'test-stage'): Level {
-  const res = parseLevel({ id, name: 'TEST STAGE', rows });
-  if (!res.ok) {
-    throw new Error(res.errors.join('; '));
-  }
-  return res.level;
 }
 
 beforeEach(() => {
@@ -166,12 +74,7 @@ describe('gravity and palette stay in lockstep', () => {
 
   it('holds across a scripted sequence of flips, a death, and a restart', () => {
     const { h, scene } = start(
-      tinyLevel([
-        '..........',
-        '..S.....G.',
-        '####..####',
-        '####..####',
-      ]),
+      tinyLevel(['..........', '..S.....G.', '####..####', '####..####']),
     );
     expect(inSync(scene)).toBe(true);
 
@@ -266,13 +169,6 @@ describe('death, respawn and restart', () => {
     expect(scene.status.x).toBeCloseTo(2 * TILE + TILE / 2, 6);
     expect(scene.status.timeSec).toBe(0);
   });
-
-  it('Esc leaves for the title', () => {
-    const { h, scene } = start(tinyLevel(PIT));
-    tap(h, scene, 'Escape');
-    expect(h.scenes).toHaveLength(1);
-    expect(h.scenes[0]).toBeInstanceOf(TitleScene);
-  });
 });
 
 describe('the goal, the timer and the best time', () => {
@@ -314,14 +210,14 @@ describe('the goal, the timer and the best time', () => {
     expect(best?.dateIso).toMatch(/^\d{4}-\d{2}-\d{2}T/);
 
     // A slower second run must not overwrite it. Same store, fresh scene.
-    const slower = new PlayScene(level, 0);
+    const slower = new PlayScene(level, CAMPAIGN_0);
     slower.enter(h.game);
     step(h, slower, 90); // dawdle before setting off
     expect(runToGoal(h, slower)).toBe(true);
     expect(h.save.getBest(key)?.timeMs).toBe(best?.timeMs);
   });
 
-  it('holds the readout, then advances — to the title when the set runs out', () => {
+  it('holds the frozen frame, then hands the run to the results screen', () => {
     const { h, scene } = start(tinyLevel(WALK_TO_GOAL));
     expect(runToGoal(h, scene)).toBe(true);
     step(h, scene, Math.ceil((GOAL_HOLD + DEATH_FADE_OUT) / STEP) - 2);
@@ -332,7 +228,241 @@ describe('the goal, the timer and the best time', () => {
       step(h, scene);
     }
     expect(h.scenes).toHaveLength(1);
+    expect(h.scenes[0]).toBeInstanceOf(ResultsScene);
+  });
+});
+
+/**
+ * PHASES phase 7, decision 5. Phase 5's *As built* left `index` defaulting to
+ * 0, so a level not in `LEVELS` — exactly what the editor's playtest hands it —
+ * advanced into `LEVELS[1]` on completion. The honest fix is not a better
+ * default; it is to stop defaulting, and to let the union decide three things
+ * at once: where a win goes, whether progress advances, and whether a best time
+ * is written at all.
+ */
+describe('the play context', () => {
+  const WALK_TO_GOAL = ['..........', '..S.G.....', '##########'];
+
+  function runToGoal(h: Harness, scene: PlayScene): boolean {
+    h.input.onKey('KeyD', true);
+    let won = false;
+    for (let i = 0; i < 600 && !won; i++) {
+      step(h, scene);
+      won = scene.status.state === 'won';
+    }
+    h.input.onKey('KeyD', false);
+    return won;
+  }
+
+  it('A PLAYTEST WRITES NOTHING — not a best time, not progress', () => {
+    // The bug under the bug. A draft carrying the id of a shipped level would
+    // otherwise overwrite bw.best.01-first-steps with a time set on a grid that
+    // exists only in someone's browser.
+    const level = tinyLevel(WALK_TO_GOAL, '01-first-steps');
+    const back: Scene = { update: () => undefined, render: () => undefined };
+    const h = fakeGame();
+    const scene = new PlayScene(level, { kind: 'playtest', back });
+    scene.enter(h.game);
+    expect(runToGoal(h, scene)).toBe(true);
+
+    expect(h.save.getBest(SAVE_KEYS.best('01-first-steps'))).toBeNull();
+    expect(h.storage.map.has(SAVE_KEYS.best('01-first-steps'))).toBe(false);
+    expect(h.storage.map.has(SAVE_KEYS.progress)).toBe(false);
+    expect(h.save.getProgress()).toBe(0);
+  });
+
+  it('and the same run in a campaign context writes both', () => {
+    // The other half, because "wrote nothing" is only interesting beside a run
+    // that wrote something.
+    const level = tinyLevel(WALK_TO_GOAL, '01-first-steps');
+    const { h, scene } = start(level, { kind: 'campaign', index: 0 });
+    expect(runToGoal(h, scene)).toBe(true);
+    expect(h.save.getBest(SAVE_KEYS.best('01-first-steps'))).not.toBeNull();
+    expect(h.save.getProgress()).toBe(1);
+  });
+
+  it('progress records the level AFTER the one just cleared', () => {
+    const level = tinyLevel(WALK_TO_GOAL, 'third');
+    const { h, scene } = start(level, { kind: 'campaign', index: 2 });
+    expect(runToGoal(h, scene)).toBe(true);
+    expect(h.save.getProgress()).toBe(3);
+  });
+
+  it('A PLAYTEST RETURNS TO THE VERY SAME SCENE INSTANCE, not a rebuilt one', () => {
+    // GAME-DESIGN §10's "returns on Esc with edits intact", stated as an object
+    // identity — which is the only form of it a test can actually check.
+    const back: Scene = { update: () => undefined, render: () => undefined };
+    const h = fakeGame();
+    const scene = new PlayScene(tinyLevel(WALK_TO_GOAL, 'draft'), { kind: 'playtest', back });
+    scene.enter(h.game);
+    expect(runToGoal(h, scene)).toBe(true);
+    for (let i = 0; i < Math.ceil((GOAL_HOLD + DEATH_FADE_OUT) / STEP) + 5; i++) {
+      step(h, scene);
+      if (h.scenes.length > 0) {
+        break;
+      }
+    }
+    expect(h.scenes).toHaveLength(1);
+    expect(h.scenes[0]).toBe(back);
+  });
+});
+
+/**
+ * PHASES phase 7, decision 8. §4's control table has had `Pause / back` on
+ * `Esc`/`P` since phase 1 and nothing implemented it; `PlayScene` read `back`
+ * and quit to the title mid-run, silently discarding the attempt. Once there is
+ * a shell to quit *to*, that is a bug.
+ *
+ * Since `back` and `pause` are bound to the same two keys, **PlayScene reads
+ * `pause` and nothing else** — a scene that read both would fire twice on one
+ * keypress.
+ */
+describe('pause', () => {
+  const PIT = ['..........', '..S.....G.', '####..####'];
+
+  it('Esc toggles it', () => {
+    const { h, scene } = start(tinyLevel(PIT));
+    expect(scene.status.paused).toBe(false);
+    tap(h, scene, 'Escape');
+    expect(scene.status.paused).toBe(true);
+    tap(h, scene, 'Escape');
+    expect(scene.status.paused).toBe(false);
+    // And it does NOT also fire `back` and quit the level.
+    expect(h.scenes).toHaveLength(0);
+  });
+
+  it('IS A FREEZE: ten paused frames move neither the timer nor the body', () => {
+    const { h, scene } = start(tinyLevel(PIT));
+    h.input.onKey('KeyD', true);
+    step(h, scene, 20);
+    h.input.onKey('KeyD', false);
+    tap(h, scene, 'Escape');
+
+    const frozen = scene.status;
+    step(h, scene, 10);
+    const after = scene.status;
+    expect(after.timeSec).toBe(frozen.timeSec);
+    expect(after.x).toBe(frozen.x);
+    expect(after.y).toBe(frozen.y);
+    expect(after.vx).toBe(frozen.vx);
+    expect(after.vy).toBe(frozen.vy);
+    expect(after.speedNorm).toBe(frozen.speedNorm);
+  });
+
+  it('FEEDS THE BED 0 EXACTLY ONCE PER PAUSED FRAME', () => {
+    // Two assertions in one, and the second is the load-bearing one.
+    //
+    // The brief predicted that a pause implemented as `update(dt = 0)` instead
+    // of an early return would be caught by the trajectory diverging. It is
+    // not. `subStepCount` floors at 1, so dt = 0 runs one sub-step — but that
+    // sub-step integrates a zero displacement, and every exponential smoother
+    // in the scene takes its coefficient as `min(1, rate · dt)`, which at
+    // dt = 0 is exactly 0. A dt-zero pause really is bit-identical, and the
+    // resume test below therefore cannot see it.
+    //
+    // What DOES see it is the length of this array. A dt-zero pause falls
+    // through to the bottom of `update` and calls `setIntensity` a second time,
+    // so ten paused frames pump the scheduler twenty times. Measured against
+    // that mutation: 20 entries, not 10.
+    const { h, scene } = start(tinyLevel(PIT));
+    h.input.onKey('KeyD', true);
+    step(h, scene, 20);
+    h.input.onKey('KeyD', false);
+    expect(scene.status.speedNorm).toBeGreaterThan(0.3); // it really was moving
+    tap(h, scene, 'Escape');
+    const from = h.audio.intensities.length;
+    step(h, scene, 10);
+    const during = h.audio.intensities.slice(from);
+    expect(during).toHaveLength(10);
+    for (const n of during) {
+      expect(n).toBe(0);
+    }
+  });
+
+  it('RESUMES BIT-IDENTICALLY, however many frames it was held for', () => {
+    // Not an approximation and not a `toBeCloseTo`: the paused run and the
+    // straight one must agree to the last bit, because the physics is
+    // reproducible (hard rule 5) and a pause is the one thing in the game that
+    // interrupts it. Anything that leaks a frame of simulation into the pause —
+    // a smoother, a camera update, a particle step — shows up here.
+    const level = tinyLevel(PIT);
+    const straight = start(level);
+    straight.h.input.onKey('KeyD', true);
+    step(straight.h, straight.scene, 40);
+
+    const interrupted = start(level);
+    interrupted.h.input.onKey('KeyD', true);
+    step(interrupted.h, interrupted.scene, 20);
+    tap(interrupted.h, interrupted.scene, 'Escape');
+    step(interrupted.h, interrupted.scene, 30); // paused, so nothing happens
+    tap(interrupted.h, interrupted.scene, 'Escape');
+    // The unpausing tap consumed one frame of simulation, so 19 remain.
+    step(interrupted.h, interrupted.scene, 19);
+
+    const a = straight.scene.status;
+    const b = interrupted.scene.status;
+    expect(b.x).toBe(a.x);
+    expect(b.y).toBe(a.y);
+    expect(b.vx).toBe(a.vx);
+    expect(b.vy).toBe(a.vy);
+    expect(b.timeSec).toBeCloseTo(a.timeSec, 12);
+  });
+
+  it('offers RESUME / RESTART / QUIT, and RESTART is a real reset', () => {
+    const { h, scene } = start(tinyLevel(PIT));
+    h.input.onKey('KeyD', true);
+    step(h, scene, 40);
+    h.input.onKey('KeyD', false);
+    expect(scene.status.x).toBeGreaterThan(3 * TILE);
+
+    tap(h, scene, 'Escape');
+    tap(h, scene, 'ArrowDown'); // RESUME -> RESTART
+    tap(h, scene, 'Enter');
+    expect(scene.status.paused).toBe(false);
+    expect(scene.status.x).toBeCloseTo(2 * TILE + TILE / 2, 6);
+    expect(scene.status.timeSec).toBe(0);
+  });
+
+  it('QUIT goes to the title from a campaign run', () => {
+    const { h, scene } = start(tinyLevel(PIT));
+    tap(h, scene, 'Escape');
+    tap(h, scene, 'ArrowDown');
+    tap(h, scene, 'ArrowDown'); // RESUME -> RESTART -> QUIT
+    tap(h, scene, 'Enter');
+    expect(h.scenes).toHaveLength(1);
     expect(h.scenes[0]).toBeInstanceOf(TitleScene);
+  });
+
+  it('QUIT goes back to the EDITOR INSTANCE from a playtest', () => {
+    const back: Scene = { update: () => undefined, render: () => undefined };
+    const h = fakeGame();
+    const scene = new PlayScene(tinyLevel(PIT, 'draft'), { kind: 'playtest', back });
+    scene.enter(h.game);
+    tap(h, scene, 'Escape');
+    tap(h, scene, 'ArrowDown');
+    tap(h, scene, 'ArrowDown');
+    tap(h, scene, 'Enter');
+    expect(h.scenes[0]).toBe(back);
+  });
+
+  it('pauses during the death fade and on the winning frame without desyncing', () => {
+    // The two states where a naive freeze desynchronises the fade from the
+    // state clock: both run off `stateT`, which must stop with everything else.
+    const { h, scene } = start(tinyLevel(PIT));
+    h.input.onKey('KeyD', true);
+    for (let i = 0; i < 600 && scene.status.state === 'running'; i++) {
+      step(h, scene);
+    }
+    h.input.onKey('KeyD', false);
+    expect(scene.status.state).toBe('dying');
+    tap(h, scene, 'Escape');
+    const held = scene.status;
+    step(h, scene, 20);
+    expect(scene.status.state).toBe('dying'); // the fade did NOT run to its end
+    expect(scene.status.y).toBe(held.y);
+    tap(h, scene, 'Escape');
+    step(h, scene, Math.ceil(DEATH_FADE_OUT / STEP) + 2);
+    expect(scene.status.state).toBe('respawning');
   });
 });
 

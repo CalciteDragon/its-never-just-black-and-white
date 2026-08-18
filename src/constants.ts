@@ -224,11 +224,25 @@ export const PAD_SPIN_MAX = 8.0;
 export const DEATH_FADE_OUT = 0.35;
 export const DEATH_FADE_IN = 0.25;
 
-// --- Shell placeholders (scenes/play.ts). Phase 7's ResultsScene takes these
-// with it; they are here so the numbers are not scattered through a scene. ---
+// --- The shell (scenes/play.ts, scenes/results.ts). ---
 
-/** How long the completion readout holds before the level advances (s). */
+/**
+ * How long the frozen winning frame holds before the results screen (s).
+ *
+ * Amended in phase 7 from "how long the completion readout holds before the
+ * level advances": the readout moved to `ResultsScene`, and this stayed where
+ * it was rather than going with it. `ResultsScene` owns no clock — this is the
+ * PUNCTUATION on the frame the player just earned, and it belongs to the scene
+ * that froze it.
+ */
 export const GOAL_HOLD = 1.2;
+/**
+ * Alpha of the `ink` wash under the pause overlay. It has to beat the strongest
+ * vignette the frame can already be wearing — pausing at full speed against
+ * VIGNETTE_MAX would otherwise barely register — while still leaving the frozen
+ * frame visible underneath, which is the point of pausing rather than cutting.
+ */
+export const PAUSE_DIM = 0.6;
 /**
  * Stroke width of the player's paper core when the flip is SPENT (px). The core
  * is PLAYER_SIZE − 2·PLAYER_CORE_INSET = 10 px square, so a 1 px outline is too
@@ -379,3 +393,44 @@ export const PAD_STREAM_LIFE = 0.45;
 export const PAD_STREAM_SPREAD = 0.25;
 /** How far outside the view a pad still streams (px). */
 export const PARTICLE_CULL_MARGIN = 64;
+
+// --- Editor (GAME-DESIGN §10, PHASES phase 7). The grid is the level, so
+// there is nothing here about metadata; every number below is about being able
+// to SEE what you are building. ---
+
+/**
+ * The two zoom steps, and there are deliberately only two. `½` is not one
+ * option among many: 60 tiles × 32 px × ½ = 960 px = `VIEW_W` exactly, so half
+ * zoom is precisely "one screen per sixty tiles", and the example stage is 60
+ * wide. A continuous or cursor-anchored zoom buys nothing over that and costs a
+ * wheel path in `Input`, fractional tile geometry, and seams between adjacent
+ * cells at every non-integer scale — the exact problem phase 3's coordinate
+ * policy exists to avoid. Both steps are whole-pixel cells: 32 and 16.
+ */
+export const EDITOR_ZOOM_STEPS: readonly number[] = [1, 0.5];
+/**
+ * Keyboard pan speed (px/s) = 20 tiles/s, crossing the frame in 1.5 s.
+ * Deliberately faster than RUN_SPEED — navigating a level you are building is
+ * not the same act as playing it.
+ */
+export const EDITOR_PAN_SPEED = 640;
+/** Alpha of the cell grid overlay. Visible over paper, invisible over ink. */
+export const EDITOR_GRID_ALPHA = 0.15;
+/**
+ * Undo depth. The granularity is the STROKE, not the cell, so 64 is 64 real
+ * edits rather than 64 pixels of one drag. A snapshot is one character per
+ * cell: 1200 characters ≈ 2.4 KB at 60×20, so the stack tops out around 154 KB
+ * there and 1.5 MB at the size cap. The ceiling is memory, but the reason for
+ * having a cap at all is that an unbounded stack is a leak nobody measures.
+ */
+export const EDITOR_UNDO_MAX = 64;
+/** A blank grid: small enough to see whole at half zoom while learning the tool. */
+export const EDITOR_DEFAULT_W = 40;
+export const EDITOR_DEFAULT_H = 20;
+/**
+ * Hard size cap. NOT a memory argument: 200 tiles is 6400 px, 6.7 screens at
+ * 1× and 3.3 at ½, and a level you cannot see a third of is one the tool has
+ * stopped helping with.
+ */
+export const EDITOR_MAX_W = 200;
+export const EDITOR_MAX_H = 60;

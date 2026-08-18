@@ -12,7 +12,7 @@ Design decisions are settled in [GAME-DESIGN.md](GAME-DESIGN.md) — phases impl
 | 4 | Rigid-body physics | ✅ done |
 | 5 | Player, world & level format | ✅ done |
 | 6 | Particles & audio | ✅ done |
-| 7 | Editor & shell | ⬜ |
+| 7 | Editor & shell | ✅ done |
 
 ---
 
@@ -613,7 +613,7 @@ Met, with one exit criterion left open and flagged at the end. Tests 311 → 364
 
 ---
 
-## Phase 7 — Editor & shell ⬜
+## Phase 7 — Editor & shell ✅
 
 Make it a thing you can build levels in and actually play. Six phases have built a game with one way in and one way out: `main.ts` boots the title, the title starts level 1, and level 1 ends in a placeholder that says COMPLETE. This phase gives the game its shell — a menu, a level select, a results screen, a pause — and gives the *author* a tool, which is the deliverable that outlives the phase: everything after 0.2 is levels, and levels are made in the editor or they are not made at all.
 
@@ -770,6 +770,42 @@ Phases 3, 4 and 5 each found the brief's headline assertion vacuous as written, 
 - **The docs refresh is a deliverable, not a chore.** `ARCHITECTURE.md` says in its own header that it is rewritten from as-built code at the end of this phase, `CLAUDE.md` still opens with a demolition banner for an overhaul that ends here, and both have been true-ish for six phases. Leaving them is how a repo starts lying to the next person to open it.
 
 **Exit:** a level can be drawn in the browser, saved to disk, and played from the title screen without touching an editor outside the game — proven by a second level that was built exactly that way and is in the campaign. The shell is complete: title menu, level select with progress and best times, pause, results with a next level. `npm run typecheck` and `npm test` green; `ARCHITECTURE.md`, `PHYSICS.md`, `README.md` and `CLAUDE.md` refreshed from as-built code, GAME-DESIGN §6/§10/§12 amended where this phase contradicted them, and a fresh `docs/screenshot.png`.
+
+### As built
+
+Nine decisions went in; seven landed unchanged, one was contradicted by a measurement and one by a screenshot. What follows is only the difference.
+
+**The draw budget was overrun 3.6×, and the brief's own fallback fixed it.** Decision 3 predicted 0.31 ms for the worst-case 2040-cell editor draw, extrapolated from phase 6's measured fill rate. Measured on a 200×60 grid of solid at half zoom: **1.11 ms** for the cells alone, 1.72 ms for the frame. The prediction was not wrong about the call count, it was wrong about what the calls cost — phase 6's 0.151 µs came from 2 px particle squares, and these are 16 px cells, so the draw is fill-rate bound rather than call bound and the per-call figure does not transfer. The brief named the fallback in advance and it was the right one: merge the runs. `forEachCharRun` is `world/tiles.ts`'s `forEachRun` over `readonly string[]` instead of a `TileMap` — the same idea without a second model, which matters because a `TileMap` cannot hold `S` and `G` at all and would need rebuilding on every stroke. Cells went to **0.0147 ms**, a 75× improvement, and the whole editor frame to 0.69 ms.
+
+The residue is worth recording because it is now the largest cost in the scene and it is not the grid: the header text measures 0.34–0.48 ms and the palette bar 0.17–0.30 ms, because `drawText` emits one `fillRect` per lit pixel of the 5×7 font. That is the font every screen has always used, and it is nobody's bug yet. A checkerboard — the one case run-merging cannot help, every run length 1 — measures 0.23–0.79 ms of cells and 1.3–1.8 ms of frame, over budget, and is not a level anyone builds.
+
+**The pause veil was `ink` and had to be `paper`.** Decision 8 said the frame "dims through the fade path that already exists", and the fade path is `inkRgba`. In phase A ink is near-white, so the first build washed a black frame to grey and left the white geometry indistinguishable from the wash — legible, but the opposite of "the frozen frame visible underneath". The veil is the *background* flooding back in, so it is `paperRgba(PAUSE_DIM)` with the menu in `ink` like text on every other screen. The death fade stays `ink` for the reason already recorded in phase 5: fading toward the background is what the vignette does, so a death dimmed that way reads as a speed effect rather than as dying. Two overlays, two directions, and the difference is the whole two-colour rule doing its job. Found by looking at a screenshot, which is the only way it could have been found.
+
+**A `dt = 0` pause is not detectable by trajectory divergence in this solver.** The brief predicted the bit-identity test would catch a freeze implemented as `update(dt = 0)` instead of an early return. Watched failing against exactly that mutation: it **passed**. `subStepCount` floors at 1, so dt = 0 does run a sub-step — but it integrates a zero displacement, and every exponential smoother in the scene takes its coefficient as `min(1, rate · dt)`, which at dt = 0 is exactly 0. A dt-zero pause really is bit-identical, and no trajectory assertion can see it. What caught the mutation was the audio scheduler: a dt-zero pause falls through to the bottom of `update` and pumps `setIntensity` a second time, so ten paused frames pump twenty times. The assertion that matters is the *length* of the intensity array, not its contents, and the test now says so.
+
+**Two bugs the brief did not predict, both found by looking rather than by testing.** The shell scenes inherited the palette phase from however the last run happened to end, so the level select was white or black depending on whether you finished the level flipped — a gravity readout on a screen with no gravity. Every shell scene now resets to phase A on `enter`. And the editor's header printed `PAINT ^`, which the 5×7 font renders as its fallback hollow box: the readout of which tile you are painting was the one place in the editor still trying to draw a character, which is precisely what the WYSIWYG palette bar exists to avoid. The header no longer names the character; the bar's thick border is the readout.
+
+**Decision 1's marker rule went further than the brief stated, and it had to.** The brief said painting `S` *moves* the spawn. That alone does not make "found 0 spawn markers" unreachable — painting a wall over the spawn would still erase it. So a marker cell refuses every write but its own: the spawn and the goal can be relocated and never erased, in either direction, which also stops one being dropped on top of the other. That is what leaves exactly one reachable `validateLevel` error, and the panel is the safety net over it.
+
+Two additions the brief did not scope, both because a fourth copy of the same code was the alternative. `scenes/menu.ts` holds one vertical menu — up, down, wrap, blip, confirm — shared by the title, level select, results and pause; four copies is four places for the wrap to be off by one. And `world/level.ts` gained `levelRows`, `parseLevel`'s inverse, factored out of `serializeLevel` so that opening a shipped level for editing does not re-derive where `S` and `G` go.
+
+`Input.attach` also grew a `blur` handler, which is not in any decision and is a bug the phase would otherwise have shipped: the window loses every held key when it loses focus and the browser sends no keyup, so alt-tabbing away mid-run came back with `right` still held and the level playing itself.
+
+**The second level exists and is the exit criterion.** `02-second-nature` was drawn in the browser at half zoom, named through the `N` field, saved through `POST /__level`, and played from the title screen — 60×20, and it teaches the flip as a traversal verb rather than a trick: a four-tile jump, a floorless chasm crossed by flipping onto a ceiling and running it inverted, a flip back down, an up-pad onto a plateau, and a final flip onto a ceiling that a plain jump cannot reach. It completes in 6.8 s. Two things about the tool changed *while* building it, which is what decision 9 said the exercise was for: the status line was drawn underneath the palette bar and invisible, and the header and validation panels had no backing plate, so both vanished over solid geometry. Neither is the kind of thing a unit test can see.
+
+### Verification
+
+- `npm run typecheck` and `npm test`: **21 files, 525 tests**, green.
+- The whole flow, dev: title → play → results → NEXT → play → results → LEVELS → title, plus title → editor → playtest → editor → save. Every `back` goes where it should; the bed starts on `enter` and stops on `exit` and is silent on every screen but play.
+- Progress gating, fresh save: one row unlocked, the second dimmed at `inkRgba(0.35)` and refusing `confirm`. After two wins, both open with best times.
+- Pause mid-air, during the death fade, and on the winning frame. The last is the one that matters: 200 frames paused on the won frame and the `GOAL_HOLD` hand-off does **not** fire.
+- The production build takes the fallback. `npm run build && vite preview`: `/__level` is 404, the save reports `local`, and — because a synthetic `Ctrl+S` is not a user gesture — the clipboard refused and the message said so rather than claiming it. The 1031 bytes it wrote to `bw.editor.draft` round-trip through `parseLevel` and back out of `serializeLevel` byte-identically.
+- `?editor=1` with no gesture boots straight into the editor and creates no AudioContext at all, so there is nothing to dump. The stall path got exercised for real anyway: driving the game from the console left the scheduler **37.5 s / 320 sixteenths** behind the audio clock, and the next pump scheduled **2 notes**. Phase 6's resync, confirmed in a browser rather than in a test.
+- A 200×60 grid at both zooms, benchmarked as above; harness deleted.
+- Fresh `docs/screenshot.png`, taken mid-flip in phase B at speedNorm 0.84 — the two-colour inversion, the rationed accent, the aberration and the vignette tint in one frame.
+
+**Exit met.** A level can be drawn in the browser, saved to disk, and played from the title screen without touching an editor outside the game, proven by `02-second-nature`. The shell is complete. `ARCHITECTURE.md`, `PHYSICS.md`, `README.md` and `CLAUDE.md` are refreshed from as-built code; GAME-DESIGN §3, §6, §10 and §12 are amended where this phase contradicted them.
+
 
 ---
 

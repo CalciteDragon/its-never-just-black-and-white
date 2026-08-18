@@ -261,6 +261,19 @@ export function parseLevel(raw: unknown): ParseResult {
  * for that mistake to surface.
  */
 export function serializeLevel(level: Level): string {
+  const rows = levelRows(level);
+  return `${JSON.stringify({ id: level.id, name: level.name, rows }, null, 2)}\n`;
+}
+
+/**
+ * A parsed `Level` back to its grid characters — `parseLevel`'s exact inverse,
+ * and the half of `serializeLevel` the editor needs on its own: opening a
+ * shipped level for editing is `new EditorGrid(levelRows(level))`.
+ *
+ * Kept separate rather than re-deriving the rows in the editor, because a
+ * second implementation of "where do S and G go" is a second answer waiting.
+ */
+export function levelRows(level: Level): string[] {
   const { map, spawn, goal } = level;
   const rows: string[] = [];
 
@@ -277,6 +290,5 @@ export function serializeLevel(level: Level): string {
     }
     rows.push(row.join(''));
   }
-
-  return `${JSON.stringify({ id: level.id, name: level.name, rows }, null, 2)}\n`;
+  return rows;
 }

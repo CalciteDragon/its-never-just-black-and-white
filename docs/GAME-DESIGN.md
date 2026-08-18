@@ -58,12 +58,20 @@ The core is also where the "recharged" state shows: charged reads as a solid cor
 ## 3. Modes & flow
 
 ```
-Title ─▶ Play (level 1 ─▶ 2 ─▶ … ─▶ n) ─▶ Results
-      ─▶ Level Select
-      ─▶ Editor  (dev builds: writes to disk; production: localStorage + JSON export)
+Title ─┬─▶ Play(campaign i) ─▶ Results ─┬─▶ Play(campaign i+1)
+       │        ▲                       └─▶ Level select
+       ├─▶ Level select ────────────────────▶ Play(campaign i)
+       │        └── E on an entry ─▶ Editor
+       └─▶ Editor ⇄ Play(playtest)
 ```
 
 No co-op, no daily challenge, no seeds, no procedural generation. Progress (furthest level reached, best time per level) persists in `localStorage` under the `bw.` key prefix.
+
+> *(Amended in phase 7, from the shell as built.)* **Why an attempt is being played is explicit, and it decides three things at once.** A campaign run records a best time, advances `bw.progress`, and ends at the results screen; **a playtest writes nothing at all** and returns to the editor instance it came from, edits intact. That is not tidiness: a draft carrying the id of a shipped level would otherwise overwrite that level's best time with a run set on a grid that exists only in someone's browser.
+>
+> `bw.progress` gates the level select — the unlocked count is `progress + 1`, so a missing or corrupt value unlocks exactly one level rather than none — and it only ever moves forward, because replaying an early level for a better time must not re-lock the rest of the game.
+>
+> `Esc` **pauses** rather than quitting. §4's control table has said `Pause / back` since the beginning and nothing implemented it; the scene read `back` and left mid-run, silently discarding the attempt. The pause is a true freeze — the simulation, the timer and the music all stop, and resuming continues the same trajectory bit-identically — with RESUME / RESTART / QUIT over a dimmed frame. Since `back` and `pause` are bound to the same two keys, `PlayScene` reads `pause` and nothing else; a scene reading both would fire twice on one keypress.
 
 ## 4. Controls
 
@@ -233,7 +241,29 @@ Added in phase 5. Cosmetic, but real tuning numbers, so they live in `constants.
 | `PAD_CHEVRON_LEN` / `PAD_CHEVRON_WIDTH` | 14 / 5 px | the two `paper` bars drawn at ±135° from a pad's facing. The arms sit at 45°, so a 3 px bar antialiases almost entirely into mid-grey and reads as a smudge rather than an arrow |
 | `GOAL_OUTLINE_WIDTH` | 2 px | stroke of the goal's pulsing ink outline |
 | `GOAL_PULSE_AMP` / `GOAL_PULSE_FREQ` | 0.12 / 3.0 rad/s | scale pulse of that outline |
-| `GOAL_HOLD` | 1.2 s | how long the completion readout holds before the level advances |
+| `GOAL_HOLD` | 1.2 s | how long the frozen winning frame holds before the results screen |
+| `PAUSE_DIM` | 0.6 | alpha of the `paper` veil under the pause overlay |
+
+> *(Amended in phase 7.)* `GOAL_HOLD` was "how long the completion readout holds before the level advances". The readout moved to `ResultsScene` and the constant did **not** go with it: it is the punctuation on the frame the player just earned, and it belongs to the scene that froze it. `ResultsScene` owns no clock at all.
+>
+> `PAUSE_DIM` is `paper`, not `ink`, and the distinction is the whole of the two-colour rule working. Ink is near-white in phase A, so an ink "dim" washes a black frame to grey and leaves the white geometry indistinguishable from it — measured on the first build, and it looked exactly as bad as that sounds. The veil is the background flooding back in, and the menu then reads in `ink` like text on every other screen. The death fade is `ink` for the opposite reason, already recorded above: fading toward the background is what the vignette does, so a death dimmed that way reads as a speed effect rather than as dying.
+
+### Editor
+
+Added in phase 7. Every number here is about being able to **see** what you are building.
+
+| Constant | Value | Meaning |
+| --- | --- | --- |
+| `EDITOR_ZOOM_STEPS` | 1, ½ | the two zoom steps, and there are deliberately only two |
+| `EDITOR_PAN_SPEED` | 640 px/s | keyboard pan = 20 tiles/s, crossing the frame in 1.5 s |
+| `EDITOR_GRID_ALPHA` | 0.15 | the cell grid overlay: visible over paper, invisible over ink |
+| `EDITOR_UNDO_MAX` | 64 | undo depth, in **strokes** — not cells |
+| `EDITOR_DEFAULT_W` / `_H` | 40 / 20 | a blank grid, small enough to see whole at half zoom |
+| `EDITOR_MAX_W` / `_H` | 200 / 60 | the size cap |
+
+**Half zoom is exactly one screen per sixty tiles**: 60 × 32 × ½ = 960 = `VIEW_W`, and the example stage is 60 wide. That is why there are two steps and not a continuous zoom — a fractional scale buys nothing over "the whole level, or life size" and costs a wheel path in `Input`, fractional tile geometry, and seams between adjacent cells at every non-integer scale, which is the exact problem the coordinate policy exists to avoid. Both steps are whole-pixel cells: 32 and 16.
+
+The size cap is not a memory argument. 200 tiles is 6400 px — 6.7 screens at 1× and 3.3 at ½ — and a level you cannot see a third of is one the tool has stopped helping with. (For the record, memory is not close to being the constraint: an undo snapshot is one character per cell, so 64 of them is ~154 KB at 60×20 and ~1.5 MB at the cap.)
 
 ### Music and SFX
 
@@ -368,15 +398,42 @@ Mute on `M`, persisted at `bw.muted`. The AudioContext is created lazily on firs
 
 ## 10. Level editor
 
-An in-browser scene (`E` from the title, or `?editor=1`), not a separate app.
+An in-browser scene (`E` from the title or from a level-select row, the title's EDITOR menu item, or `?editor=1`), not a separate app.
 
-- Paint tiles with the mouse; number keys 1–7 select from the char palette; right-drag erases; middle-drag or space-drag pans.
-- Resize the grid from any edge; the grid is the level, so there's no separate metadata to keep in sync.
-- `Ctrl+Z` / `Ctrl+Y` undo stack over whole-grid snapshots (levels are small; simplicity beats cleverness here).
-- **Playtest in place** (`Enter`): hands the current grid straight to a `PlayScene` and returns on `Esc` with edits intact.
-- **Save**: in dev, `POST /__level` writes `src/levels/<id>.json` through a Vite middleware modelled on the existing `screenshotSink`. In a production build that endpoint doesn't exist, so it falls back to `localStorage` plus a copy-to-clipboard JSON export.
+| Input | Verb |
+| --- | --- |
+| left-drag | paint the selected character |
+| right-drag | erase (paint `.`) |
+| `Shift`+click | flood-fill the connected region of equal character (4-connected) |
+| middle-drag, `Space`-drag, arrows | pan |
+| `1`–`8` | select `. # ^ v < > S G` |
+| `Z` | toggle `1×` / `½×` |
+| `Ctrl+Z` / `Ctrl+Y` | undo / redo |
+| `[` `]` `,` `.` | shrink / grow an edge (with `Shift` for the opposite edge) |
+| `N` | edit the id, then the name |
+| `Enter` | playtest in place |
+| `Ctrl+S` | save |
+| `Esc` | back to the title |
 
-Editor state (grid, undo stack, validation) is a pure module so it unit-tests in node; only the scene touches the DOM.
+**The editor edits characters, not tiles, and `world/level.ts` is therefore its entire format layer.** The obvious model is a `TileMap` with a spawn and a goal beside it; it is wrong, and the reason is `S` and `G` — they are metadata on an empty cell in a `Level`, but they are *paintable cells* in an editor, and a `TileMap` cannot hold them. Modelling the grid as `readonly string[]` — §8's own on-disk shape — makes validation `validateLevel(rows)` verbatim, saving `JSON.stringify({ id, name, rows })` byte-identical to `serializeLevel`, playtesting `parseLevel` handing the **real** `PlayScene` a **real** `Level`, and a resize from the left or the top carries the spawn and the goal along for free because they are characters in the rows being shifted. Under a coordinates-beside-the-map model those are two pairs to fix up at every edge, and the one that gets forgotten is the one nobody notices until a level spawns you inside a wall.
+
+The palette is **eight** characters, not the "1–7" this section used to say: `. # ^ v < > S G`, which is §8's table plus the two markers. Six is the tile enum and eight is what an author paints; seven was neither.
+
+Two edits the model makes **unrepresentable**, which is worth more than any validation panel: painting `S` *moves* the spawn rather than adding a second one (same for `G`, and neither can be erased — only relocated), and a rectangular array of equal-length rows cannot go ragged. Between those and a fixed palette, every error `validateLevel` can report is unreachable from the editor except one — a resize that crops the spawn or the goal off the grid. That is not an argument against the panel; it is what the panel is *for*.
+
+**Errors and warnings are different things.** `validateLevel` reports errors and only errors block a save. `gridWarnings` reports the legal-but-probably-wrong: a pad firing into solid geometry (which re-fires every step and pins the body), a marker enclosed on all four sides, a marker on the top or bottom row where the death planes are. Those cannot be errors: the grid is well-formed, `parseLevel` must accept it, and `src/levels/index.ts` throws on anything `validateLevel` rejects — so promoting a level-design footgun to a format error would make a shipped level a build failure.
+
+**Undo granularity is the stroke**, and the snapshot is pushed before the first cell of it. Per-cell snapshots make `Ctrl+Z` undo one pixel of a drag, which is not an undo stack, it is a diary. A stroke that changed nothing pushes nothing, and any new edit clears the redo stack.
+
+**Playtest in place** (`Enter`) hands the current grid to a `PlayScene` in a `playtest` context and returns to the **same scene instance** — grid, undo stack and view intact, because the scene itself survived. A playtest writes no best time and does not advance progress; see §3.
+
+**Save** (`Ctrl+S`) is behaviour-detected rather than build-flag gated. It attempts `POST /__level`, which a Vite middleware turns into `src/levels/<id>.json`, and falls back to `localStorage` plus a copy-to-clipboard JSON export on any non-200 or network failure — reporting which happened, and saying so if the clipboard refused rather than claiming it. `import.meta.env.DEV` would work and is the wrong shape: it makes the fallback, the branch that only ever runs in a build, the branch nobody exercises until it ships. The middleware takes **no path from the caller**: it takes an `id`, validates it against `^[a-z0-9][a-z0-9-]*$`, and builds the path itself. It deliberately does not touch `src/levels/index.ts` — a middleware rewriting a TypeScript source file is codegen, so the one-line manual edit stays manual and the save's confirmation names it.
+
+The grid is autosaved to `bw.editor.draft` on every stroke end, so a reload never costs more than the stroke in progress. A serialised 60×20 level is ~1.3 KB, which is 0.03 % of a 5 MB quota.
+
+The palette bar draws **the tiles themselves**, not their characters. It is WYSIWYG for free, and it sidesteps the fact that `^` has no glyph in the 5×7 font — `v` resolves to `V`, which is worse, because it looks deliberate.
+
+Editor state (grid, undo stack, validation) is a pure module so it unit-tests in node. So does the scene: the mouse arrives as `Input.onPointerDown(vx, vy, button)` in view space, already through the letterbox inverse, so a test paints a stroke, undoes it, resizes the grid, playtests it and comes back with no canvas anywhere.
 
 ## 11. Out of scope for 0.2
 
@@ -389,19 +446,20 @@ Moving platforms, breakable tiles, one-way platforms, slopes, wall jumps, checkp
 Signatures are binding; phase briefs fill in the detail.
 
 - **`engine/rng.ts`** — unchanged `Rng` (mulberry32). Now serving particles, editor jitter, and test determinism rather than level generation. `hashStringToSeed`, `mixSeeds` stay; `dailySeed` / `dailyDateString` are deleted.
-- **`engine/input.ts`** — `class Input` as before, minus the two-player split. Actions: `left right up down jump flip restart confirm back pause mute fullscreen`. `onKey` stays pure.
+- **`engine/input.ts`** — `class Input` as before, minus the two-player split. Actions: `left right up down jump flip restart confirm back pause mute fullscreen`. `onKey` stays pure. *(Amended in phase 7: **three layers, not one.** Beside the action layer there is now a **raw code layer** — every `KeyboardEvent.code` recorded whether or not it is bound, as `codeDown` / `codePressed` / `pressedCodes` / `shiftDown` / `ctrlDown` — because the editor needs `Digit1`–`Digit8`, `ShiftLeft` and letters, and not one of those is a game verb; "paint" is not an `Action` and must not become one. The raw layer also settles `Space`, which is bound to both `flip` and `confirm`: the editor's space-drag pan reads the code, not either action. And a **pure pointer core** — `onPointerDown/Move/Up(vx, vy, button)`, `pointerX` / `pointerY` / `pointerIn`, and `down` / `pressed` / `released` per button — cleared by the same `update()` that clears the keys. `attach(win, canvas?)` converts to view space **on the way in** via `screenToView`, so the pure core never learns that a scale exists, and suppresses `contextmenu` for the right-drag erase. A press that lands in the letterbox is not a press at all.)*
 - **`engine/font.ts`** — unchanged 5×7 bitmap font.
 - **`engine/palette.ts`** *(new)* — `class Palette { phase: 0 | 1; flip(): void; paper: string; ink: string; accent: string }`, plus `paperRgba(a)` / `accentRgba(a)` and `inkRgba(a, phase?)`. Pure. The single source of every colour in the game. *(Phase 5 adds `inkRgba`, whose optional `phase` exists so the death fade can be sampled once and held: the palette resets to phase A at the fade's peak, and under a live token the screen would jump from white to black at exactly the covered moment.)*
-- **`engine/renderer.ts`** — 960×540 offscreen buffer, antialiased, integer-scaled present. Adds `applyPost(speedNorm)` for vignette + chromatic aberration, and world/UI space draws.
+- **`engine/renderer.ts`** — 960×540 offscreen buffer, antialiased, integer-scaled present. Adds `applyPost(speedNorm)` for vignette + chromatic aberration, and world/UI space draws. *(Phase 7 adds `screenToView(canvasW, canvasH, clientX, clientY)`, the exact inverse of `present`'s blit, returning an `inFrame` flag rather than clamping. It is the one place in the project where the letterbox arithmetic lives, and therefore the one place it can be wrong — dropping the offset is a fifteen-tile error at a 1920×1000 window, not a sub-pixel one.)*
 - **`engine/particles.ts`** — pooled system, accent-coloured: `class ParticleSystem { aliveCount; emit(x, y, vx, vy, life, size, gravity, drag): boolean; update(dt); render(ctx, camX, camY); clear() }` plus the emitters `spawnDust`, `spawnBurst`, `spawnSplash`, `spawnRing`, `spawnStream`. *(Amended in phase 6, three ways. Particles **store no colour**: `render` assigns the live accent once for the whole pass, so sparks invert in flight — a spawn-time colour would leave a flip trailing a cloud of the outgoing phase, and worse, the flip's own ring is emitted before `PlayScene` moves the palette, so the one thing announcing the flip would be the last thing still wearing the old colour. The pool's free-slot scan starts at a **rotating cursor**, making a spawn amortised O(1) instead of O(512), with drop-newest overflow. And the options-bag `spawn`/`ParticleOpts` are **gone**: once the emitter set landed they had no caller in `src/`, and an API kept alive only by its own tests is the placeholder the phase 3/4 rule forbids.)*
 - **`engine/audio.ts`** — split in two, the way `renderer.ts` splits `vignetteAlpha` from `applyPost`. Pure: `scheduleWindow(state, now, intensity, out): number` over a beat grid, plus `layerTarget`, `activeLayers`, `musicGain`, `delayFeedback`, `patternAt`, `createSchedulerState`, `createNoteBuffer`. Impure: `class AudioSys { constructor(makeCtx?); play(name); setIntensity(speedNorm); startMusic(); stopMusic(); get/set muted }`. *(Amended in phase 6, three ways. The effect player is `play(name)`, not `sfx(name)` — that was already true in the code and §12 had drifted. `setMuted(b)` becomes a **getter/setter pair**: with a running scheduler, muting is no longer "return early from `play`" but an action — duck the master, stop scheduling — and unmuting has to resync onto the grid, while every existing `audio.muted = x` call site compiles unchanged. And the constructor takes an **injected context factory**, defaulting to the guarded `new AudioContext()`, so the tests drive the real graph through a fake and count every node created against every `stop` scheduled.)*
-- **`engine/save.ts`** — `SaveStore` with injectable storage, `bw.` keys: `bw.progress`, `bw.best.<levelId>`, `bw.muted`, `bw.editor.draft`.
+- **`engine/save.ts`** — `SaveStore` with injectable storage, `bw.` keys: `bw.progress`, `bw.best.<levelId>`, `bw.muted`, `bw.editor.draft`. *(Phase 7 adds `getProgress()` / `setProgress(n)` over the one key nothing had ever written, and `getText` / `setText` for the editor's draft. A corrupt or missing progress reads as **0**, which unlocks exactly one level — not zero, which would lock a player out of their own game, and not all, which would make the key pointless — and `setProgress` is **monotone**, because completing an early level again must not re-lock the later ones. After this phase all four keys have a writer, which is the first time that has been true.)*
+- **`engine/levelio.ts`** *(new, phase 7)* — `buildLevelPayload(p): string` (byte-identical to `serializeLevel`), `isValidLevelId` / `LEVEL_ID_PATTERN`, and `saveLevel(p, deps?): Promise<SaveOutcome>` reporting `disk` or `local`. Never rejects: a save that throws mid-session is a save that loses work.
 - **`world/obb.ts`** *(new, pure)* — `vertices(box, out)`, `projectRadius(box, ax, ay)`, `tileRadius(tile, ax, ay)`, `deepestVertex(box, nx, ny, out)`, `satOverlap(box, tile, out, interiorFaces): boolean`, `contactCandidates(box, tile, nx, ny, tileAxis, out): number`, and the `FACE_*` flags with `faceBlocked`. No tilemap knowledge, fully unit-tested. *(Amended in phase 4: `satOverlap` writes into a caller-supplied result and returns a boolean rather than allocating `{ hit, normal, depth } | null` — the doc's shape was redundant with itself, and this keeps the hot path allocation-free, consistent with `forEachRun`. `projectOnto` is named for what it returns.)*
 - **`world/physics.ts`** — rewritten: `interface RigidBody { x, y, vx, vy, angle, angVel, size }` (centre origin), `stepBody(body, map, dt, opts): StepResult { grounded, landed, hitCeiling, contacts, contactCount }`, plus `createBody`, `rightAngleError` and `subStepCount`. Sub-stepped, SAT-resolved, impulse response. Node-safe. *(Amended in phase 4: `stepBody` owns gravity — it needs `opts.gravitySign` and the rise/fall split anyway — which deletes `applyGravity`, `moveBody` and `isSupported`; support stops being a positional query, because "the floor" is whichever surface opposes gravity this instant. `StepResult.contacts` is a **fixed-capacity buffer reused across calls**, valid only until the next `stepBody`, carrying point, normal and impulse per contact so phase 6's landing splash has somewhere to read impact strength.)* *(Amended in phase 5: `Contact` also carries `pad: Tile` and `onSolid: boolean`, because pads became collidable and `grounded` can no longer answer "does this recharge the flip?" — see PHYSICS.md § Grounded.)*
 - **`world/level.ts`** *(new)* — `parseLevel(raw: unknown): { ok: true; level } | { ok: false; errors: string[] }`, `Level { id, name, map: TileMap, spawn, goal, pads }`, `serializeLevel(level): string`, `validateLevel(rows: unknown): string[]`. *(Amended in phase 5, twice. `Level` holds a **`TileMap`**, not a raw `Uint8Array`: every consumer downstream — the solver's broadphase, `forEachRun`, the phase 7 editor — already takes one, so an array would be re-wrapped at each use site with the stride and the OOB rule agreed independently in every one of them. And `parseLevel` returns a **discriminated** union rather than `Level | LevelError`, because an untagged union of two object types cannot be narrowed in strict TS without a hand-written guard, and the editor's validation panel wants the whole error list rather than the first thing wrong. It never throws.)*
 - **`world/tiles.ts`** — `enum Tile { Empty, Solid, PadUp, PadDown, PadLeft, PadRight }`, `class TileMap` with the seal-sides / open-vertically bounds rule. *(Phase 5 adds `isBlocking(t)`, `isPad(t)`, `padDirection(t)` and the `tileFromChar` / `charFromTile` mapping over §8's six grid characters. The char table lives beside the enum because the phase 7 editor's palette needs exactly this one; `S` and `G` stay `level.ts`'s business and the enum does not grow.)*
 - **`world/camera.ts`** — follow with lookahead, clamp horizontally to the level, screen bounce, no shake.
 - **`entities/player.ts`** — the controller: input → linear velocity, jump + spin, flip + charge, pad response, death detection. Owns no rendering beyond a small `render(r)`. *(Phase 6 adds the emitters it owns — the running dust and the step cadence off ONE distance accumulator, the landing splash, the flip ring, the jump and pad bursts — plus the pure `splashCount(impulse)` ramp. `PlayerEvents` deliberately did **not** grow to carry a landing impulse: the player was already walking `StepResult.contacts` for the recharge and the pad, so the splash reads the largest-impulse ground contact right there.)* *(Amended in phase 5: `update(dt, inputs, world)` **returns** a reused `PlayerEvents { flipped, died }`, so the scene — not the player — moves the palette. `spawnAt` is the whole reset, including `gravitySign` and the charge.)*
-- **`scenes/`** — `TitleScene`, `LevelSelectScene`, `PlayScene(level)`, `ResultsScene(stats)`, `EditorScene`.
-- **`editor/grid.ts`** *(new, pure)* — grid model, paint/erase/resize, undo stack, validation. Unit-tested in node.
+- **`scenes/`** — `TitleScene`, `LevelSelectScene`, `PlayScene(level, ctx)`, `ResultsScene(stats)`, `EditorScene`, plus `menu.ts`'s shared `updateMenu` and `tiledraw.ts`'s shared draws. *(Amended in phase 7: `PlayScene` takes an explicit **`PlayContext`** — `{ kind: 'campaign'; index }` or `{ kind: 'playtest'; back: Scene }` — and the union decides three things at once: where a win goes, whether `bw.progress` advances, and **whether a best time is written at all**. Phase 5's defaulted `index` meant a level not in `LEVELS`, which is exactly what a playtest hands over, advanced into `LEVELS[1]` on completion; the honest fix is not a better default but to stop defaulting. The bug under that bug is the save — a draft carrying the id of a shipped level would otherwise overwrite its best time with a run set on a grid that exists only in someone's browser. `tiledraw.ts` exists because the editor's palette bar draws real tiles, and a second copy of the chevron is a second thing to retune the next time `PAD_CHEVRON_WIDTH` moves.)*
+- **`editor/grid.ts`** *(new, pure)* — grid model over `readonly string[]`: `class EditorGrid` (paint, flood, resize from four edges, stroke-scoped undo/redo), `GRID_CHARS`, `blankRows`, `isGridChar`, `gridWarnings`, and `forEachCharRun`. Unit-tested in node. *(Amended in phase 7: `gridWarnings` is **separate from** `validateLevel` rather than an extension of it — see §10. And `forEachCharRun` is `world/tiles.ts`'s `forEachRun` over characters instead of a `TileMap`: the editor's draw overran its 1 ms budget at 1.11 ms for 2040 per-cell fills, and run-merging the rows directly is the same fix without a second model that could not hold `S` and `G` anyway.)*
 - **`game.ts`** — unchanged fixed-step loop and `Scene` interface. Still the most reusable thing in the repo.

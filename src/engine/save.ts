@@ -101,6 +101,28 @@ export class SaveStore {
     return { isNewBest: true };
   }
 
+  /**
+   * A raw string, guarded. The editor's draft is JSON the editor itself owns —
+   * it would be `getBest`'s shape check applied to the wrong shape, and a
+   * `SaveStore` that knew what a level grid was would be a layering violation
+   * for no gain.
+   */
+  getText(key: string): string | null {
+    try {
+      return this.storage.getItem(key);
+    } catch {
+      return null;
+    }
+  }
+
+  setText(key: string, value: string): void {
+    try {
+      this.storage.setItem(key, value);
+    } catch {
+      // Best-effort, like every other write here.
+    }
+  }
+
   /** Boolean flag (e.g. mute). Missing/corrupt → false. */
   getFlag(key: string): boolean {
     try {
@@ -115,6 +137,42 @@ export class SaveStore {
       this.storage.setItem(key, v ? '1' : '0');
     } catch {
       // Best-effort.
+    }
+  }
+
+  /**
+   * Furthest level reached, gating the level select. Anything unreadable,
+   * missing, negative or not finite reads as **0**, which unlocks exactly the
+   * first level — not zero, which would lock a player out of their own game,
+   * and not all of them, which would make the key pointless.
+   */
+  getProgress(): number {
+    try {
+      const raw = this.storage.getItem(SAVE_KEYS.progress);
+      if (raw === null || raw.trim() === '') {
+        return 0;
+      }
+      const n = Number(raw);
+      return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * Advance progress. **Monotone**, because completing an early level again
+   * must not re-lock the later ones — and a player who replays level 1 for a
+   * better time would otherwise find the rest of the game gone.
+   */
+  setProgress(n: number): void {
+    if (!Number.isFinite(n)) {
+      return;
+    }
+    const next = Math.max(this.getProgress(), Math.floor(n));
+    try {
+      this.storage.setItem(SAVE_KEYS.progress, String(next));
+    } catch {
+      // Best-effort, like every other write here.
     }
   }
 }

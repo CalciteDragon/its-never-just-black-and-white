@@ -2,7 +2,7 @@
 
 The oriented-box rigid-body solver in `src/world/obb.ts` + `src/world/physics.ts`, and the game-feel numbers in `src/constants.ts`.
 
-> **Status:** built in phase 4 and described here as-built; see [PHASES.md](PHASES.md). Sections marked *(amended in phase 4)* were written before anything ran and turned out wrong once it did. Refreshed again at the end of phase 7.
+> **Status:** as-built, and current. The solver was built in phase 4 and amended in phase 5, when pads became collidable geometry; nothing since has changed a line of it — the phase that added the editor and the shell touched no physics at all. Sections marked *(amended in phase N)* were written before anything ran and turned out wrong once it did; they are kept as amendments rather than quietly rewritten, because the version that was wrong is the useful half. See [PHASES.md](PHASES.md) for the history.
 
 ## The core split
 
@@ -217,7 +217,7 @@ err      = θ − θ_target                      ∈ [−π/4, π/4]
 | 1 % | 0.500 s |
 | exactly 0 (the settle snap) | 0.58–0.63 s |
 
-The design's "~0.3 s soft auto-right" holds at the threshold that matters perceptually — 5 % of a 25° tilt is 1.25°, which reads as square — but the doc's 2 % figure was a continuous-time number and is 0.43 s in practice. Bringing the 2 % mark down to 0.26 s would need `RIGHT_DAMPING` ≈ 27 (the discrete critical value at this `h` and `k`), which is a feel decision, not a correctness one, and is left to phase 5's controller pass.
+The design's "~0.3 s soft auto-right" holds at the threshold that matters perceptually — 5 % of a 25° tilt is 1.25°, which reads as square — but the doc's 2 % figure was a continuous-time number and is 0.43 s in practice. Bringing the 2 % mark down to 0.26 s would need `RIGHT_DAMPING` ≈ 27 (the discrete critical value at this `h` and `k`), which is a feel decision rather than a correctness one. Phase 5's controller pass did not take it: `RIGHT_DAMPING` stands at **31**, on the grounds that 5 % is where the eye stops reading a tilt and the remaining 0.43 s is spent below 1.25°.
 
 ### The settle snap
 
@@ -296,3 +296,11 @@ Jump pads override the relevant velocity component rather than adding to it, so 
 ## Determinism
 
 Fixed timestep, no `Math.random` on any physics path, no wall-clock reads. Same start state plus same input sequence ⇒ bit-identical trajectory. A test asserts exactly that over 600 steps, and it is the cheapest insurance in the repo: it turns any accidental non-determinism introduced by a later refactor into an immediate red test rather than a physics bug someone notices three phases later.
+
+### The pause, and why it is an early return
+
+`PlayScene` can be paused, which makes it the one thing in the game that interrupts a reproducible trajectory. It is a **true freeze**: `update` returns before the state machine, so no solver step, no camera update, no particle step and no smoother runs at all. A test holds a pause for thirty frames mid-run and asserts that the resumed body agrees with an uninterrupted one on `x`, `y`, `vx` and `vy` to the last bit — not `toBeCloseTo`, because anything that leaked one frame of simulation into the pause would show up there and nowhere else.
+
+The obvious alternative is `update(dt = 0)`, and the measured finding is worth recording because it is the opposite of what the brief for it predicted: **a `dt = 0` pause is not detectable by trajectory divergence in this solver.** Gravity increments by `g · 0`; the sub-step advance is `v · 0`; and every exponential smoother in the scene — `speedNorm`, the camera follow, the lookahead — takes its coefficient as `min(1, rate · dt)`, which at `dt = 0` is exactly 0, so they hold rather than creeping. (`subStepCount` returns its floor of **1** rather than 0, so the loop does run once; it advances by nothing.) The resume test above genuinely cannot see the difference.
+
+What does see it is the audio. A dt-zero pause falls through to the bottom of `update` and calls `setIntensity` a second time on the same frame, so ten paused frames pump the scheduler twenty times — and that is what the pause test measures, counting the entries fed to the bed (ten, all zero) beside the trajectory comparison. The early return is still the right shape, because a freeze defined by *not running* is easier to keep true than one that runs everything against a zero. But the reason to prefer it turned out not to be the physics.

@@ -4,9 +4,9 @@ A minimalist momentum platformer built from scratch with **TypeScript and the Ca
 
 **Zero runtime dependencies**: every level is readable JSON, every sound is synthesised WebAudio, every pixel is drawn by hand from two hex values.
 
-![Mid-jump on the first level: the square tumbling with its paper core, row-merged geometry, the vignette closing in, chromatic fringing on every edge, and accent sparks trailing on the floor.](docs/screenshot.png)
+![The first level mid-flip: gravity is up, so paper and ink have swapped and the square is hanging under a ceiling slab, warm accent sparks trailing behind it, chromatic fringing on every edge and the vignette closing in at speed.](docs/screenshot.png)
 
-> **Under construction.** This is a total overhaul of Pixel Quest — the dungeon platformer this repo used to hold, preserved in git history before `d7a54ff` — rebuilt from the loop up. Phases 1–6 of 7 are complete: the design is settled, the look is decided, the square is a real rigid body that tumbles and catches on corners and rights itself, the first hand-authored level is playable start to finish, and the game now makes noise — a four-layer techno bed that layers in as you get fast, and sparks on every jump, landing and flip. Only the level editor and the shell around it are left. The screenshot above is the real first level, HUD and all. See [docs/PHASES.md](docs/PHASES.md) for the plan and what's landed.
+> **0.2, and the overhaul is done.** This is a total rebuild of Pixel Quest — the dungeon platformer this repo used to hold, preserved in git history before `d7a54ff` — remade from the loop up in seven phases. All seven have landed: the square is a real rigid body that tumbles and catches on corners and rights itself, the world inverts on a keypress, four layers of synthesised techno arrive as you get fast, and levels are drawn in a browser editor that writes JSON straight to disk. What is left is **levels**, which is the work the editor exists to enable. See [docs/PHASES.md](docs/PHASES.md) for the plan and everything that was learned building it.
 
 ## Play
 
@@ -27,7 +27,7 @@ Then open http://localhost:5173.
 | Restart level | `R` |
 | Pause | `Esc` or `P` |
 | Mute / Fullscreen | `M` / `F` |
-| Level editor (dev builds) | `E` from the title screen |
+| Level editor | `E` from the title screen or a level-select row |
 
 There is no double jump. The flip is the air move — and **it only recharges when you touch ground**, so every gap is a jump, a flip, or a jump-then-flip.
 
@@ -45,7 +45,11 @@ But linear motion stays arcade: left and right set velocity directly, and the ve
 
 **One number drives the whole feel.** Normalised speed closes the vignette, splits the colour channels, bounces the screen, and gates four layers of synthesised techno. They share an input, so they arrive together: the game visibly and audibly opens up as you get fast.
 
-**Levels are drawn in the browser.** The editor is a scene inside the game, not a separate tool, and its playtest hands the grid to the real `PlayScene`. In dev it writes `src/levels/*.json` straight to disk through a Vite middleware; in a production build it falls back to localStorage and clipboard export.
+**Levels are drawn in the browser.** The editor is a scene inside the game, not a separate tool, and it edits the level's *characters* rather than a parsed model — so validation, saving and playtesting are the same three functions the game already had, and playtest hands the grid to the real `PlayScene` with no second parser and no preview mode. In dev it writes `src/levels/*.json` straight to disk through a Vite middleware; a production build has no such endpoint, so it falls back to localStorage and clipboard export — chosen by *trying* rather than by a build flag, so the fallback is not a branch nobody exercises until it ships.
+
+The shipped `02-second-nature` was built in it, start to finish, without opening a text editor. That was the point.
+
+**The editor unit-tests with the mouse.** A press arrives as `Input.onPointerDown(vx, vy, button)` in view space — `attach` runs the letterbox inverse on the way in — so the pure core never learns that a scale exists, and a test paints a stroke, undoes it, resizes the grid, playtests it and comes back with no canvas anywhere.
 
 ## Development
 
@@ -63,12 +67,12 @@ src/
   constants.ts     every tuning number, commented with units
   game.ts          fixed-timestep loop (60 Hz) + scene management
   main.ts          browser bootstrap (canvas, resize, fullscreen)
-  engine/          rng, input, font, palette, renderer, audio, save, particles
+  engine/          rng, input, font, palette, renderer, audio, save, particles, levelio
   world/           tiles, obb, physics, level, camera
   entities/        player
-  scenes/          title, level select, play, results, editor
-  editor/          pure grid model, undo, validation
-  levels/          hand-authored level JSON
+  scenes/          title, level select, play, results, editor, menu, tiledraw
+  editor/          pure grid model, undo, validation, warnings
+  levels/          hand-authored level JSON, one file per level
 tests/             vitest, node environment — no DOM required
 docs/              design doc, build plan, architecture and physics deep-dives
 ```

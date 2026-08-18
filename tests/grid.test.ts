@@ -1,0 +1,541 @@
+/**
+ * The grid model, which is the whole of the editor that can be tested without
+ * a scene. It edits **characters**, not tiles (PHASES phase 7, decision 1), so
+ * `S` and `G` are cells like any other and `world/level.ts` is its entire
+ * format layer: validation is `validateLevel(rows)` verbatim, saving is
+ * `JSON.stringify({ id, name, rows })`, and playtesting is `parseLevel`.
+ *
+ * The assertions worth writing are the ones that fail against the obvious
+ * alternative implementations — a per-cell undo snapshot, and a `TileMap` with
+ * a spawn and a goal beside it.
+ */
+
+import { describe, expect, it } from 'vitest';
+import { EDITOR_MAX_H, EDITOR_MAX_W, EDITOR_UNDO_MAX } from '../src/constants';
+import {
+  EditorGrid,
+  GRID_CHARS,
+  blankRows,
+  forEachCharRun,
+  gridWarnings,
+  isGridChar,
+} from '../src/editor/grid';
+import { parseLevel, validateLevel } from '../src/world/level';
+
+/** A small stage with one of everything, so a change anywhere is visible. */
+const STAGE: readonly string[] = [
+  '..........',
+  '..S....G..',
+  '..###..##.',
+  '.....^....',
+  '##########',
+];
+
+function g(rows: readonly string[] = STAGE): EditorGrid {
+  return new EditorGrid(rows);
+}
+
+/** One drag, frame by frame, exactly as EditorScene feeds it. */
+function stroke(grid: EditorGrid, cells: readonly (readonly [number, number])[], ch: string): void {
+  grid.beginStroke();
+  for (const [tx, ty] of cells) {
+    grid.paint(tx, ty, ch);
+  }
+  grid.endStroke();
+}
+
+describe('the palette', () => {
+  it('is EIGHT characters: the tile enum plus the two markers', () => {
+    // GAME-DESIGN §10 said "1-7", which is neither the six-value tile enum nor
+    // the eight things an author actually paints. Amended in phase 7.
+    expect(GRID_CHARS.join(' ')).toBe('. # ^ v < > S G');
+    expect(GRID_CHARS).toHaveLength(8);
+  });
+
+  it('recognises exactly those and nothing else', () => {
+    for (const ch of GRID_CHARS) {
+      expect(isGridChar(ch)).toBe(true);
+    }
+    for (const ch of ['x', 'A', '', '##', ' ', 's', 'g']) {
+      expect(isGridChar(ch), ch).toBe(false);
+    }
+  });
+
+  it('a blank grid is legal the instant it is made', () => {
+    const rows = blankRows(12, 5);
+    expect(rows).toHaveLength(5);
+    expect(rows[0]).toHaveLength(12);
+    // Not merely rectangular: it already has its S and its G, so a fresh
+    // editor never opens onto a level that fails validation.
+    expect(validateLevel(rows)).toEqual([]);
+  });
+});
+
+describe('painting', () => {
+  it('writes a character and reports whether anything changed', () => {
+    const grid = g();
+    expect(grid.paint(0, 0, '#')).toBe(true);
+    expect(grid.charAt(0, 0)).toBe('#');
+    expect(grid.paint(0, 0, '#')).toBe(false); // already that
+  });
+
+  it('ignores out-of-bounds writes, like TileMap.set', () => {
+    const grid = g();
+    expect(grid.paint(-1, 0, '#')).toBe(false);
+    expect(grid.paint(0, -1, '#')).toBe(false);
+    expect(grid.paint(grid.w, 0, '#')).toBe(false);
+    expect(grid.paint(0, grid.h, '#')).toBe(false);
+    expect(grid.rows).toEqual(STAGE);
+  });
+
+  it('refuses a character that is not in the palette', () => {
+    const grid = g();
+    expect(grid.paint(0, 0, 'x')).toBe(false);
+    expect(grid.rows).toEqual(STAGE);
+  });
+
+  it('PAINTING S MOVES THE SPAWN rather than adding a second one', () => {
+    // The edit the model makes unrepresentable, and worth more than any
+    // validation panel: there is no way to end up with two spawns.
+    const grid = g();
+    expect(grid.paint(5, 0, 'S')).toBe(true);
+    expect(grid.charAt(5, 0)).toBe('S');
+    expect(grid.charAt(2, 1)).toBe('.'); // the old one is gone
+    expect(validateLevel(grid.rows)).toEqual([]);
+    expect(grid.rows.join('').split('S')).toHaveLength(2); // exactly one
+  });
+
+  it('painting G moves the goal the same way', () => {
+    const grid = g();
+    grid.paint(0, 0, 'G');
+    expect(grid.charAt(7, 1)).toBe('.');
+    expect(validateLevel(grid.rows)).toEqual([]);
+  });
+
+  it('WILL NOT ERASE the spawn or the goal, only relocate them', () => {
+    // This is what makes "found 0 spawn markers" unreachable from a paint, and
+    // leaves exactly one reachable error in validateLevel's whole list.
+    const grid = g();
+    expect(grid.paint(2, 1, '#')).toBe(false);
+    expect(grid.charAt(2, 1)).toBe('S');
+    expect(grid.paint(7, 1, '.')).toBe(false);
+    expect(grid.charAt(7, 1)).toBe('G');
+  });
+
+  it('will not drop the spawn on top of the goal either', () => {
+    // Same rule from the other side. Landing one singleton on the other would
+    // delete the other, which is a level with no goal.
+    const grid = g();
+    expect(grid.paint(7, 1, 'S')).toBe(false);
+    expect(grid.charAt(7, 1)).toBe('G');
+    expect(grid.charAt(2, 1)).toBe('S');
+    expect(validateLevel(grid.rows)).toEqual([]);
+  });
+
+  it('erase is paint with a dot, and cannot go ragged', () => {
+    const grid = g();
+    stroke(
+      grid,
+      [
+        [2, 2],
+        [3, 2],
+        [4, 2],
+      ],
+      '.',
+    );
+    expect(grid.rows[2]).toBe('.......##.');
+    for (const row of grid.rows) {
+      expect(row).toHaveLength(grid.w);
+    }
+  });
+});
+
+describe('the undo stack', () => {
+  it('ONE Ctrl+Z UNDOES A WHOLE STROKE', () => {
+    // Against a per-cell snapshot this takes twenty undos, so the assertion
+    // fails with nineteen cells still painted. That is the prediction.
+    const grid = g();
+    const before = grid.rows;
+    const cells: [number, number][] = Array.from({ length: 20 }, (_, i) => [i % 10, i < 10 ? 0 : 3]);
+    stroke(grid, cells, '#');
+    expect(grid.rows).not.toEqual(before);
+    expect(grid.undoDepth).toBe(1);
+    expect(grid.undo()).toBe(true);
+    expect(grid.rows).toEqual(before);
+  });
+
+  it('A NO-OP STROKE PUSHES NOTHING, and undo still reaches past it', () => {
+    // The half of the rule a stack-depth assertion alone would miss: dragging
+    // across cells that already hold the selected character must not fill the
+    // stack with identical snapshots.
+    const grid = g();
+    const original = grid.rows;
+    stroke(
+      grid,
+      [
+        [0, 0],
+        [1, 0],
+      ],
+      '#',
+    ); // a real edit
+    const afterReal = grid.rows;
+    expect(grid.undoDepth).toBe(1);
+
+    stroke(
+      grid,
+      [
+        [0, 0],
+        [1, 0],
+      ],
+      '#',
+    ); // the same cells, already '#'
+    expect(grid.undoDepth).toBe(1);
+    expect(grid.rows).toEqual(afterReal);
+
+    expect(grid.undo()).toBe(true);
+    expect(grid.rows).toEqual(original);
+  });
+
+  it('a stroke that changes one cell of twenty still pushes exactly one', () => {
+    const grid = g();
+    grid.beginStroke();
+    for (let tx = 0; tx < 10; tx++) {
+      grid.paint(tx, 4, '#'); // row 4 is already solid...
+    }
+    grid.paint(0, 0, '#'); // ...except this one cell, which is not
+    grid.endStroke();
+    expect(grid.undoDepth).toBe(1);
+  });
+
+  it('redo replays, and ANY NEW EDIT CLEARS IT', () => {
+    const grid = g();
+    stroke(grid, [[0, 0]], '#');
+    const painted = grid.rows;
+    grid.undo();
+    expect(grid.redoDepth).toBe(1);
+    expect(grid.redo()).toBe(true);
+    expect(grid.rows).toEqual(painted);
+
+    grid.undo();
+    expect(grid.redoDepth).toBe(1);
+    stroke(grid, [[9, 0]], '#'); // a different edit from the undone state
+    expect(grid.redoDepth).toBe(0);
+    expect(grid.redo()).toBe(false);
+  });
+
+  it('undo and redo on an untouched grid are no-ops, not crashes', () => {
+    const grid = g();
+    expect(grid.undo()).toBe(false);
+    expect(grid.redo()).toBe(false);
+    expect(grid.rows).toEqual(STAGE);
+  });
+
+  it('is bounded at EDITOR_UNDO_MAX, dropping the OLDEST', () => {
+    const grid = new EditorGrid(blankRows(EDITOR_UNDO_MAX + 20, 3));
+    for (let i = 0; i < EDITOR_UNDO_MAX + 10; i++) {
+      stroke(grid, [[i, 0]], '#');
+    }
+    expect(grid.undoDepth).toBe(EDITOR_UNDO_MAX);
+    for (let i = 0; i < EDITOR_UNDO_MAX; i++) {
+      grid.undo();
+    }
+    expect(grid.undo()).toBe(false);
+    // The ten oldest edits are gone, so the grid does NOT come back blank.
+    expect(grid.rows[0].startsWith('##########')).toBe(true);
+  });
+});
+
+describe('flood fill', () => {
+  const ROOM: readonly string[] = ['#####', '#S..#', '#.#.#', '#..G#', '#####'];
+
+  it('fills the 4-connected region of equal character', () => {
+    const grid = new EditorGrid(ROOM);
+    grid.flood(2, 1, '#');
+    expect(grid.charAt(2, 1)).toBe('#');
+    expect(grid.charAt(3, 1)).toBe('#');
+    expect(grid.charAt(3, 2)).toBe('#');
+    // S, G and the wall are different characters, so they bound the region --
+    // and the dots on the far side of the S are a separate region entirely.
+    expect(grid.charAt(1, 1)).toBe('S');
+    expect(grid.charAt(3, 3)).toBe('G');
+    expect(grid.charAt(1, 2)).toBe('.');
+  });
+
+  it('is 4-connected, not 8-connected', () => {
+    const grid = new EditorGrid(['.#.', '#.#', '.#.']);
+    grid.flood(1, 1, '^');
+    expect(grid.charAt(1, 1)).toBe('^');
+    expect(grid.charAt(0, 0)).toBe('.'); // diagonal, so out of the region
+    expect(grid.charAt(2, 2)).toBe('.');
+  });
+
+  it('is one undo step, and a fill onto its own character does nothing', () => {
+    const grid = new EditorGrid(ROOM);
+    const before = grid.rows;
+    grid.flood(2, 1, '#');
+    expect(grid.undoDepth).toBe(1);
+    grid.undo();
+    expect(grid.rows).toEqual(before);
+
+    grid.flood(0, 0, '#'); // the wall, already '#'
+    expect(grid.undoDepth).toBe(0);
+  });
+
+  it('flooding WITH S or G places one, never a region of them', () => {
+    // The singleton rule outranks the fill: a flood of spawns is not a level.
+    const grid = new EditorGrid(ROOM);
+    grid.flood(2, 1, 'S');
+    expect(grid.rows.join('').split('S')).toHaveLength(2);
+    expect(validateLevel(grid.rows)).toEqual([]);
+  });
+
+  it('flooding a region that starts ON the spawn refuses, rather than erasing it', () => {
+    const grid = new EditorGrid(ROOM);
+    const before = grid.rows;
+    grid.flood(1, 1, '#');
+    expect(grid.rows).toEqual(before);
+    expect(grid.undoDepth).toBe(0);
+  });
+
+  it('ignores a flood outside the grid', () => {
+    const grid = new EditorGrid(ROOM);
+    expect(() => grid.flood(-1, 99, '#')).not.toThrow();
+    expect(grid.rows).toEqual(ROOM);
+  });
+});
+
+describe('resizing', () => {
+  it('A RESIZE FROM THE LEFT CARRIES THE SPAWN AND THE GOAL WITH IT', () => {
+    // Free under this model, because S and G are characters in the rows being
+    // shifted. Under a TileMap-plus-coordinates model they are two pairs that
+    // have to be fixed up by hand at every edge, and the one that gets
+    // forgotten is the one nobody notices until a level spawns you in a wall.
+    const grid = g();
+    grid.resize('left', 2);
+    expect(grid.w).toBe(12);
+    expect(grid.charAt(4, 1)).toBe('S'); // was column 2
+    expect(grid.charAt(9, 1)).toBe('G'); // was column 7
+    expect(grid.charAt(7, 3)).toBe('^'); // and the pad too
+    expect(validateLevel(grid.rows)).toEqual([]);
+  });
+
+  it('a resize from the top carries them down', () => {
+    const grid = g();
+    grid.resize('top', 3);
+    expect(grid.h).toBe(8);
+    expect(grid.charAt(2, 4)).toBe('S');
+    expect(grid.rows[0]).toBe('.'.repeat(10));
+  });
+
+  it('growing right and bottom appends empty, leaving everything where it was', () => {
+    const grid = g();
+    grid.resize('right', 4);
+    grid.resize('bottom', 1);
+    expect(grid.w).toBe(14);
+    expect(grid.h).toBe(6);
+    expect(grid.charAt(2, 1)).toBe('S');
+    expect(grid.rows[5]).toBe('.'.repeat(14));
+    expect(grid.rows[0]).toBe('.'.repeat(14));
+  });
+
+  it('shrinking crops from the named edge', () => {
+    const grid = g();
+    grid.resize('right', -2);
+    expect(grid.w).toBe(8);
+    expect(grid.rows[4]).toBe('########');
+    expect(validateLevel(grid.rows)).toEqual([]);
+  });
+
+  it('A CROP THAT LOSES THE SPAWN IS AN ERROR — reported, not prevented', () => {
+    // The ONE reachable member of validateLevel's error list, and therefore
+    // the whole reason the panel exists.
+    const grid = g();
+    grid.resize('left', -3); // columns 0..2 go, and the S is at column 2
+    expect(grid.charAt(0, 1)).toBe('.');
+    const errors = validateLevel(grid.rows);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('found 0 spawn markers');
+    // Still a rectangle: it is a CONTENT error, which is exactly why the
+    // editor can show it and carry on rather than having to refuse the resize.
+    for (const row of grid.rows) {
+      expect(row).toHaveLength(grid.w);
+    }
+  });
+
+  it('clamps at the size cap rather than refusing outright', () => {
+    const grid = new EditorGrid(blankRows(EDITOR_MAX_W - 1, EDITOR_MAX_H - 1));
+    grid.resize('right', 10);
+    expect(grid.w).toBe(EDITOR_MAX_W);
+    grid.resize('bottom', 10);
+    expect(grid.h).toBe(EDITOR_MAX_H);
+    // Already at the cap: nothing changes, and nothing is pushed onto undo.
+    const depth = grid.undoDepth;
+    grid.resize('right', 5);
+    expect(grid.w).toBe(EDITOR_MAX_W);
+    expect(grid.undoDepth).toBe(depth);
+  });
+
+  it('never shrinks below a single row or column', () => {
+    const grid = new EditorGrid(blankRows(3, 3));
+    grid.resize('left', -99);
+    grid.resize('top', -99);
+    expect(grid.w).toBe(1);
+    expect(grid.h).toBe(1);
+  });
+
+  it('is one undo step whichever edge moved', () => {
+    const grid = g();
+    const before = grid.rows;
+    grid.resize('left', 2);
+    grid.resize('top', 2);
+    expect(grid.undoDepth).toBe(2);
+    grid.undo();
+    grid.undo();
+    expect(grid.rows).toEqual(before);
+  });
+
+  it('a zero-delta resize is not an edit', () => {
+    const grid = g();
+    grid.resize('left', 0);
+    expect(grid.undoDepth).toBe(0);
+  });
+});
+
+describe('gridWarnings', () => {
+  it('THE DOWN-PAD TRAP IS A WARNING AND NOT AN ERROR', () => {
+    // A pad whose facing points into its own geometry re-fires every step and
+    // pins the body. The grid is well-formed, parseLevel must accept it, and
+    // src/levels/index.ts throws on anything validateLevel rejects -- so
+    // promoting a level-design footgun to a format error would make a shipped
+    // level a build failure. All three assertions, because that is the failure
+    // mode: a warning that quietly became a build break.
+    const rows = ['..........', '..S....G..', '....v.....', '##########'];
+    const warnings = gridWarnings(rows);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('row 2');
+    expect(warnings[0]).toContain('column 4');
+    expect(validateLevel(rows)).toEqual([]);
+    expect(parseLevel({ id: 'x', name: 'X', rows }).ok).toBe(true);
+  });
+
+  it('catches all four facings, including into the sealed sides', () => {
+    // The left and right edges read as Solid out of bounds, so a pad on the
+    // border facing outward fires into a wall exactly like an interior one.
+    expect(gridWarnings(['........', '<S....G>', '########'])).toHaveLength(2);
+
+    const up = gridWarnings(['..####..', '..^.....', '.S....G.', '########']);
+    expect(up).toHaveLength(1);
+    expect(up[0]).toContain('column 2');
+
+    const down = gridWarnings(['........', '.S....G.', '..v.....', '..####..', '########']);
+    expect(down).toHaveLength(1);
+  });
+
+  it('says nothing about a pad with somewhere to fire', () => {
+    expect(gridWarnings(['..........', '..S....G..', '....^.....'])).toEqual([]);
+    expect(gridWarnings(['..........', '..S....G..', '####^#####', '..........'])).toEqual([]);
+  });
+
+  it('warns when the spawn or the goal sits on a death plane', () => {
+    // The top and bottom rows read as Empty out of bounds, so both are lethal.
+    const top = gridWarnings(['..S....G..', '##########', '..........']);
+    expect(top).toHaveLength(2);
+    expect(top.join(' ')).toContain('top row');
+    const bottom = gridWarnings(['..........', '##########', '..S....G..']);
+    expect(bottom.join(' ')).toContain('bottom row');
+  });
+
+  it('warns when the spawn is walled in on every side', () => {
+    // "Inside a solid tile" is unrepresentable -- S IS the cell -- so the
+    // reachable version of that mistake is a marker with nowhere to go.
+    const rows = ['.....', '..#..', '.#S#.', '..#..', '..G..'];
+    expect(gridWarnings(rows).join(' ')).toContain('enclosed');
+  });
+
+  it('is silent on a level with nothing wrong with it', () => {
+    expect(gridWarnings(STAGE)).toEqual([]);
+  });
+
+  it('never throws on a grid that validateLevel would reject', () => {
+    // It runs beside validateLevel on every keystroke, not after it, so it has
+    // to survive a ragged or spawn-less grid rather than assuming one.
+    expect(() => gridWarnings([])).not.toThrow();
+    expect(() => gridWarnings(['###', '#'])).not.toThrow();
+    expect(() => gridWarnings(['....'])).not.toThrow();
+  });
+});
+
+describe('the round trip that everything else rests on', () => {
+  it('what the editor holds is what parseLevel accepts', () => {
+    const grid = g();
+    grid.paint(5, 0, '#');
+    grid.resize('left', 1);
+    const res = parseLevel({ id: 'round-trip', name: 'ROUND TRIP', rows: grid.rows });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.level.map.w).toBe(grid.w);
+      expect(res.level.map.h).toBe(grid.h);
+      expect(res.level.spawn).toEqual({ tx: 3, ty: 1 });
+    }
+  });
+
+  it('rows are a snapshot: mutating what you got back cannot reach the grid', () => {
+    const grid = g();
+    const rows = grid.rows as string[];
+    rows[0] = 'XXXXXXXXXX';
+    expect(grid.rows[0]).toBe('..........');
+  });
+});
+
+describe('forEachCharRun', () => {
+  it('merges equal characters into one run, and skips empty', () => {
+    const runs: [number, number, number, string][] = [];
+    forEachCharRun(['..###.^^..'], 0, 0, 9, 0, (tx, ty, len, ch) => runs.push([tx, ty, len, ch]));
+    expect(runs).toEqual([
+      [2, 0, 3, '#'],
+      [6, 0, 2, '^'],
+    ]);
+  });
+
+  it('DOES NOT merge different characters, so a pad never joins its floor', () => {
+    // The same rule forEachRun has, and for the same reason: a merged pad would
+    // draw as plain floor and lose its chevron.
+    const runs: string[] = [];
+    forEachCharRun(['###^###'], 0, 0, 6, 0, (tx, _ty, len, ch) => runs.push(`${ch}x${len}@${tx}`));
+    expect(runs).toEqual(['#x3@0', '^x1@3', '#x3@4']);
+  });
+
+  it('CLIPS runs to the window rather than to the grid', () => {
+    // Emitting off-screen geometry is the cost this function exists to avoid.
+    const runs: [number, number][] = [];
+    forEachCharRun(['##########'], 3, 0, 6, 0, (tx, _ty, len) => runs.push([tx, len]));
+    expect(runs).toEqual([[3, 4]]);
+  });
+
+  it('intersects the window with the grid, and never invents a run off it', () => {
+    const runs: unknown[] = [];
+    forEachCharRun(['###'], -50, -50, 500, 500, (tx, ty, len) => runs.push([tx, ty, len]));
+    expect(runs).toEqual([[0, 0, 3]]);
+    forEachCharRun([], 0, 0, 9, 9, () => runs.push('never'));
+    forEachCharRun(['###'], 10, 0, 20, 0, () => runs.push('never'));
+    forEachCharRun(['###'], 0, 5, 2, 9, () => runs.push('never'));
+    expect(runs).toHaveLength(1);
+  });
+
+  it('floors fractional bounds instead of trusting the caller', () => {
+    // The editor passes `panX / cell`, which is fractional whenever the view is
+    // mid-pan — and a fractional bound would emit runs at fractional columns.
+    const runs: [number, number][] = [];
+    forEachCharRun(['.####.'], 1.7, 0.4, 4.2, 0.9, (tx, _ty, len) => runs.push([tx, len]));
+    expect(runs).toEqual([[1, 4]]);
+  });
+
+  it('turns the worst case from 2040 callbacks into 34', () => {
+    // The measured overrun and its fix, as an assertion: 60 x 34 visible cells
+    // of solid is one run per row, not one per cell.
+    const rows = Array.from({ length: 34 }, () => '#'.repeat(60));
+    let calls = 0;
+    forEachCharRun(rows, 0, 0, 59, 33, () => calls++);
+    expect(calls).toBe(34);
+  });
+});

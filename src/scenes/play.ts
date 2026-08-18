@@ -1,6 +1,6 @@
 /**
  * The gameplay scene: one level, one body, and the lifecycle around them —
- * spawn, run, die, respawn, finish, advance.
+ * spawn, run, die, respawn, pause, finish.
  *
  * It is the only owner of two things, and both are here because nothing in the
  * type system can hold them:
@@ -17,22 +17,17 @@
  * `update` touches only `game.input`, `game.audio`, `game.save` and
  * `game.setScene`, all of which construct fine under node, so the whole
  * lifecycle unit-tests headlessly and `render` is simply never called.
- *
- * The completion readout and the level advance are SHELL PLACEHOLDERS and look
- * it: phase 7 replaces them with `ResultsScene`, and `GOAL_HOLD` goes with them.
  */
 
 import {
   DEATH_FADE_IN,
   DEATH_FADE_OUT,
   GOAL_HOLD,
-  GOAL_OUTLINE_WIDTH,
   GOAL_PULSE_AMP,
   GOAL_PULSE_FREQ,
-  PAD_CHEVRON_LEN,
-  PAD_CHEVRON_WIDTH,
   PAD_STREAM_INTERVAL,
   PARTICLE_CULL_MARGIN,
+  PAUSE_DIM,
   SPEED_REF,
   SPEED_SMOOTH_RATE,
   TILE,
@@ -50,10 +45,13 @@ import type { EntityWorld } from '../entities/context';
 import { NO_INPUTS, Player } from '../entities/player';
 import type { PlayerInputs } from '../entities/player';
 import type { Game, Scene } from '../game';
-import { nextLevel } from '../levels/index';
 import { Camera } from '../world/camera';
 import type { Level } from '../world/level';
-import { forEachRun, padDirection, toTile } from '../world/tiles';
+import { padDirection } from '../world/tiles';
+import { updateMenu } from './menu';
+import { ResultsScene } from './results';
+import type { ResultsStats } from './results';
+import { drawGoal, drawTileRuns } from './tiledraw';
 import { TitleScene } from './title';
 
 /**
@@ -64,9 +62,28 @@ import { TitleScene } from './title';
  */
 type PlayState = 'running' | 'dying' | 'respawning' | 'won';
 
+/**
+ * Why this attempt is being played, and it decides three things at once
+ * (PHASES phase 7, decision 5): where a win goes, whether `bw.progress`
+ * advances, and **whether a best time is written at all**.
+ *
+ * Phase 5 left `index` defaulting to 0, so a level that is not in `LEVELS` —
+ * exactly what the editor's playtest hands over — advanced into `LEVELS[1]` on
+ * completion. The honest fix is not a better default; it is to stop defaulting.
+ * And the bug under that bug is the save: a draft carrying the id of a shipped
+ * level would otherwise overwrite `bw.best.01-first-steps` with a time set on a
+ * grid that exists only in someone's browser. **A playtest writes nothing.**
+ */
+export type PlayContext =
+  | { readonly kind: 'campaign'; readonly index: number }
+  | { readonly kind: 'playtest'; readonly back: Scene };
+
+/** The pause overlay, in order. `Esc` opens it; the sim is frozen behind it. */
+const PAUSE_ITEMS: readonly string[] = ['RESUME', 'RESTART', 'QUIT'];
+
 export class PlayScene implements Scene {
   private readonly level: Level;
-  private readonly index: number;
+  private readonly ctx: PlayContext;
   private readonly player = new Player(0, 0);
   private readonly camera = new Camera();
   private readonly particles = new ParticleSystem();
@@ -94,10 +111,12 @@ export class PlayScene implements Scene {
   private finishedMs = 0;
   private previousBestMs: number | null = null;
   private isNewBest = false;
+  private paused = false;
+  private pauseIndex = 0;
 
-  constructor(level: Level, index = 0) {
+  constructor(level: Level, ctx: PlayContext) {
     this.level = level;
-    this.index = index;
+    this.ctx = ctx;
   }
 
   /**
@@ -123,6 +142,7 @@ export class PlayScene implements Scene {
    */
   get status(): {
     state: PlayState;
+    paused: boolean;
     timeSec: number;
     x: number;
     y: number;
@@ -136,6 +156,7 @@ export class PlayScene implements Scene {
     const b = this.player.body;
     return {
       state: this.state,
+      paused: this.paused,
       timeSec: this.timeSec,
       x: b.x,
       y: b.y,
@@ -185,15 +206,28 @@ export class PlayScene implements Scene {
   }
 
   update(dt: number, game: Game): void {
-    this.clock += dt;
     const input = game.input;
     if (input.pressed('mute')) {
       game.toggleMute();
     }
-    if (input.pressed('back')) {
-      game.setScene(new TitleScene());
+    // `pause` and NOTHING ELSE (PHASES phase 7, decision 8). `back` and `pause`
+    // are bound to the same two keys, so a scene reading both would fire twice
+    // on one keypress — and the old `back` reader quit mid-run, silently
+    // discarding the attempt.
+    if (input.pressed('pause')) {
+      this.setPaused(!this.paused, game);
+    }
+    if (this.paused) {
+      this.updatePauseMenu(game);
+      // A FREEZE, not a step with dt = 0: nothing below this line runs, so no
+      // exponential smoother takes a step and the resumed trajectory is
+      // bit-identical to the uninterrupted one. The bed is fed 0 through the
+      // same duck as `dying` and `won`.
+      game.audio.setIntensity(0);
       return;
     }
+
+    this.clock += dt;
     // R restarts instantly, with no fade. The fade is death's punctuation, and
     // a restart the player asked for does not need punctuating (§5: failure is
     // not a punishment).
@@ -233,12 +267,11 @@ export class PlayScene implements Scene {
         }
         break;
       case 'won':
-        // Frozen: hold the readout, then fade out and move on.
+        // Frozen: hold the earned frame, then fade out and hand it over.
         this.stateT += dt;
         this.fade = Math.min(1, Math.max(0, (this.stateT - GOAL_HOLD) / DEATH_FADE_OUT));
         if (this.stateT >= GOAL_HOLD + DEATH_FADE_OUT) {
-          const next = nextLevel(this.index);
-          game.setScene(next ? new PlayScene(next, this.index + 1) : new TitleScene());
+          this.finish(game);
           return;
         }
         break;
@@ -263,6 +296,61 @@ export class PlayScene implements Scene {
     // shot.
     const ducked = this.state === 'dying' || this.state === 'won';
     game.audio.setIntensity(ducked ? 0 : this.speedNorm);
+  }
+
+  private setPaused(v: boolean, game: Game): void {
+    if (this.paused === v) {
+      return;
+    }
+    this.paused = v;
+    this.pauseIndex = 0;
+    game.audio.play('menuPick');
+  }
+
+  private updatePauseMenu(game: Game): void {
+    const step = updateMenu(game, this.pauseIndex, PAUSE_ITEMS.length);
+    this.pauseIndex = step.index;
+    if (!step.picked) {
+      return;
+    }
+    switch (PAUSE_ITEMS[this.pauseIndex]) {
+      case 'RESUME':
+        this.paused = false;
+        break;
+      case 'RESTART':
+        this.reset();
+        this.paused = false;
+        break;
+      default:
+        this.leave(game);
+        break;
+    }
+  }
+
+  /** Where `QUIT` goes, which is the whole difference between the two contexts. */
+  private leave(game: Game): void {
+    game.setScene(this.ctx.kind === 'playtest' ? this.ctx.back : new TitleScene());
+  }
+
+  /**
+   * The run is over. A campaign run has a results screen to show; a playtest
+   * goes straight back to the editor **instance** it came from, edits intact —
+   * which is GAME-DESIGN §10's requirement stated as an object identity.
+   */
+  private finish(game: Game): void {
+    if (this.ctx.kind === 'playtest') {
+      game.setScene(this.ctx.back);
+      return;
+    }
+    const stats: ResultsStats = {
+      levelId: this.level.id,
+      levelName: this.level.name,
+      index: this.ctx.index,
+      timeMs: this.finishedMs,
+      previousBestMs: this.previousBestMs,
+      isNewBest: this.isNewBest,
+    };
+    game.setScene(new ResultsScene(stats));
   }
 
   /**
@@ -336,15 +424,19 @@ export class PlayScene implements Scene {
     this.stateT = 0;
     this.fadePhase = palette.phase;
     this.finishedMs = Math.round(this.timeSec * 1000);
-    const key = SAVE_KEYS.best(this.level.id);
-    const previous = game.save.getBest(key);
-    this.previousBestMs = previous?.timeMs ?? null;
-    // The wall-clock read here is on a PERSISTENCE path, not a logic path — the
-    // simulation never sees it, so hard rule 5 is intact.
-    this.isNewBest = game.save.submit(key, {
-      timeMs: this.finishedMs,
-      dateIso: new Date().toISOString(),
-    }).isNewBest;
+    if (this.ctx.kind === 'campaign') {
+      const key = SAVE_KEYS.best(this.level.id);
+      const previous = game.save.getBest(key);
+      this.previousBestMs = previous?.timeMs ?? null;
+      // The wall-clock read here is on a PERSISTENCE path, not a logic path —
+      // the simulation never sees it, so hard rule 5 is intact.
+      this.isNewBest = game.save.submit(key, {
+        timeMs: this.finishedMs,
+        dateIso: new Date().toISOString(),
+      }).isNewBest;
+      // Monotone, so replaying an early level cannot re-lock the later ones.
+      game.save.setProgress(this.ctx.index + 1);
+    }
     game.audio.play('goal');
   }
 
@@ -353,7 +445,7 @@ export class PlayScene implements Scene {
     const vy = this.camera.viewY;
     r.setCamera(vx, vy);
     r.clear(palette.paper);
-    this.renderTiles(r, vx, vy);
+    drawTileRuns(r, this.level.map, vx, vy);
     this.renderGoal(r);
     this.player.render(r);
     this.particles.render(r.ctx, Math.round(vx), Math.round(vy));
@@ -364,60 +456,8 @@ export class PlayScene implements Scene {
     if (this.fade > 0) {
       r.rect(0, 0, VIEW_W, VIEW_H, palette.inkRgba(this.fade, this.fadePhase), true);
     }
-  }
-
-  /** Row-merged runs: a 40-tile floor is one fillRect, not forty. */
-  private renderTiles(r: Renderer, vx: number, vy: number): void {
-    forEachRun(
-      this.level.map,
-      toTile(vx),
-      toTile(vy),
-      toTile(vx + VIEW_W),
-      toTile(vy + VIEW_H),
-      (tx, ty, len, tile) => {
-        r.rect(tx * TILE, ty * TILE, len * TILE, TILE, palette.ink);
-        const dir = padDirection(tile);
-        if (dir) {
-          for (let i = 0; i < len; i++) {
-            this.renderChevron(r, (tx + i) * TILE + TILE / 2, ty * TILE + TILE / 2, dir);
-          }
-        }
-      },
-    );
-  }
-
-  /**
-   * A pad is an `ink` slab like any other tile, plus two `paper` bars forming a
-   * chevron pointing the way it fires. One primitive, one code path, all four
-   * directions: the arms are the pad's direction rotated ±135°, so the whole
-   * thing follows from `padDirection` with no per-facing branch.
-   *
-   * THE STREAM DOES NOT REPLACE THIS, it is added beside it. `PAD_CHEVRON_WIDTH`
-   * got its value from counting pure pixels against a pad flush in a floor row,
-   * because the chevron is what makes a pad identifiable at a glance and AT
-   * REST. Sparks are transient by construction — they thin out when the pool is
-   * busy, and there are none at all on the frame a level loads. The slab plus
-   * the static arms are the pad's identity; the stream is its idle animation.
-   */
-  private renderChevron(
-    r: Renderer,
-    cx: number,
-    cy: number,
-    dir: { readonly dx: number; readonly dy: number },
-  ): void {
-    const tipX = cx + dir.dx * (PAD_CHEVRON_LEN * 0.35);
-    const tipY = cy + dir.dy * (PAD_CHEVRON_LEN * 0.35);
-    const base = Math.atan2(dir.dy, dir.dx);
-    for (const sweep of [(Math.PI * 3) / 4, (-Math.PI * 3) / 4]) {
-      const a = base + sweep;
-      r.rectRotated(
-        tipX + (Math.cos(a) * PAD_CHEVRON_LEN) / 2,
-        tipY + (Math.sin(a) * PAD_CHEVRON_LEN) / 2,
-        PAD_CHEVRON_LEN,
-        PAD_CHEVRON_WIDTH,
-        a,
-        palette.paper,
-      );
+    if (this.paused) {
+      this.renderPause(r);
     }
   }
 
@@ -425,15 +465,7 @@ export class PlayScene implements Scene {
   private renderGoal(r: Renderer): void {
     const { goal } = this.level;
     const size = TILE * (1 + Math.sin(this.clock * GOAL_PULSE_FREQ) * GOAL_PULSE_AMP);
-    r.rectRotatedOutline(
-      goal.tx * TILE + TILE / 2,
-      goal.ty * TILE + TILE / 2,
-      size,
-      size,
-      0,
-      palette.ink,
-      GOAL_OUTLINE_WIDTH,
-    );
+    drawGoal(r, goal.tx * TILE + TILE / 2, goal.ty * TILE + TILE / 2, size);
   }
 
   private renderHud(r: Renderer, game: Game): void {
@@ -442,14 +474,29 @@ export class PlayScene implements Scene {
     if (game.audio.muted) {
       r.text('MUTED', 16, VIEW_H - 24, palette.ink);
     }
-    if (this.state !== 'won') {
-      return;
+  }
+
+  /**
+   * Drawn AFTER the post pass, so the menu is crisp rather than wearing the
+   * chromatic aberration of whatever speed the frozen frame was carrying.
+   *
+   * The veil is **`paper`**, not `ink` — it is the background flooding back in
+   * over the frame, and the menu then reads in `ink` like text on every other
+   * screen in the game. `ink` here would be exactly backwards: in phase A ink is
+   * near-white, so the "dim" would wash a black frame to grey and leave the
+   * white geometry indistinguishable from it. That is the opposite of the
+   * DEATH fade, which is `ink` on purpose — fading toward the background is what
+   * the vignette already does, so a death dimmed that way would read as a speed
+   * effect rather than as dying.
+   */
+  private renderPause(r: Renderer): void {
+    r.rect(0, 0, VIEW_W, VIEW_H, palette.paperRgba(PAUSE_DIM), true);
+    r.textCentered('PAUSED', VIEW_W / 2, 150, palette.ink, 4);
+    for (let i = 0; i < PAUSE_ITEMS.length; i++) {
+      const y = 260 + i * 44;
+      const label = i === this.pauseIndex ? `> ${PAUSE_ITEMS[i]} <` : PAUSE_ITEMS[i];
+      r.textCentered(label, VIEW_W / 2, y, palette.ink, 3);
     }
-    // Shell placeholder, and it looks it. Phase 7's ResultsScene replaces it.
-    r.textCentered('COMPLETE', VIEW_W / 2, VIEW_H / 2 - 40, palette.ink, 4);
-    r.textCentered(formatTime(this.finishedMs), VIEW_W / 2, VIEW_H / 2 + 10, palette.ink, 3);
-    const best = this.isNewBest ? 'NEW BEST' : `BEST ${formatTime(this.previousBestMs ?? 0)}`;
-    r.textCentered(best, VIEW_W / 2, VIEW_H / 2 + 50, palette.ink, 2);
   }
 }
 

@@ -4,7 +4,9 @@ Minimalist momentum platformer: a rigid-body square with real corner collision, 
 
 The design source of truth is `docs/GAME-DESIGN.md`. Read it before writing code. The build plan and current phase status are in `docs/PHASES.md`.
 
-> **This repo is mid-overhaul.** It was Pixel Quest — a procedural dungeon platformer with co-op and a daily challenge — until phase 1 of the plan in `docs/PHASES.md`. Anything in `src/` that the design doc doesn't mention is scheduled for deletion in phase 2, not something to preserve, extend, or work around. When old and new disagree, the design doc wins.
+> **The overhaul is complete.** This repo was Pixel Quest — a procedural dungeon platformer with co-op and a daily challenge — until the seven-phase plan in `docs/PHASES.md`, which finished at phase 7. Nothing of the old build survives in `src/`; it is in git history before `d7a54ff` if you need it. When the docs and the code disagree, the code is what shipped and the doc is the bug — `ARCHITECTURE.md` and `PHYSICS.md` were refreshed from as-built code at the end of phase 7, and each phase's *As built* section records where the plan was wrong.
+>
+> **The work from here is levels**, authored in the in-game editor (`E` from the title). That is what phase 7 built the tool for. `docs/GAME-DESIGN.md` §11 lists what is deliberately out of scope for 0.2, including the final level's colour ending, which is designed and intentionally unbuilt.
 
 ## Commands
 
@@ -16,11 +18,11 @@ The design source of truth is `docs/GAME-DESIGN.md`. Read it before writing code
 ## Layout
 
 - `src/constants.ts` — ALL tuning numbers, commented with units (px/s, rad/s, tiles, seconds). Append your phase's constants here; never scatter magic numbers.
-- `src/engine/` — platform-level utilities: rng, input, font, palette, renderer, audio, save, particles.
+- `src/engine/` — platform-level utilities: rng, input, font, palette, renderer, audio, save, particles, levelio.
 - `src/world/` — tiles, obb (pure geometry), physics (rigid-body solver), level (parse/validate/serialise), camera.
 - `src/entities/player.ts` — the controller. The only entity.
-- `src/scenes/` — title, level select, play, results, editor.
-- `src/editor/` — pure grid model: paint, resize, undo, validation.
+- `src/scenes/` — title, levelselect, play, results, editor, plus `menu.ts` (one shared vertical menu) and `tiledraw.ts` (the draws play and the editor share).
+- `src/editor/` — pure grid model over `readonly string[]`: paint, flood, resize, stroke-scoped undo, warnings.
 - `src/levels/` — hand-authored level JSON, one file per level.
 - `src/game.ts` — fixed-timestep loop + scene management. `src/main.ts` — browser bootstrap.
 - `tests/` — vitest unit tests, node environment (no DOM).
@@ -28,7 +30,7 @@ The design source of truth is `docs/GAME-DESIGN.md`. Read it before writing code
 ## Hard rules
 
 1. **No new dependencies. No binary assets.** Levels are JSON grids, audio is synthesised WebAudio, the font is a 5×7 bitmap, and the art is two hex values.
-2. **Logic must be node-safe.** Game logic modules must not touch `document`/`window`/canvas/AudioContext at import time or in logic paths — that's what makes them unit-testable. Only `main.ts`, `engine/renderer.ts`, `engine/audio.ts`, and `Input.attach()` may touch browser APIs, and even those must be importable in node (guard access, don't execute it at import).
+2. **Logic must be node-safe.** Game logic modules must not touch `document`/`window`/canvas/AudioContext at import time or in logic paths — that's what makes them unit-testable. Only `main.ts`, `engine/renderer.ts`, `engine/audio.ts`, `engine/levelio.ts` (guarded fetch/storage/clipboard) and `Input.attach()` may touch browser APIs, and even those must be importable in node (guard access, don't execute it at import). **`Input.attach` owns the pointer**, and converts it to view space via `screenToView` on the way in — which is what lets `EditorScene` unit-test with the mouse included.
 3. **All randomness goes through `engine/rng.ts` (`Rng` class).** Never `Math.random()` in game logic — it would break the physics determinism test. (`Math.random` is tolerable for pure cosmetics like particle jitter, but prefer a fixed-seed `Rng` even there, so visual variation can never perturb the simulation.)
 4. **Strict TypeScript.** No `any`, no default exports, no file extensions in imports, single quotes, semicolons, 2-space indent.
 5. **Determinism:** the physics is reproducible. Same start state + same input sequence ⇒ bit-identical trajectory. Fixed timestep only; no wall-clock reads on a logic path. Guard this with tests.

@@ -4,6 +4,7 @@
  */
 
 import { Game } from './game';
+import { EditorScene, draftFromSave } from './scenes/editor';
 import { TitleScene } from './scenes/title';
 
 declare global {
@@ -15,7 +16,7 @@ declare global {
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const game = new Game(canvas);
-game.input.attach(window);
+game.input.attach(window, canvas);
 
 // Refit only on real size changes. A ResizeObserver on the root element also
 // fires once immediately, which covers embedded panes that lay out after load
@@ -45,6 +46,13 @@ window.addEventListener('keydown', (e: KeyboardEvent) => {
   }
 });
 
-game.setScene(new TitleScene());
+// `?editor=1` boots straight into the editor (GAME-DESIGN §10), onto the
+// autosaved draft if there is one. It is also phase 6's flagged autoplay trap:
+// the AudioContext is suspended until a gesture, and the editor is silent
+// anyway, so the first playtest is what has to resync onto the grid.
+const wantsEditor = new URLSearchParams(window.location.search).get('editor') === '1';
+game.setScene(
+  wantsEditor ? new EditorScene(draftFromSave(game.save) ?? undefined) : new TitleScene(),
+);
 game.start();
 window.__bw = { game };
