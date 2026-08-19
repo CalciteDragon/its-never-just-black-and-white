@@ -52,6 +52,12 @@ export interface Level {
    * not rescan the grid every frame. Row-major order.
    */
   readonly pads: readonly PadRef[];
+  /**
+   * Flip pickup positions, row-major. A list for the same reason `pads` is one:
+   * `PlayScene` carries a collected/respawning state per pickup, and indices
+   * into a stable list are what let it do that without a second grid.
+   */
+  readonly pickups: readonly TilePos[];
 }
 
 export type ParseResult = { ok: true; level: Level } | { ok: false; errors: string[] };
@@ -59,9 +65,17 @@ export type ParseResult = { ok: true; level: Level } | { ok: false; errors: stri
 /** The two metadata markers. Both sit on a cell that parses as `Tile.Empty`. */
 const SPAWN_CHAR = 'S';
 const GOAL_CHAR = 'G';
+/**
+ * The flip pickup. Metadata on an empty cell like the markers, and for the same
+ * reason: **nothing collides with it**, so it is not a tile. Making it one would
+ * mean `isBlocking` growing an exception, the broadphase asking "but is this one
+ * blocking?" at every tile it tests, and a physics change to add a thing that
+ * has no physics. Unlike the markers there may be any number of them.
+ */
+const PICKUP_CHAR = 'o';
 
 /** Quoted verbatim in the unknown-character message, in §8's table order. */
-const LEGAL_CHARS = '. # ^ v < > S G';
+const LEGAL_CHARS = '. # ^ v < > o S G';
 
 /** For error messages: `typeof` with the two cases it gets wrong spelled out. */
 function typeName(v: unknown): string {
@@ -143,6 +157,8 @@ export function validateLevel(rows: unknown): string[] {
         spawns++;
       } else if (ch === GOAL_CHAR) {
         goals++;
+      } else if (ch === PICKUP_CHAR) {
+        // Legal in any number, including none. There is nothing to count.
       } else if (tileFromChar(ch) === null) {
         errors.push(
           `unknown character "${ch}" at row ${ty}, column ${tx} (both 0-based): ` +
@@ -215,6 +231,7 @@ export function parseLevel(raw: unknown): ParseResult {
   const w = list[0].length;
   const map = new TileMap(w, h);
   const pads: PadRef[] = [];
+  const pickups: TilePos[] = [];
   // Both are reassigned in the loop — validation guarantees exactly one of each.
   let spawn: TilePos = { tx: 0, ty: 0 };
   let goal: TilePos = { tx: 0, ty: 0 };
@@ -231,6 +248,10 @@ export function parseLevel(raw: unknown): ParseResult {
         goal = { tx, ty };
         continue;
       }
+      if (ch === PICKUP_CHAR) {
+        pickups.push({ tx, ty }); // the cell stays Tile.Empty: nothing collides
+        continue;
+      }
       const tile = tileFromChar(ch);
       if (tile === null || tile === Tile.Empty) {
         continue; // The map is already filled with Empty.
@@ -242,7 +263,7 @@ export function parseLevel(raw: unknown): ParseResult {
     }
   }
 
-  return { ok: true, level: { id, name, map, spawn, goal, pads } };
+  return { ok: true, level: { id, name, map, spawn, goal, pads, pickups } };
 }
 
 /**
@@ -281,6 +302,13 @@ export function levelRows(level: Level): string[] {
     const row: string[] = [];
     for (let tx = 0; tx < map.w; tx++) {
       row.push(charFromTile(map.get(tx, ty)));
+    }
+    // Pickups first, so a marker sharing a cell with one still wins — the same
+    // precedence the parser reads them in, and the format cannot express both.
+    for (const pk of level.pickups) {
+      if (pk.ty === ty && pk.tx >= 0 && pk.tx < map.w) {
+        row[pk.tx] = PICKUP_CHAR;
+      }
     }
     if (ty === spawn.ty && spawn.tx >= 0 && spawn.tx < map.w) {
       row[spawn.tx] = SPAWN_CHAR;

@@ -19,6 +19,8 @@ import {
   GOAL_OUTLINE_WIDTH,
   PAD_CHEVRON_LEN,
   PAD_CHEVRON_WIDTH,
+  PICKUP_CORE_FRACTION,
+  PICKUP_SPENT_ALPHA,
   PLAYER_CORE_INSET,
   PLAYER_SIZE,
   TILE,
@@ -99,6 +101,33 @@ export function drawTileRuns(r: Renderer, map: TileMap, viewX: number, viewY: nu
  */
 export function drawGoal(r: Renderer, cx: number, cy: number, size: number, ui = false): void {
   r.rectRotatedOutline(cx, cy, size, size, 0, palette.ink, GOAL_OUTLINE_WIDTH, ui);
+}
+
+/**
+ * A flip pickup: a diamond with a `paper` core, which is the player's own charge
+ * tell rotated 45°. That is the whole of the visual argument — the thing you
+ * collect looks like the thing it gives you, and a player who has learned to
+ * read a solid core as "you may flip" needs no second lesson.
+ *
+ * `ready = false` draws the afterimage instead: the outline alone, faint, so a
+ * player who has just spent one can see where it will come back. Drawn in
+ * `ink` at an alpha, never in a third colour.
+ */
+export function drawPickup(
+  r: Renderer,
+  cx: number,
+  cy: number,
+  size: number,
+  ready: boolean,
+  ui = false,
+): void {
+  const turn = Math.PI / 4;
+  if (!ready) {
+    r.rectRotatedOutline(cx, cy, size, size, turn, palette.inkRgba(PICKUP_SPENT_ALPHA), 2, ui);
+    return;
+  }
+  r.rectRotated(cx, cy, size, size, turn, palette.ink, ui);
+  r.rectRotated(cx, cy, size * PICKUP_CORE_FRACTION, size * PICKUP_CORE_FRACTION, turn, palette.paper, ui);
 }
 
 /**

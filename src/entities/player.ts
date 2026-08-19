@@ -159,6 +159,22 @@ export class Player {
   }
 
   /**
+   * Hand the flip back. The one way anything outside the controller may do it —
+   * `PlayScene`'s pickups — so "what recharges" stays a list of two things
+   * (a contact, a pickup) rather than a writable field.
+   *
+   * Returns whether it was actually spent, so a caller can tell a collection
+   * from a body drifting through a pickup it had no use for.
+   */
+  recharge(): boolean {
+    if (this.charged) {
+      return false;
+    }
+    this.charged = true;
+    return true;
+  }
+
+  /**
    * Place the player's CENTRE at (cx, cy), at rest, square to the world, in
    * phase A gravity with the flip recharged.
    *

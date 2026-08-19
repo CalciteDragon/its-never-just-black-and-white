@@ -15,6 +15,7 @@ import {
   GOAL_HOLD,
   PAD_STREAM_INTERVAL,
   PAD_STREAM_LIFE,
+  PICKUP_RESPAWN,
   SPEED_REF,
   SPEED_WINDUP_DELAY,
   SPEED_WINDUP_MIN,
@@ -838,5 +839,107 @@ describe('PLAY ON A LEVEL OF ANY SIZE', () => {
       return { x: s.x, y: s.y, vx: s.vx, vy: s.vy };
     };
     expect(runOnce()).toEqual(runOnce());
+  });
+});
+
+describe('flip pickups', () => {
+  /**
+   * The flip is the only thing that can spend a charge, and anything the body
+   * lands on hands it straight back — so a pickup can only be *seen* to
+   * recharge while the body is still in the air. This stage is a shaft: flip on
+   * the spawn, rise through the pickup two rows up, and come to rest on the
+   * ceiling. Every claim about a spent flip is read mid-flight.
+   */
+  const SHAFT = [
+    '##########',
+    '..........',
+    '..o.......',
+    '..........',
+    '..S......G',
+    '##########',
+  ];
+  /** The same shaft with nothing to collect, for the trajectory comparison. */
+  const BARE_SHAFT = SHAFT.map((row) => row.replace('o', '.'));
+  /** A flat walk into a pickup, for the cases that need no flip at all. */
+  const WALK = ['..........', '..So.....G', '##########'];
+
+  /** Walk right for `n` steps, the way a held key actually arrives. */
+  function walk(h: Harness, scene: PlayScene, n: number): void {
+    h.input.onKey('ArrowRight', true);
+    step(h, scene, n);
+    h.input.onKey('ArrowRight', false);
+    step(h, scene);
+  }
+
+  it('recharges a spent flip on contact', () => {
+    const { h, scene } = start(tinyLevel(SHAFT));
+    tap(h, scene, 'Space'); // spend it: gravity now points up
+    expect(scene.status.flipCharged).toBe(false);
+    let recharged = false;
+    for (let i = 0; i < 20 && !recharged; i++) {
+      step(h, scene);
+      recharged = scene.status.flipCharged;
+      // Mid-flight, so nothing but the pickup can be responsible.
+      expect(scene.status.vy).toBeLessThan(0);
+    }
+    expect(recharged).toBe(true);
+    expect(h.audio.calls).toContain('sfx:pickup');
+    expect(scene.status.pickupsReady).toBe(0);
+  });
+
+  it('IS NOT COLLIDED WITH: the trajectory through one is bit-identical', () => {
+    // The whole difference between this and a pad. The same inputs through the
+    // same shaft with and without the pickup in it: the only thing that may
+    // differ is the charge.
+    const withIt = start(tinyLevel(SHAFT));
+    const without = start(tinyLevel(BARE_SHAFT));
+    for (const { h, scene } of [withIt, without]) {
+      tap(h, scene, 'Space');
+      step(h, scene, 10);
+    }
+    expect(withIt.scene.status.x).toBe(without.scene.status.x);
+    expect(withIt.scene.status.y).toBe(without.scene.status.y);
+    expect(withIt.scene.status.vx).toBe(without.scene.status.vx);
+    expect(withIt.scene.status.vy).toBe(without.scene.status.vy);
+    expect(withIt.scene.status.flipCharged).toBe(true);
+    expect(without.scene.status.flipCharged).toBe(false);
+  });
+
+  it('is not spent on a player who had nothing to gain', () => {
+    // Spent only when it actually gives something back, so a line run with the
+    // flip in hand leaves the pickup standing for the way back.
+    const { h, scene } = start(tinyLevel(WALK));
+    walk(h, scene, 30);
+    expect(scene.status.pickupsReady).toBe(1);
+    expect(h.audio.calls).not.toContain('sfx:pickup');
+  });
+
+  it('comes back after PICKUP_RESPAWN, and not before', () => {
+    const { h, scene } = start(tinyLevel(SHAFT));
+    tap(h, scene, 'Space');
+    step(h, scene, 12);
+    expect(scene.status.pickupsReady).toBe(0);
+    step(h, scene, Math.floor(PICKUP_RESPAWN / STEP) - 20);
+    expect(scene.status.pickupsReady).toBe(0);
+    step(h, scene, 24);
+    expect(scene.status.pickupsReady).toBe(1);
+  });
+
+  it('a respawn puts every pickup back', () => {
+    // Death shares one reset with R, and "a reset that forgets one field" is
+    // how the second attempt comes to play differently from the first.
+    const { h, scene } = start(tinyLevel(SHAFT));
+    tap(h, scene, 'Space');
+    step(h, scene, 12);
+    expect(scene.status.pickupsReady).toBe(0);
+    tap(h, scene, 'KeyR');
+    expect(scene.status.pickupsReady).toBe(1);
+  });
+
+  it('a level with no pickups behaves exactly as before', () => {
+    const { h, scene } = start(tinyLevel(['..........', '..S......G', '##########']));
+    walk(h, scene, 30);
+    expect(scene.status.pickupsReady).toBe(0);
+    expect(h.audio.calls).not.toContain('sfx:pickup');
   });
 });

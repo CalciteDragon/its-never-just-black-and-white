@@ -44,6 +44,7 @@ export type SfxName =
   | 'land'
   | 'flip'
   | 'pad'
+  | 'pickup'
   | 'goal'
   | 'death'
   | 'menuMove'
@@ -348,6 +349,16 @@ const RECIPES: Record<SfxName, readonly SfxNote[]> = {
   pad: [
     { kind: 'noise', f0: 400, f1: 3000, dur: 0.12, vol: 0.14, at: 0, send: 0.4 },
     { kind: 'triangle', f0: 220, f1: 900, dur: 0.16, vol: 0.12, at: 0, send: 0.4 },
+  ],
+  /**
+   * A flip handed back: two rising sines, quiet and quick. Deliberately the
+   * goal's shape at a third of its length and none of its weight - collecting
+   * one is a small good thing that happens mid-line, and the level's one
+   * arrival has to stay the only sound that resolves.
+   */
+  pickup: [
+    { kind: 'sine', f0: 784, f1: 784, dur: 0.05, vol: 0.09, at: 0, send: 0.35 },
+    { kind: 'sine', f0: 1175, f1: 1175, dur: 0.07, vol: 0.08, at: 0.05, send: 0.35 },
   ],
   goal: [
     { kind: 'sine', f0: 523, f1: 523, dur: 0.12, vol: 0.14, at: 0, send: 0.6 },

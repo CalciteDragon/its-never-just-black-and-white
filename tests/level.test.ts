@@ -427,3 +427,41 @@ describe('levels of arbitrary size', () => {
     roundTrip('tall', gridOf(3, 200));
   });
 });
+
+describe('flip pickups', () => {
+  const ROWS: readonly string[] = ['..........', '.S..o..oG.', '##########'];
+
+  it('parses as metadata on an EMPTY cell, like the two markers', () => {
+    const res = parseLevel({ id: 'p', name: 'P', rows: ROWS });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    // The tile enum does not grow: a pickup is not collidable, and a solver
+    // that had to ask "but is this one blocking?" per tile is the version of
+    // this feature that changes the physics.
+    expect(res.level.map.get(4, 1)).toBe(Tile.Empty);
+    expect(res.level.pickups).toEqual([
+      { tx: 4, ty: 1 },
+      { tx: 7, ty: 1 },
+    ]);
+  });
+
+  it('is legal in any number, unlike S and G', () => {
+    expect(validateLevel(['SG', 'oo'])).toEqual([]);
+    expect(validateLevel(['SG', '..'])).toEqual([]);
+  });
+
+  it('round-trips through serialise and back', () => {
+    const res = parseLevel({ id: 'p', name: 'P', rows: ROWS });
+    if (!res.ok) {
+      throw new Error(res.errors.join('; '));
+    }
+    expect(levelRows(res.level)).toEqual(ROWS);
+    const again = parseLevel(JSON.parse(serializeLevel(res.level)));
+    expect(again.ok).toBe(true);
+    if (again.ok) {
+      expect(again.level.pickups).toEqual(res.level.pickups);
+    }
+  });
+});

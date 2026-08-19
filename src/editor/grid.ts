@@ -32,20 +32,58 @@
 import { EDITOR_MAX_H, EDITOR_MAX_W, EDITOR_UNDO_MAX } from '../constants';
 
 /**
- * What an author paints: GAME-DESIGN §8's six grid characters plus the two
- * markers. **Eight, not §10's "1–7"** — six is the tile enum and eight is the
- * palette; seven is neither. §10 amended in phase 7.
+ * What an author paints: GAME-DESIGN §8's six grid characters, the flip pickup,
+ * and the two markers. **Nine, not §10's "1–7"** — six is the tile enum and nine
+ * is the palette; seven is neither. §10 amended in phase 7, and again after 0.2
+ * when the pickup arrived: `o` is a cell an author paints and a character in
+ * the format, but it is not a tile, because nothing collides with it.
  */
-export const GRID_CHARS: readonly string[] = ['.', '#', '^', 'v', '<', '>', 'S', 'G'];
+export const GRID_CHARS: readonly string[] = ['.', '#', '^', 'v', '<', '>', 'o', 'S', 'G'];
 
 /** The empty cell, and what an erase paints. */
 export const EMPTY_CHAR = '.';
 /** The two singletons. Everything special about them is in this one pair. */
 export const SPAWN_CHAR = 'S';
 export const GOAL_CHAR = 'G';
+/** The flip pickup. Ordinary in every way except that it is not geometry. */
+export const PICKUP_CHAR = 'o';
 
 /** The four edges a resize can move. */
 export type Edge = 'left' | 'right' | 'top' | 'bottom';
+
+/** An inclusive rectangle of cells, in grid coordinates. */
+export interface CellRect {
+  readonly x0: number;
+  readonly y0: number;
+  readonly x1: number;
+  readonly y1: number;
+}
+
+/**
+ * Two corners in any order → an inclusive rectangle clipped to a `w × h` grid,
+ * or null if it misses the grid entirely.
+ *
+ * Pure, and exported, because BOTH the model's rectangle tools and the scene's
+ * selection need it: the scene keeps and draws a rectangle the model never
+ * sees, and two implementations of "is this corner inside" is one rounding rule
+ * away from a selection that does not describe the cells it fills.
+ */
+export function clipRect(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  w: number,
+  h: number,
+): CellRect | null {
+  const lo = (a: number, b: number): number => Math.floor(Math.min(a, b));
+  const hi = (a: number, b: number): number => Math.floor(Math.max(a, b));
+  const rx0 = Math.max(0, lo(x0, x1));
+  const ry0 = Math.max(0, lo(y0, y1));
+  const rx1 = Math.min(w - 1, hi(x0, x1));
+  const ry1 = Math.min(h - 1, hi(y0, y1));
+  return rx0 > rx1 || ry0 > ry1 ? null : { x0: rx0, y0: ry0, x1: rx1, y1: ry1 };
+}
 
 /** Pad character → the cell it fires into, in canvas orientation (−y is up). */
 const PAD_FACINGS: Readonly<Record<string, { readonly dx: number; readonly dy: number }>> = {
@@ -173,7 +211,10 @@ export function gridWarnings(rows: readonly string[]): string[] {
       return true;
     }
     const ch = row[tx];
-    return ch !== EMPTY_CHAR && !isMarker(ch);
+    // A pickup is as blocking as an empty cell, which is to say not at all: a
+    // pad pointed at one is a pad pointed at open air with something to collect
+    // in it, and warning about that would train an author to ignore the panel.
+    return ch !== EMPTY_CHAR && ch !== PICKUP_CHAR && !isMarker(ch);
   };
 
   for (let ty = 0; ty < h; ty++) {
@@ -464,7 +505,7 @@ export class EditorGrid {
       });
       return moved;
     }
-    const r = this.clipRect(x0, y0, x1, y1);
+    const r = clipRect(x0, y0, x1, y1, this.w, this.h);
     if (r === null) {
       return false;
     }
@@ -497,7 +538,7 @@ export class EditorGrid {
    * brush. Anything that lands off the grid is dropped, not wrapped.
    */
   moveRect(x0: number, y0: number, x1: number, y1: number, dx: number, dy: number): boolean {
-    const r = this.clipRect(x0, y0, x1, y1);
+    const r = clipRect(x0, y0, x1, y1, this.w, this.h);
     const ox = Math.trunc(dx);
     const oy = Math.trunc(dy);
     if (r === null || (ox === 0 && oy === 0)) {
@@ -512,6 +553,15 @@ export class EditorGrid {
       for (let tx = r.x0; tx <= r.x1; tx++) {
         lifted.push(this.charAt(tx, ty));
       }
+    }
+    // REFUSED WHOLE if a marker could not be put back down. The lift erases and
+    // the stamp is allowed to refuse, so without this the one thing this model
+    // promises — a marker can be relocated but never destroyed — would be one
+    // drag off the edge away from being false. Refusing the move outright beats
+    // clamping the marker to the edge, which would silently move a spawn
+    // somewhere the author did not point at.
+    if (!this.markersSurvive(r, lifted, ox, oy)) {
+      return false;
     }
     this.atomic(() => {
       for (let ty = r.y0; ty <= r.y1; ty++) {
@@ -530,23 +580,30 @@ export class EditorGrid {
   }
 
   /**
-   * Two corners in any order → an inclusive rectangle clipped to the grid, or
-   * null if it misses the grid entirely. Shared by the two rectangle tools so
-   * they cannot disagree about whether a corner is inside.
+   * Could every marker in a lifted region be stamped back down? A destination
+   * is judged AFTER the lift, so sliding a region along by one is not a
+   * collision with its own old contents.
    */
-  private clipRect(
-    x0: number,
-    y0: number,
-    x1: number,
-    y1: number,
-  ): { x0: number; y0: number; x1: number; y1: number } | null {
-    const lo = (a: number, b: number): number => Math.floor(Math.min(a, b));
-    const hi = (a: number, b: number): number => Math.floor(Math.max(a, b));
-    const rx0 = Math.max(0, lo(x0, x1));
-    const ry0 = Math.max(0, lo(y0, y1));
-    const rx1 = Math.min(this.w - 1, hi(x0, x1));
-    const ry1 = Math.min(this.h - 1, hi(y0, y1));
-    return rx0 > rx1 || ry0 > ry1 ? null : { x0: rx0, y0: ry0, x1: rx1, y1: ry1 };
+  private markersSurvive(r: CellRect, lifted: readonly string[], ox: number, oy: number): boolean {
+    let i = 0;
+    for (let ty = r.y0; ty <= r.y1; ty++) {
+      for (let tx = r.x0; tx <= r.x1; tx++) {
+        const ch = lifted[i++];
+        if (!isMarker(ch)) {
+          continue;
+        }
+        const dx = tx + ox;
+        const dy = ty + oy;
+        if (dy < 0 || dy >= this.grid.length || dx < 0 || dx >= this.grid[dy].length) {
+          return false;
+        }
+        const inRegion = dx >= r.x0 && dx <= r.x1 && dy >= r.y0 && dy <= r.y1;
+        if (!inRegion && isMarker(this.charAt(dx, dy))) {
+          return false;
+        }
+      }
+    }
+    return true;
   }
 
   /**
@@ -707,8 +764,20 @@ export class EditorGrid {
     this.redoStack.length = 0;
   }
 
+  /**
+   * The only write. Bounds-checked against THIS row rather than against `w`,
+   * because a draft off a previous session's browser can be ragged and
+   * `row.slice(0, tx) + ch` past the end would lengthen the row rather than
+   * refuse — turning a bad grid into a differently bad grid.
+   */
   private writeChar(tx: number, ty: number, ch: string): void {
+    if (ty < 0 || ty >= this.grid.length) {
+      return;
+    }
     const row = this.grid[ty];
+    if (tx < 0 || tx >= row.length) {
+      return;
+    }
     this.grid[ty] = row.slice(0, tx) + ch + row.slice(tx + 1);
   }
 

@@ -31,6 +31,7 @@ import {
   EDITOR_ZOOM_STEPS,
   PAD_CHEVRON_LEN,
   PAD_CHEVRON_WIDTH,
+  PICKUP_SIZE,
   TILE,
   VIEW_H,
   VIEW_W,
@@ -38,12 +39,17 @@ import {
 import {
   EMPTY_CHAR,
   EditorGrid,
+  GOAL_CHAR,
   GRID_CHARS,
+  PICKUP_CHAR,
+  SPAWN_CHAR,
   blankRows,
+  clipRect,
   forEachCharRun,
   gridWarnings,
   parseSizeInput,
 } from '../editor/grid';
+import type { CellRect } from '../editor/grid';
 import { measureText } from '../engine/font';
 import { MOUSE_LEFT, MOUSE_MIDDLE, MOUSE_RIGHT } from '../engine/input';
 import { saveLevel } from '../engine/levelio';
@@ -57,7 +63,7 @@ import { levelRows, parseLevel, validateLevel } from '../world/level';
 import type { Level } from '../world/level';
 import { Tile, padDirection, tileFromChar } from '../world/tiles';
 import { PlayScene } from './play';
-import { drawChevron, drawGoal, drawSpawn } from './tiledraw';
+import { drawChevron, drawGoal, drawPickup, drawSpawn } from './tiledraw';
 import { TitleScene } from './title';
 
 /** A level as the editor holds it: §8's on-disk shape, and nothing else. */
@@ -82,14 +88,6 @@ type Mode = 'paint' | 'id' | 'name' | 'size';
  */
 export type Tool = 'brush' | 'rect' | 'select';
 
-/** An inclusive rectangle of cells, in grid coordinates. */
-export interface CellRect {
-  readonly x0: number;
-  readonly y0: number;
-  readonly x1: number;
-  readonly y1: number;
-}
-
 /**
  * A pointer drag in progress. ONE field for all four kinds, because the bugs
  * in a drag are the ones where two of them are half-live at once — a rectangle
@@ -102,6 +100,12 @@ interface DragState {
   readonly button: number;
   readonly ax: number;
   readonly ay: number;
+  /**
+   * `grid.undoDepth` when the drag opened. A brush commits per frame, so this
+   * is the only way to tell a cancelled stroke that painted something from one
+   * that did not — and undoing without it would pop somebody else's snapshot.
+   */
+  readonly depth: number;
   cx: number;
   cy: number;
 }
@@ -172,6 +176,9 @@ export class EditorScene implements Scene {
 
   /** Grid, undo stack and view survive a playtest, because the scene does. */
   enter(game: Game): void {
+    // Belt and braces for the playtest round trip: whatever the pointer was
+    // doing when the level was handed over, it is not doing it now.
+    this.cancelDrag();
     // Silence, like every screen that is not play. A bed under an editor would
     // be scored to the wrong activity entirely.
     game.audio.stopMusic();
@@ -265,9 +272,11 @@ export class EditorScene implements Scene {
     // return, or a slip while reaching for Ctrl+Z silently switches the tool.
     if (input.ctrlDown) {
       if (input.codePressed('KeyZ')) {
+        this.selection = null; // the cells it named may have just moved back
         this.afterEdit(game, this.grid.undo() ? 'UNDO' : 'NOTHING TO UNDO');
       }
       if (input.codePressed('KeyY')) {
+        this.selection = null;
         this.afterEdit(game, this.grid.redo() ? 'REDO' : 'NOTHING TO REDO');
       }
       if (input.codePressed('KeyS')) {
@@ -330,6 +339,7 @@ export class EditorScene implements Scene {
 
   private resize(game: Game, edge: 'left' | 'right' | 'top' | 'bottom', delta: number): void {
     this.grid.resize(edge, delta);
+    this.selection = null; // it named cells that may not exist any more
     this.afterEdit(game, `${this.grid.w} X ${this.grid.h}`);
   }
 
@@ -352,6 +362,10 @@ export class EditorScene implements Scene {
   // drawn by a font with no lowercase glyphs. ---
 
   private beginTextEntry(mode: 'id' | 'name' | 'size'): void {
+    // A field swallows every key including the release edge of a drag, so the
+    // drag has to end here rather than be left for a pointer-up that the field
+    // will never let through.
+    this.cancelDrag();
     this.mode = mode;
     // The size field opens on the CURRENT size rather than empty, so the
     // common edit — one dimension, the other left alone — is a backspace or
@@ -423,6 +437,7 @@ export class EditorScene implements Scene {
         return;
       }
       const changed = this.grid.setSize(size.w, size.h);
+      this.selection = null;
       this.mode = 'paint';
       // `afterEdit` either way: an unchanged size still owes the author a
       // status line saying what the size actually is.
@@ -543,30 +558,58 @@ export class EditorScene implements Scene {
   /** Open a drag of whichever kind the current tool means by this button. */
   private beginDrag(button: number, game: Game): void {
     const [tx, ty] = this.cellUnderPointer(game);
+    const depth = this.grid.undoDepth;
     if (this.tool === 'brush') {
       // The stroke opens on the grid too, because the brush is the one tool
       // that edits per frame and so needs its undo snapshot taken up front.
       this.grid.beginStroke();
-      this.drag = { kind: 'brush', button, ax: tx, ay: ty, cx: tx, cy: ty };
+      this.drag = { kind: 'brush', button, ax: tx, ay: ty, depth, cx: tx, cy: ty };
       return;
     }
     if (this.tool === 'rect') {
-      this.drag = { kind: 'rect', button, ax: tx, ay: ty, cx: tx, cy: ty };
+      this.drag = { kind: 'rect', button, ax: tx, ay: ty, depth, cx: tx, cy: ty };
       return;
     }
     // Select: a press INSIDE the selection picks it up, and anywhere else marks
     // out a new one. Same button, and the difference is where you pressed -
     // which is the one convention every editor with a marquee already shares.
     const inside = this.selection !== null && containsCell(this.selection, tx, ty);
-    this.drag = { kind: inside ? 'move' : 'select', button, ax: tx, ay: ty, cx: tx, cy: ty };
+    this.drag = {
+      kind: inside ? 'move' : 'select',
+      button,
+      ax: tx,
+      ay: ty,
+      depth,
+      cx: tx,
+      cy: ty,
+    };
   }
 
-  /** Tear down a drag without committing it. Esc, and a tool change mid-drag. */
+  /**
+   * Tear down a drag without committing it — Esc, a tool change, a text field,
+   * a playtest, and re-entering the scene on the way back from one.
+   *
+   * **A brush stroke is rolled back, not merely closed.** It commits per frame,
+   * so "cancelled" with the painted cells still there is a lie; the snapshot
+   * it pushed is the stroke's own, and `depth` is how we know it pushed one
+   * rather than undoing somebody else's edit.
+   *
+   * Every path that can eat the pointer release has to call this, because the
+   * per-frame paint is guarded by the drag being open and not by the button
+   * still being down: a drag left open paints on hover for the rest of the
+   * session.
+   */
   private cancelDrag(): void {
-    if (this.drag !== null && this.drag.kind === 'brush') {
-      this.grid.endStroke();
-    }
+    const d = this.drag;
     this.drag = null;
+    if (d === null || d.kind !== 'brush') {
+      return;
+    }
+    this.grid.endStroke();
+    if (this.grid.undoDepth > d.depth) {
+      this.grid.undo();
+      this.revalidate();
+    }
   }
 
   /** The release. Every tool's actual edit happens here except the brush's. */
@@ -581,15 +624,18 @@ export class EditorScene implements Scene {
       this.afterEdit(game, this.status);
       return;
     }
+    // The CLIPPED rectangle in both cases, so a drag that ran off the edge
+    // reports the size it actually filled rather than the size of the gesture.
+    const rc = clipRect(d.ax, d.ay, d.cx, d.cy, this.grid.w, this.grid.h);
     if (d.kind === 'rect') {
       const ch = d.button === MOUSE_RIGHT ? EMPTY_CHAR : GRID_CHARS[this.sel];
       const changed = this.grid.fillRect(d.ax, d.ay, d.cx, d.cy, ch);
-      this.afterEdit(game, changed ? `RECT ${spanOf(d)}` : 'RECT CHANGED NOTHING');
+      this.afterEdit(game, changed ? `RECT ${spanOf(rc)}` : 'RECT CHANGED NOTHING');
       return;
     }
     if (d.kind === 'select') {
-      this.selection = clipRect(d.ax, d.ay, d.cx, d.cy, this.grid.w, this.grid.h);
-      this.status = this.selection === null ? 'NOTHING SELECTED' : `SELECTED ${spanOf(d)}`;
+      this.selection = rc;
+      this.status = rc === null ? 'NOTHING SELECTED' : `SELECTED ${spanOf(rc)}`;
       return;
     }
     const sel = this.selection;
@@ -599,12 +645,22 @@ export class EditorScene implements Scene {
     const dx = d.cx - d.ax;
     const dy = d.cy - d.ay;
     if (!this.grid.moveRect(sel.x0, sel.y0, sel.x1, sel.y1, dx, dy)) {
+      // Either nothing moved, or the model refused a move that would have
+      // destroyed a marker. Both are "the grid is as you left it".
       this.status = 'MOVED NOTHING';
       return;
     }
     // The selection travels with what it moved, so a block can be dragged twice
-    // running without being marked out again.
-    this.selection = { x0: sel.x0 + dx, y0: sel.y0 + dy, x1: sel.x1 + dx, y1: sel.y1 + dy };
+    // running without being marked out again — CLIPPED, because the cells that
+    // fell off the edge are not part of what is now selected.
+    this.selection = clipRect(
+      sel.x0 + dx,
+      sel.y0 + dy,
+      sel.x1 + dx,
+      sel.y1 + dy,
+      this.grid.w,
+      this.grid.h,
+    );
     this.afterEdit(game, `MOVED ${dx} ${dy}`);
   }
 
@@ -740,6 +796,8 @@ export class EditorScene implements Scene {
   }
 
   private playtest(game: Game): void {
+    // Same reason as `beginTextEntry`: the release happens in another scene.
+    this.cancelDrag();
     const res = parseLevel({ id: this.id, name: this.name, rows: this.grid.rows });
     if (!res.ok) {
       this.status = res.errors[0];
@@ -809,9 +867,13 @@ export class EditorScene implements Scene {
       (this.panY + VIEW_H) / cell,
       (tx, ty, len, ch) => {
         const cy = ty * cell + cell / 2;
-        // The markers are singletons, so a run of them is always length 1.
-        if (ch === 'S' || ch === 'G') {
-          drawCellContent(r, ch, tx * cell + cell / 2, cy, cell, scale, false);
+        // The markers are singletons, so a run of them is always length 1 —
+        // pickups are not, so they draw one per cell of the run rather than as
+        // one merged slab. They are not geometry and must not read as a floor.
+        if (ch === SPAWN_CHAR || ch === GOAL_CHAR || ch === PICKUP_CHAR) {
+          for (let i = 0; i < len; i++) {
+            drawCellContent(r, ch, (tx + i) * cell + cell / 2, cy, cell, scale, false);
+          }
           return;
         }
         const tile = tileFromChar(ch);
@@ -871,9 +933,12 @@ export class EditorScene implements Scene {
       return;
     }
     if (d.kind === 'rect' || d.kind === 'select') {
+      // Tinted in both cases: the tint marks the rectangle that is LIVE, and a
+      // pending marquee drawn like the resting selection is two identical
+      // outlines with nothing to say which one the pointer is holding.
       const rc = clipRect(d.ax, d.ay, d.cx, d.cy, this.grid.w, this.grid.h);
       if (rc !== null) {
-        this.outlineRect(r, rc, d.kind === 'rect');
+        this.outlineRect(r, rc, true);
       }
       return;
     }
@@ -1037,30 +1102,9 @@ function containsCell(r: CellRect, tx: number, ty: number): boolean {
   return tx >= r.x0 && tx <= r.x1 && ty >= r.y0 && ty <= r.y1;
 }
 
-/**
- * Two corners in any order to an inclusive rectangle clipped to the grid, or
- * null if it misses the grid entirely. The scene's own copy of the rule
- * `EditorGrid` applies to a fill, because a selection is a rectangle the scene
- * keeps and draws rather than one the model ever sees.
- */
-function clipRect(
-  x0: number,
-  y0: number,
-  x1: number,
-  y1: number,
-  w: number,
-  h: number,
-): CellRect | null {
-  const rx0 = Math.max(0, Math.min(x0, x1));
-  const ry0 = Math.max(0, Math.min(y0, y1));
-  const rx1 = Math.min(w - 1, Math.max(x0, x1));
-  const ry1 = Math.min(h - 1, Math.max(y0, y1));
-  return rx0 > rx1 || ry0 > ry1 ? null : { x0: rx0, y0: ry0, x1: rx1, y1: ry1 };
-}
-
-/** `"4 X 2"` for a drag, counting cells inclusively at both ends. */
-function spanOf(d: DragState): string {
-  return `${Math.abs(d.cx - d.ax) + 1} X ${Math.abs(d.cy - d.ay) + 1}`;
+/** `"4 X 2"` for a rectangle, counting cells inclusively at both ends. */
+function spanOf(r: CellRect | null): string {
+  return r === null ? '0 X 0' : `${r.x1 - r.x0 + 1} X ${r.y1 - r.y0 + 1}`;
 }
 
 /**
@@ -1077,12 +1121,18 @@ function drawCellContent(
   scale: number,
   ui: boolean,
 ): void {
-  if (ch === 'S') {
+  if (ch === SPAWN_CHAR) {
     drawSpawn(r, cx, cy, size, ui);
     return;
   }
-  if (ch === 'G') {
+  if (ch === GOAL_CHAR) {
     drawGoal(r, cx, cy, size * 0.8, ui);
+    return;
+  }
+  if (ch === PICKUP_CHAR) {
+    // Always drawn READY in the editor: the spent state is a fact about an
+    // attempt in progress, and an author is looking at the level, not at a run.
+    drawPickup(r, cx, cy, size * (PICKUP_SIZE / TILE), true, ui);
     return;
   }
   const tile = tileFromChar(ch);

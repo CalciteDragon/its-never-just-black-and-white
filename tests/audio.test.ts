@@ -53,6 +53,7 @@ const ALL_SFX: readonly SfxName[] = [
   'land',
   'flip',
   'pad',
+  'pickup',
   'goal',
   'death',
   'menuMove',

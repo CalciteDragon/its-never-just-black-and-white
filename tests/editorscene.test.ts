@@ -987,3 +987,168 @@ describe('the select tool', () => {
     expect(scene.state.selection).toBeNull(); // right-click drops it
   });
 });
+
+describe('the pickup in the palette', () => {
+  it('is the seventh swatch, and paints like any other character', () => {
+    const { h, scene } = open(TALL);
+    tap(h, scene, 'Digit7');
+    expect(scene.state.sel).toBe('o');
+    drag(h, scene, [
+      [4, 4],
+      [5, 4],
+    ]);
+    expect(scene.state.rows[4]).toBe('....oo....');
+    // It is legal in any number, unlike the two markers, and legal beside them.
+    expect(validateLevel(scene.state.rows)).toEqual([]);
+  });
+
+  it('playtests, which is the only proof the format agrees end to end', () => {
+    const { h, scene } = open(TALL);
+    tap(h, scene, 'Digit7');
+    drag(h, scene, [[4, 4]]);
+    tap(h, scene, 'Enter');
+    const play = h.scenes[0];
+    expect(play).toBeInstanceOf(PlayScene);
+  });
+});
+
+describe('a drag that is interrupted rather than released', () => {
+  /** Press and hold on a cell, with no release. */
+  function press(h: Harness, scene: EditorScene, tx: number, ty: number): void {
+    const [vx, vy] = cellCentre(scene, tx, ty);
+    h.input.onPointerDown(vx, vy, 0);
+    step(h, scene);
+  }
+
+  /** Move the pointer, still with no release. */
+  function moveTo(h: Harness, scene: EditorScene, tx: number, ty: number): void {
+    const [vx, vy] = cellCentre(scene, tx, ty);
+    h.input.onPointerMove(vx, vy);
+    step(h, scene);
+  }
+
+  it('A TEXT FIELD ENDS THE DRAG: the pointer does not paint on hover afterwards', () => {
+    // The release edge is eaten by the scene that opened the field, so a drag
+    // left open paints wherever the mouse goes for the rest of the session.
+    const { h, scene } = open(TALL);
+    tap(h, scene, 'Digit2');
+    press(h, scene, 2, 4);
+    tap(h, scene, 'KeyN'); // the id field opens
+    tap(h, scene, 'Escape'); // ...and is cancelled
+    const before = scene.state.rows;
+    moveTo(h, scene, 6, 5);
+    moveTo(h, scene, 7, 5);
+    expect(scene.state.rows).toEqual(before);
+  });
+
+  it('a playtest ends the drag too', () => {
+    const { h, scene } = open(TALL);
+    tap(h, scene, 'Digit2');
+    press(h, scene, 2, 4);
+    tap(h, scene, 'Enter'); // off to a playtest
+    expect(h.scenes[0]).toBeInstanceOf(PlayScene);
+    scene.enter(h.game); // ...and back
+    const before = scene.state.rows;
+    moveTo(h, scene, 6, 5);
+    expect(scene.state.rows).toEqual(before);
+  });
+
+  it('ESCAPE ROLLS THE STROKE BACK, rather than saying CANCELLED and keeping it', () => {
+    const { h, scene } = open(TALL);
+    tap(h, scene, 'Digit2');
+    const before = scene.state.rows;
+    press(h, scene, 2, 4);
+    moveTo(h, scene, 3, 4);
+    expect(scene.state.rows[4]).toBe('..##......');
+    tap(h, scene, 'Escape');
+    expect(scene.state.rows).toEqual(before);
+    expect(scene.state.undoDepth).toBe(0);
+    expect(h.scenes).toHaveLength(0); // and it did not leave the editor
+  });
+
+  it('Escape mid-rectangle discards the pending fill', () => {
+    const { h, scene } = open(TALL);
+    tap(h, scene, 'Digit2');
+    tap(h, scene, 'KeyX');
+    const before = scene.state.rows;
+    press(h, scene, 2, 4);
+    moveTo(h, scene, 6, 5);
+    tap(h, scene, 'Escape');
+    const [ux, uy] = cellCentre(scene, 6, 5);
+    h.input.onPointerUp(ux, uy, 0);
+    step(h, scene);
+    expect(scene.state.rows).toEqual(before);
+  });
+
+  it('switching tools mid-drag ends it', () => {
+    const { h, scene } = open(TALL);
+    tap(h, scene, 'Digit2');
+    press(h, scene, 2, 4);
+    tap(h, scene, 'KeyX');
+    const before = scene.state.rows;
+    moveTo(h, scene, 6, 5);
+    expect(scene.state.rows).toEqual(before);
+  });
+});
+
+describe('a selection that outlives what it selected', () => {
+  const BLOCKS: readonly string[] = [
+    '..........',
+    '..........',
+    '..........',
+    '...S...G..',
+    '....##....',
+    '....##....',
+    '..........',
+    '##########',
+  ];
+
+  function selected(): { h: Harness; scene: EditorScene } {
+    const { h, scene } = open(BLOCKS);
+    tap(h, scene, 'KeyV');
+    drag(h, scene, [
+      [4, 4],
+      [5, 5],
+    ]);
+    return { h, scene };
+  }
+
+  it('a resize drops it, rather than outlining cells that no longer exist', () => {
+    const { h, scene } = selected();
+    tap(h, scene, 'BracketLeft'); // crop from the right
+    expect(scene.state.selection).toBeNull();
+  });
+
+  it('an undo drops it, for the same reason', () => {
+    const { h, scene } = selected();
+    drag(h, scene, [
+      [4, 4],
+      [6, 4],
+    ]); // move it, so there is something to undo
+    h.input.onKey('ControlLeft', true);
+    tap(h, scene, 'KeyZ');
+    h.input.onKey('ControlLeft', false);
+    expect(scene.state.selection).toBeNull();
+  });
+
+  it('carries the spawn to the very edge, and the selection with it', () => {
+    // The scene cannot drag a marker OFF the grid — the pointer has no cells
+    // out there to name — so the refusal itself is asserted at the model, in
+    // tests/grid.test.ts. What the scene owes is the legal version of the same
+    // gesture: all the way to column 0, still valid, selection intact.
+    const { h, scene } = open(BLOCKS);
+    tap(h, scene, 'KeyV');
+    drag(h, scene, [
+      [3, 3],
+      [3, 3],
+    ]); // the spawn alone
+    drag(h, scene, [
+      [3, 3],
+      [0, 3],
+    ]);
+    expect(scene.state.rows[3]).toBe('S......G..');
+    expect(scene.state.selection).toEqual({ x0: 0, y0: 3, x1: 0, y1: 3 });
+    expect(validateLevel(scene.state.rows)).toEqual([]);
+  });
+});
+

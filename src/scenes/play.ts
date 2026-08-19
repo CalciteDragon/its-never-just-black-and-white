@@ -27,6 +27,9 @@ import {
   GOAL_PULSE_FREQ,
   PAD_STREAM_INTERVAL,
   PARTICLE_CULL_MARGIN,
+  PICKUP_RADIUS,
+  PICKUP_RESPAWN,
+  PICKUP_SIZE,
   PAUSE_DIM,
   SPEED_REF,
   SPEED_SMOOTH_RATE,
@@ -37,7 +40,7 @@ import {
 import type { Input } from '../engine/input';
 import { palette } from '../engine/palette';
 import type { Phase } from '../engine/palette';
-import { ParticleSystem, spawnStream } from '../engine/particles';
+import { ParticleSystem, spawnRing, spawnStream } from '../engine/particles';
 import type { Renderer } from '../engine/renderer';
 import { Rng } from '../engine/rng';
 import { SAVE_KEYS } from '../engine/save';
@@ -52,7 +55,7 @@ import { padDirection } from '../world/tiles';
 import { updateMenu } from './menu';
 import { ResultsScene } from './results';
 import type { ResultsStats } from './results';
-import { drawGoal, drawTileRuns } from './tiledraw';
+import { drawGoal, drawPickup, drawTileRuns } from './tiledraw';
 import { TitleScene } from './title';
 
 /**
@@ -186,6 +189,13 @@ export class PlayScene implements Scene {
    * pads pulsing in unison reads as intentional rather than as a race.
    */
   private streamT = 0;
+  /**
+   * Seconds until each pickup returns, indexed against `level.pickups`. 0 is
+   * "ready", and that is the whole state — a parallel array rather than objects
+   * because the list is fixed at parse time and a number per entry is all a
+   * respawn timer is.
+   */
+  private readonly pickupTimers: number[] = [];
   /** 0 = clear, 1 = fully covered by `ink`. */
   private fade = 0;
   /** The phase the fade colour was sampled in, held across the palette reset. */
@@ -236,6 +246,7 @@ export class PlayScene implements Scene {
     windupSec: number;
     windupIdleSec: number;
     particles: number;
+    pickupsReady: number;
   } {
     const b = this.player.body;
     return {
@@ -252,6 +263,7 @@ export class PlayScene implements Scene {
       windupSec: this.windupState.bank,
       windupIdleSec: this.windupState.idle,
       particles: this.particles.aliveCount,
+      pickupsReady: this.pickupTimers.reduce((n, t) => (t <= 0 ? n + 1 : n), 0),
     };
   }
 
@@ -266,6 +278,10 @@ export class PlayScene implements Scene {
     // two frames and is invisible.
     this.player.spawnAt(spawn.tx * TILE + TILE / 2, spawn.ty * TILE + TILE / 2);
     palette.reset(); // the other half of gravitySign = +1
+    // Every pickup back, like everything else here: a reset that forgets one
+    // field is how the second attempt comes to play differently from the first.
+    this.pickupTimers.length = this.level.pickups.length;
+    this.pickupTimers.fill(0);
     this.particles.clear();
     this.speedNorm = 0;
     this.windupState.bank = 0;
@@ -379,6 +395,7 @@ export class PlayScene implements Scene {
 
     this.camera.update(this.player.centerX, this.player.centerY, b.vx, this.speedNorm, dt);
     this.clampCamera();
+    this.updatePickups(dt, game);
     this.padStreams(dt);
     this.particles.update(dt);
 
@@ -476,6 +493,48 @@ export class PlayScene implements Scene {
     }
   }
 
+  /**
+   * Collect what the body is standing in, and count the collected ones back.
+   *
+   * **No collision, by construction**: this is a radius test run after the step,
+   * and nothing here touches the body. A pickup that pushed, stopped or slowed
+   * the player would be a pad with a different sprite — the whole point is that
+   * a line through one costs nothing but the line.
+   *
+   * A pickup is spent only when it actually gives something back, so running
+   * through one with the flip already charged leaves it standing for the way
+   * back. `recharge` reports that, which is why it returns a boolean.
+   */
+  private updatePickups(dt: number, game: Game): void {
+    const pickups = this.level.pickups;
+    const b = this.player.body;
+    for (let i = 0; i < pickups.length; i++) {
+      if (this.pickupTimers[i] > 0) {
+        this.pickupTimers[i] = Math.max(0, this.pickupTimers[i] - dt);
+        continue;
+      }
+      // Dying and won are frozen states for scoring purposes but the body keeps
+      // simulating through them, and a corpse flying through a pickup must not
+      // collect it.
+      if (this.state !== 'running' && this.state !== 'respawning') {
+        continue;
+      }
+      const cx = pickups[i].tx * TILE + TILE / 2;
+      const cy = pickups[i].ty * TILE + TILE / 2;
+      if (Math.hypot(b.x - cx, b.y - cy) > PICKUP_RADIUS) {
+        continue;
+      }
+      if (!this.player.recharge()) {
+        continue;
+      }
+      this.pickupTimers[i] = PICKUP_RESPAWN;
+      game.audio.play('pickup');
+      // The flip's own ring, at the pickup rather than at the body: what just
+      // happened is that the flip came back, and that is what the ring means.
+      spawnRing(this.particles, cx, cy);
+    }
+  }
+
   private stepPlay(dt: number, game: Game, inputs: PlayerInputs): void {
     const ev = this.player.update(dt, inputs, this.world(game));
     // The palette is downstream of the charge check: the player decides whether
@@ -540,6 +599,7 @@ export class PlayScene implements Scene {
     r.setCamera(vx, vy);
     r.clear(palette.paper);
     drawTileRuns(r, this.level.map, vx, vy);
+    this.renderPickups(r);
     this.renderGoal(r);
     this.player.render(r);
     this.particles.render(r.ctx, Math.round(vx), Math.round(vy));
@@ -552,6 +612,23 @@ export class PlayScene implements Scene {
     }
     if (this.paused) {
       this.renderPause(r);
+    }
+  }
+
+  /**
+   * The pickups, ready or spent. Under the player and over the tiles, because a
+   * pickup is a thing in the level rather than a thing on the HUD.
+   */
+  private renderPickups(r: Renderer): void {
+    const pickups = this.level.pickups;
+    for (let i = 0; i < pickups.length; i++) {
+      drawPickup(
+        r,
+        pickups[i].tx * TILE + TILE / 2,
+        pickups[i].ty * TILE + TILE / 2,
+        PICKUP_SIZE,
+        this.pickupTimers[i] <= 0,
+      );
     }
   }
 

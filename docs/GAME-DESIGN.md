@@ -15,7 +15,7 @@ Four pillars:
 3. **Speed you can feel.** The vignette closes in, the screen bounces, colour fringes split at the edges, and the music adds layers. The game gets louder the better you play.
 4. **Authored, not generated.** Levels are hand-built in an in-browser editor and stored as readable JSON. Difficulty is a design decision, not a seed.
 
-There is no combat, no collectibles, no score. There is a start, a goal, and the space between them.
+There is no combat and no score. There is a start, a goal, and the space between them. *(Amended after 0.2: there is now exactly one collectible, the **flip pickup** — see §5. It scores nothing and is not optional decoration; it is the flip's charge as a placeable object, which is what lets a level author say "here, and only here, you get a second one". "No collectibles" was a rule against a coin count, and it stays one.)*
 
 ## 2. Visual identity
 
@@ -108,6 +108,18 @@ One flip per airtime is therefore the hard rule, and level design is built aroun
 > **A refused flip changes nothing at all.** Not merely "does not invert" — `gravitySign`, `vy` and `angVel` all come through untouched, because the failure mode that matters is a *partly* applied flip.
 >
 > **There is no flip buffer, and that is deliberate.** `JUMP_BUFFER` exists because a jump pressed just before landing is unambiguous: you want to leave the ground the instant you touch it. A *flip* buffer would mean "flip as soon as I can", and the moment the flip becomes possible is the moment you land — so it would fire you off the floor you just fought to reach. The cost is one frame of strictness: the flip is consumed before the physics step and the recharge is read from its result, so a flip pressed on the exact landing frame is refused and has to be pressed again 16.7 ms later.
+
+### The flip pickup
+
+*(Added after 0.2.)* A cell holding `o` is a **flip recharge**: touch it and the flip comes back, wherever you are and whatever you are doing. It is the flip's charge as a thing an author can place, and it exists because the charge had exactly two sources — the ground and, since 0.2, a pad — and both of them are *surfaces*. A level whose whole idea is a long airborne line had no way to say "here, you get a second one".
+
+Three rules, and each is the thing that keeps it from being a pad with a different shape:
+
+- **No collision, at all.** It is not a tile and nothing in the solver knows it exists; collection is a radius test (`PICKUP_RADIUS`, half a tile, centre to centre) run after the step, and the trajectory through one is bit-identical to the trajectory through empty air. A pickup that pushed, stopped or even slowed you would be a pad.
+- **It respawns after `PICKUP_RESPAWN` = 3 s.** Long enough that standing on one and flipping every frame cannot farm it — which would make the flip free, and the flip's cost is most of the game — and short enough that a line rehearsed after a death never waits on it. While it is spent it draws as a faint outline rather than vanishing, because a player who has just used one needs to know where it will come back.
+- **It is spent only when it gives something back.** Running one over with the flip already in hand leaves it standing, so a line can be run in either order without the pickup silently disarming itself for the way back.
+
+It draws as the player's own charge tell rotated 45°: an `ink` diamond with a `paper` core. The thing you collect looks like the thing it gives you, and a player who has learned to read a solid core as "you may flip" needs no second lesson.
 
 ### Jumping and rotation
 
@@ -236,6 +248,11 @@ Added in phase 4. These are not feel knobs — each one is the answer to a speci
 | `BOUNCE_FREQ` | 9.0 rad/s | bounce frequency at full speed |
 | `PAD_IMPULSE` | 820 px/s | jump pad launch velocity |
 | `DEATH_FADE_OUT` / `DEATH_FADE_IN` | 0.35 / 0.25 s | respawn timing |
+| `PICKUP_RESPAWN` | 3.0 s | how long a collected flip pickup stays gone |
+| `PICKUP_RADIUS` | 16 px | collection distance, centre to centre — a radius, so it is rotation-independent |
+| `PICKUP_SIZE` | 16 px | the diamond's side |
+| `PICKUP_CORE_FRACTION` | 0.4 | its `paper` core, matched to the player's own |
+| `PICKUP_SPENT_ALPHA` | 0.25 | the afterimage left where a spent one will return |
 | `PAD_SPIN_MAX` | 8.0 rad/s | spin at a full-corner pad contact, scaled by the arm and clamped (added in phase 5; the physical impulse form saturates — see PHYSICS.md § Game feel) |
 
 ### Presentation
@@ -361,7 +378,7 @@ One JSON file per level in `src/levels/`, imported directly (Vite handles JSON n
 }
 ```
 
-`rows` is the whole level: a rectangular grid of characters, one string per row. Width and height are derived from it and validated on load (all rows equal length, exactly one `S`, exactly one `G`).
+`rows` is the whole level: a rectangular grid of characters, one string per row. Width and height are derived from it and validated on load (all rows equal length, exactly one `S`, exactly one `G`). `S`, `G` and `o` are **metadata on an empty cell**, not tile values: the tile enum stays six long, because nothing collides with any of the three and an `isBlocking` with an exception in it is a physics change made to add a thing that has no physics.
 
 | Char | Meaning |
 | --- | --- |
@@ -370,6 +387,7 @@ One JSON file per level in `src/levels/`, imported directly (Vite handles JSON n
 | `S` | spawn (empty tile; exactly one) |
 | `G` | goal (empty tile; exactly one) |
 | `^` `v` `<` `>` | jump pad, facing up / down / left / right |
+| `o` | flip recharge pickup (empty tile; any number, including none) |
 
 Chosen because it diffs cleanly in git, reads as a picture in any editor, and round-trips through the browser editor without a serialiser. Level order lives in `src/levels/index.ts`.
 
@@ -391,7 +409,7 @@ Bounds behaviour: out-of-bounds reads are **solid** to the left and right, **emp
 
 Fully synthesised WebAudio, no assets, node-safe import.
 
-**SFX** run through a shared feedback-delay send (delay ~0.18 s, feedback ~0.35, lowpass ~2 kHz) for the echoey character: `step`, `jump`, `land`, `flip`, `pad`, `goal`, `death`, `menuMove`, `menuPick`. Sources are short filtered noise bursts and sine/triangle blips with fast envelopes — no square-wave chiptune, that's the old game.
+**SFX** run through a shared feedback-delay send (delay ~0.18 s, feedback ~0.35, lowpass ~2 kHz) for the echoey character: `step`, `jump`, `land`, `flip`, `pad`, `pickup`, `goal`, `death`, `menuMove`, `menuPick`. `pickup` is deliberately the goal's shape at a third of its length and none of its weight — collecting one is a small good thing that happens mid-line, and the level's one arrival has to stay the only sound that resolves. Sources are short filtered noise bursts and sine/triangle blips with fast envelopes — no square-wave chiptune, that's the old game.
 
 **Music** is a synthesised techno bed at `MUSIC_BPM` = 128, built from four layers gated by `speedNorm` (§7): kick (always), hats, bass, arp lead. Scheduled with a lookahead scheduler against `AudioContext.currentTime`, not `setInterval` drift. Layers cross-fade over `MUSIC_FADE` rather than hard-switching.
 
@@ -420,7 +438,7 @@ An in-browser scene (`E` from the title or from a level-select row, the title's 
 | right-drag | brush and rect: erase (paint `.`) · select: drop the selection |
 | `Shift`+click | flood-fill the connected region of equal character (4-connected); brush tool only |
 | middle-drag, `Space`-drag, arrows | pan |
-| `1`–`8` | select `. # ^ v < > S G` |
+| `1`–`9` | select `. # ^ v < > o S G` |
 | `Z` | toggle `1×` / `½×` |
 | `Ctrl+Z` / `Ctrl+Y` | undo / redo |
 | `[` `]` `,` `.` | shrink / grow an edge (with `Shift` for the opposite edge) |
@@ -432,7 +450,7 @@ An in-browser scene (`E` from the title or from a level-select row, the title's 
 
 **The editor edits characters, not tiles, and `world/level.ts` is therefore its entire format layer.** The obvious model is a `TileMap` with a spawn and a goal beside it; it is wrong, and the reason is `S` and `G` — they are metadata on an empty cell in a `Level`, but they are *paintable cells* in an editor, and a `TileMap` cannot hold them. Modelling the grid as `readonly string[]` — §8's own on-disk shape — makes validation `validateLevel(rows)` verbatim, saving `JSON.stringify({ id, name, rows })` byte-identical to `serializeLevel`, playtesting `parseLevel` handing the **real** `PlayScene` a **real** `Level`, and a resize from the left or the top carries the spawn and the goal along for free because they are characters in the rows being shifted. Under a coordinates-beside-the-map model those are two pairs to fix up at every edge, and the one that gets forgotten is the one nobody notices until a level spawns you inside a wall.
 
-The palette is **eight** characters, not the "1–7" this section used to say: `. # ^ v < > S G`, which is §8's table plus the two markers. Six is the tile enum and eight is what an author paints; seven was neither.
+The palette is **nine** characters, not the "1–7" this section used to say: `. # ^ v < > o S G`, which is §8's table plus the pickup and the two markers. Six is the tile enum and nine is what an author paints; seven was neither. The pickup is ordinary in every way the editor cares about — no singleton rule, painted, filled, moved and erased like a wall — which is the payoff of the grid being characters rather than tiles.
 
 Two edits the model makes **unrepresentable**, which is worth more than any validation panel: painting `S` *moves* the spawn rather than adding a second one (same for `G`, and neither can be erased — only relocated), and a rectangular array of equal-length rows cannot go ragged. Between those and a fixed palette, every error `validateLevel` can report is unreachable from the editor except one — a resize that crops the spawn or the goal off the grid. That is not an argument against the panel; it is what the panel is *for*.
 
@@ -472,7 +490,7 @@ Moving platforms, breakable tiles, one-way platforms, slopes, wall jumps, checkp
 Signatures are binding; phase briefs fill in the detail.
 
 - **`engine/rng.ts`** — unchanged `Rng` (mulberry32). Now serving particles, editor jitter, and test determinism rather than level generation. `hashStringToSeed`, `mixSeeds` stay; `dailySeed` / `dailyDateString` are deleted.
-- **`engine/input.ts`** — `class Input` as before, minus the two-player split. Actions: `left right up down jump flip restart confirm back pause mute fullscreen`. `onKey` stays pure. *(Amended in phase 7: **three layers, not one.** Beside the action layer there is now a **raw code layer** — every `KeyboardEvent.code` recorded whether or not it is bound, as `codeDown` / `codePressed` / `pressedCodes` / `shiftDown` / `ctrlDown` — because the editor needs `Digit1`–`Digit8`, `ShiftLeft` and letters, and not one of those is a game verb; "paint" is not an `Action` and must not become one. The raw layer also settles `Space`, which is bound to both `flip` and `confirm`: the editor's space-drag pan reads the code, not either action. And a **pure pointer core** — `onPointerDown/Move/Up(vx, vy, button)`, `pointerX` / `pointerY` / `pointerIn`, and `down` / `pressed` / `released` per button — cleared by the same `update()` that clears the keys. `attach(win, canvas?)` converts to view space **on the way in** via `screenToView`, so the pure core never learns that a scale exists, and suppresses `contextmenu` for the right-drag erase. A press that lands in the letterbox is not a press at all.)*
+- **`engine/input.ts`** — `class Input` as before, minus the two-player split. Actions: `left right up down jump flip restart confirm back pause mute fullscreen`. `onKey` stays pure. *(Amended in phase 7: **three layers, not one.** Beside the action layer there is now a **raw code layer** — every `KeyboardEvent.code` recorded whether or not it is bound, as `codeDown` / `codePressed` / `pressedCodes` / `shiftDown` / `ctrlDown` — because the editor needs `Digit1`–`Digit9`, `ShiftLeft` and letters, and not one of those is a game verb; "paint" is not an `Action` and must not become one. The raw layer also settles `Space`, which is bound to both `flip` and `confirm`: the editor's space-drag pan reads the code, not either action. And a **pure pointer core** — `onPointerDown/Move/Up(vx, vy, button)`, `pointerX` / `pointerY` / `pointerIn`, and `down` / `pressed` / `released` per button — cleared by the same `update()` that clears the keys. `attach(win, canvas?)` converts to view space **on the way in** via `screenToView`, so the pure core never learns that a scale exists, and suppresses `contextmenu` for the right-drag erase. A press that lands in the letterbox is not a press at all.)*
 - **`engine/font.ts`** — unchanged 5×7 bitmap font.
 - **`engine/palette.ts`** *(new)* — `class Palette { phase: 0 | 1; flip(): void; paper: string; ink: string; accent: string }`, plus `paperRgba(a)` / `accentRgba(a)` and `inkRgba(a, phase?)`. Pure. The single source of every colour in the game. *(Phase 5 adds `inkRgba`, whose optional `phase` exists so the death fade can be sampled once and held: the palette resets to phase A at the fade's peak, and under a live token the screen would jump from white to black at exactly the covered moment.)*
 - **`engine/renderer.ts`** — 960×540 offscreen buffer, antialiased, integer-scaled present. Adds `applyPost(speedNorm)` for vignette + chromatic aberration, and world/UI space draws. *(Phase 7 adds `screenToView(canvasW, canvasH, clientX, clientY)`, the exact inverse of `present`'s blit, returning an `inFrame` flag rather than clamping. It is the one place in the project where the letterbox arithmetic lives, and therefore the one place it can be wrong — dropping the offset is a fifteen-tile error at a 1920×1000 window, not a sub-pixel one.)*

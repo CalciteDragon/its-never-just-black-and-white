@@ -272,6 +272,34 @@ export const PAD_SPIN_MAX = 8.0;
  * still on the same face.
  */
 export const PAD_BACK_DOT = 0.7;
+/**
+ * The flip pickup: how long a collected one stays gone (s), how big it draws
+ * (px), and how faint its afterimage is while it is spent.
+ *
+ * Three seconds is long enough that a pickup cannot be farmed on the spot —
+ * standing on one and flipping every frame would make the flip's whole cost
+ * disappear — and short enough that a line rehearsed after a death does not
+ * wait on it. The afterimage is drawn rather than the pickup simply vanishing,
+ * because a player who has just used one needs to know where it will be.
+ */
+export const PICKUP_RESPAWN = 3.0;
+export const PICKUP_SIZE = 16;
+export const PICKUP_SPENT_ALPHA = 0.25;
+/**
+ * The pickup's `paper` core as a fraction of its size. Matched by eye to the
+ * player's own core at `PLAYER_CORE_INSET` — the pickup IS that readout rotated
+ * 45°, so the two have to read as the same object at a glance or the visual
+ * argument for the shape falls apart.
+ */
+export const PICKUP_CORE_FRACTION = 0.4;
+/**
+ * Collection radius (px), centre to centre. Not a box overlap: the pickup is a
+ * diamond and the body is a rotating square, so a rotation-independent radius
+ * is both the honest shape and the one a player can predict. Half a tile,
+ * which is "the square is over it" at a glance.
+ */
+export const PICKUP_RADIUS = 16;
+
 /** Death fade out, then back in after the respawn (s). */
 export const DEATH_FADE_OUT = 0.35;
 export const DEATH_FADE_IN = 0.25;
@@ -490,6 +518,7 @@ export const EDITOR_UNDO_MAX = 64;
  */
 export const EDITOR_MARQUEE_ALPHA = 0.3;
 export const EDITOR_MARQUEE_WIDTH = 2;
+
 /** A blank grid: small enough to see whole at half zoom while learning the tool. */
 export const EDITOR_DEFAULT_W = 40;
 export const EDITOR_DEFAULT_H = 20;

@@ -46,11 +46,13 @@ function stroke(grid: EditorGrid, cells: readonly (readonly [number, number])[],
 }
 
 describe('the palette', () => {
-  it('is EIGHT characters: the tile enum plus the two markers', () => {
+  it('is NINE characters: the tile enum, the pickup, and the two markers', () => {
     // GAME-DESIGN §10 said "1-7", which is neither the six-value tile enum nor
-    // the eight things an author actually paints. Amended in phase 7.
-    expect(GRID_CHARS.join(' ')).toBe('. # ^ v < > S G');
-    expect(GRID_CHARS).toHaveLength(8);
+    // the things an author actually paints. Amended in phase 7, and again after
+    // 0.2 when the pickup arrived: it is a character in the grid and a cell in
+    // the palette, but it is not a tile, because nothing collides with it.
+    expect(GRID_CHARS.join(' ')).toBe('. # ^ v < > o S G');
+    expect(GRID_CHARS).toHaveLength(9);
   });
 
   it('recognises exactly those and nothing else', () => {
@@ -781,3 +783,63 @@ describe('moving a region', () => {
     expect(grid.rows).toEqual(['.....', '.....', '.##..', '.##..', '#####']);
   });
 });
+
+describe('pickups in the grid model', () => {
+  it('paints like any ordinary character — there is no singleton rule', () => {
+    const grid = new EditorGrid(['....', '.SG.', '####']);
+    expect(grid.paint(0, 0, 'o')).toBe(true);
+    expect(grid.paint(1, 0, 'o')).toBe(true);
+    expect(grid.rows[0]).toBe('oo..');
+    expect(validateLevel(grid.rows)).toEqual([]);
+  });
+
+  it('IS NOT GEOMETRY: a pad firing into one is not firing into a wall', () => {
+    // The warning exists because a pad firing into blocking geometry re-fires
+    // every step and pins the body. A pickup blocks nothing, so a pad pointed
+    // at one is a pad pointed at open air with something to collect in it —
+    // which is a line an author draws on purpose.
+    expect(gridWarnings(['.o..', '.^..', 'S..G', '####'])).toEqual([]);
+    expect(gridWarnings(['.#..', '.^..', 'S..G', '####'])).toHaveLength(1);
+  });
+
+  it('does not enclose a marker either', () => {
+    expect(gridWarnings(['.o..', 'oSo.', '.o.G', '####'])).toEqual([]);
+  });
+});
+
+describe('a move that would destroy a marker', () => {
+  it('IS REFUSED WHOLE when a marker would land off the grid', () => {
+    // The lift erases and the stamp can refuse, so without this the one thing
+    // the character model promises — a marker can be relocated but never
+    // destroyed — is one drag away from being false.
+    const grid = new EditorGrid(['.....', '.S#..', '...G.', '#####']);
+    const before = grid.rows;
+    expect(grid.moveRect(1, 1, 2, 1, -3, 0)).toBe(false);
+    expect(grid.rows).toEqual(before);
+    expect(grid.undoDepth).toBe(0);
+    expect(validateLevel(grid.rows)).toEqual([]);
+  });
+
+  it('IS REFUSED WHOLE when a marker would land on the other marker', () => {
+    const grid = new EditorGrid(['.....', '.S.G.', '.....', '#####']);
+    const before = grid.rows;
+    expect(grid.moveRect(1, 1, 1, 1, 2, 0)).toBe(false);
+    expect(grid.rows).toEqual(before);
+    expect(validateLevel(grid.rows)).toEqual([]);
+  });
+
+  it('still moves a marker onto a cell the SELECTION itself vacated', () => {
+    // The destination is judged after the lift, not before it, so sliding a
+    // region along by one is not a collision with its own old contents.
+    const grid = new EditorGrid(['.....', '.SG..', '.....', '#####']);
+    expect(grid.moveRect(1, 1, 2, 1, 1, 0)).toBe(true);
+    expect(grid.rows[1]).toBe('..SG.');
+  });
+
+  it('drops an ordinary character off the edge, as before', () => {
+    const grid = new EditorGrid(['.....', '.##..', '..S.G', '#####']);
+    expect(grid.moveRect(1, 1, 2, 1, -2, 0)).toBe(true);
+    expect(grid.rows[1]).toBe('#....');
+  });
+});
+
