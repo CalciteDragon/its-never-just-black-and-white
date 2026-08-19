@@ -7,6 +7,15 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  LEAD_ATTACK,
+  LEAD_DETUNE,
+  LEAD_GATE,
+  LEAD_LEVEL,
+  LEAD_OCTAVE,
+  LEAD_Q,
+  LEAD_SAT_DRIVE,
+  LEAD_SEND,
+  LEAD_VIB_DEPTH,
   SPEED_WINDUP_DELAY,
   SPEED_WINDUP_DRAIN_DELAY,
   SPEED_WINDUP_DRAIN_RATE,
@@ -15,9 +24,15 @@ import {
   SPEED_WINDUP_RAMP,
 } from '../src/constants';
 import {
+  LEAD_DEFAULTS,
   WINDUP_DEFAULTS,
+  clampLead,
   clampWindup,
+  lead,
+  leadSource,
+  resetLead,
   resetWindup,
+  setLead,
   setWindup,
   windup,
   windupSource,
@@ -38,9 +53,10 @@ function hold(w: WindupState, raw: number, sec: number): WindupState {
 const fresh = (): WindupState => ({ bank: 0, idle: 0 });
 
 afterEach(() => {
-  // The record is a singleton the scene reads every frame, so a test that left
-  // it moved would quietly retune every test that ran after it.
+  // The records are singletons read every frame / every scheduled note, so a
+  // test that left one moved would quietly retune every test after it.
   resetWindup();
+  resetLead();
 });
 
 describe('the live wind-up record', () => {
@@ -102,12 +118,12 @@ describe('the live wind-up record', () => {
   it('emits paste-ready constants.ts lines, two decimals, never bare integers', () => {
     expect(windupSource(WINDUP_DEFAULTS)).toBe(
       [
-        'export const SPEED_WINDUP_MIN = 0.5;',
+        'export const SPEED_WINDUP_MIN = 0.7;',
         'export const SPEED_WINDUP_DELAY = 2.0;',
-        'export const SPEED_WINDUP_RAMP = 3.0;',
+        'export const SPEED_WINDUP_RAMP = 7.0;',
         'export const SPEED_WINDUP_FILL_BIAS = 1.0;',
-        'export const SPEED_WINDUP_DRAIN_DELAY = 0.0;',
-        'export const SPEED_WINDUP_DRAIN_RATE = 1.0;',
+        'export const SPEED_WINDUP_DRAIN_DELAY = 0.3;',
+        'export const SPEED_WINDUP_DRAIN_RATE = 2.0;',
       ].join('\n'),
     );
     expect(windupSource({ ...WINDUP_DEFAULTS, delay: 1.25 })).toContain(
@@ -119,6 +135,75 @@ describe('the live wind-up record', () => {
     setWindup({ ...windup, min: 0.4, drainRate: 2.5 });
     expect(windupSource()).toContain('export const SPEED_WINDUP_MIN = 0.4;');
     expect(windupSource()).toContain('export const SPEED_WINDUP_DRAIN_RATE = 2.5;');
+  });
+});
+
+describe('the live lead-synth record', () => {
+  it('ships as the constants, so an untouched build is unchanged', () => {
+    expect(LEAD_DEFAULTS.octave).toBe(LEAD_OCTAVE);
+    expect(LEAD_DEFAULTS.level).toBe(LEAD_LEVEL);
+    expect(LEAD_DEFAULTS.gate).toBe(LEAD_GATE);
+    expect(LEAD_DEFAULTS.attack).toBe(LEAD_ATTACK);
+    expect(LEAD_DEFAULTS.detune).toBe(LEAD_DETUNE);
+    expect(LEAD_DEFAULTS.q).toBe(LEAD_Q);
+    expect(LEAD_DEFAULTS.drive).toBe(LEAD_SAT_DRIVE);
+    expect(LEAD_DEFAULTS.send).toBe(LEAD_SEND);
+    expect({ ...lead }).toEqual({ ...LEAD_DEFAULTS });
+  });
+
+  it('clamps every field into its legal range, and rejects non-numbers', () => {
+    // The load-bearing floors: attack and release are ramp lengths, drive
+    // normalises the curve by tanh(drive), and the octave snaps to an integer
+    // so the riff can never land between keys.
+    expect(clampLead({ ...LEAD_DEFAULTS, attack: 0, release: 0, drive: 0 })).toMatchObject({
+      attack: 0.001,
+      release: 0.02,
+      drive: 0.5,
+    });
+    expect(clampLead({ ...LEAD_DEFAULTS, octave: 0.4 }).octave).toBe(0);
+    expect(clampLead({ ...LEAD_DEFAULTS, octave: 7 }).octave).toBe(1);
+    expect(clampLead({ ...LEAD_DEFAULTS, octave: -3 }).octave).toBe(-1);
+    expect(clampLead({ ...LEAD_DEFAULTS, q: 99, send: 2, level: -1 })).toMatchObject({
+      q: 8,
+      send: 1,
+      level: 0,
+    });
+    const nan = Number.NaN;
+    const bad = clampLead({
+      octave: nan,
+      level: nan,
+      gate: nan,
+      attack: nan,
+      release: nan,
+      detune: nan,
+      vibRate: nan,
+      vibDepth: nan,
+      bright: nan,
+      dark: nan,
+      q: nan,
+      drive: nan,
+      send: nan,
+    });
+    expect(bad).toEqual({ ...LEAD_DEFAULTS });
+  });
+
+  it('emits paste-ready constants.ts lines, with the precision small values need', () => {
+    // fmt4 exists because the two-decimal windup format would print the
+    // default vibrato depth as 0.00 and paste back a silent wobble.
+    expect(leadSource(LEAD_DEFAULTS)).toContain(`export const LEAD_VIB_DEPTH = ${LEAD_VIB_DEPTH};`);
+    expect(leadSource(LEAD_DEFAULTS)).toContain('export const LEAD_OCTAVE = 0;');
+    expect(leadSource({ ...LEAD_DEFAULTS, gate: 1 })).toContain('export const LEAD_GATE = 1.0;');
+    setLead({ ...lead, q: 3.25, octave: -1 });
+    expect(leadSource()).toContain('export const LEAD_Q = 3.25;');
+    expect(leadSource()).toContain('export const LEAD_OCTAVE = -1;');
+  });
+
+  it('setLead lands live and resetLead restores the shipped voice', () => {
+    setLead({ ...lead, detune: 20, gate: 2 });
+    expect(lead.detune).toBe(20);
+    expect(lead.gate).toBe(2);
+    resetLead();
+    expect({ ...lead }).toEqual({ ...LEAD_DEFAULTS });
   });
 });
 
@@ -141,7 +226,7 @@ describe('windupFillRate', () => {
   });
 
   it('is flat 1× at the default bias, so the shipped bank is unchanged', () => {
-    for (const raw of [0.5, 0.7, 0.9, 1]) {
+    for (const raw of [SPEED_WINDUP_MIN, 0.8, 0.9, 1]) {
       expect(windupFillRate(raw)).toBe(1);
     }
   });

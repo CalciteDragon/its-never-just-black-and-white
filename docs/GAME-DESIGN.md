@@ -253,12 +253,12 @@ Added in phase 4. These are not feel knobs — each one is the answer to a speci
 | `VIGNETTE_MIN` / `VIGNETTE_MAX` | 0.15 / 0.55 | alpha at rest / at full speed |
 | `VIGNETTE_INNER` | 0.45 | fraction of the radius left fully clear at the centre |
 | `VIGNETTE_TINT_MAX` | 0.22 | peak alpha of the ink tint over the vignette |
-| `SPEED_WINDUP_MIN` | 0.5 | normalised speed at or above which the wind-up bank fills |
+| `SPEED_WINDUP_MIN` | 0.7 | normalised speed at or above which the wind-up bank fills |
 | `SPEED_WINDUP_DELAY` | 2.0 s | banked speed before any effect is non-zero |
-| `SPEED_WINDUP_RAMP` | 3.0 s | from the gate opening to full strength |
+| `SPEED_WINDUP_RAMP` | 7.0 s | from the gate opening to full strength |
 | `SPEED_WINDUP_FILL_BIAS` | 1.0 × | fill rate at full speed; 1× at the threshold, linear between |
-| `SPEED_WINDUP_DRAIN_DELAY` | 0.0 s | grace below the threshold before the bank drains at all |
-| `SPEED_WINDUP_DRAIN_RATE` | 1.0 × | drain rate once that grace is spent |
+| `SPEED_WINDUP_DRAIN_DELAY` | 0.3 s | grace below the threshold before the bank drains at all |
+| `SPEED_WINDUP_DRAIN_RATE` | 2.0 × | drain rate once that grace is spent |
 | `PAD_BACK_DOT` | 0.7 | how square-on a contact must be to count as a pad's non-launching **back** (every other face fires) |
 | `BOUNCE_AMP` | 2.5 px | screen bounce amplitude at full speed |
 | `BOUNCE_FREQ` | 9.0 rad/s | bounce frequency at full speed |
@@ -315,13 +315,14 @@ Added in phase 6. The gates moved here out of §7's prose; the grid values are *
 | --- | --- | --- |
 | `MUSIC_BPM` | 128 | tempo; a beat is 0.46875 s |
 | `MUSIC_SIXTEENTH` | **derived** = 0.1171875 s | the scheduling grid — 7.03 frames, deliberately not a whole number |
-| `MUSIC_BAR_STEPS` / `MUSIC_PATTERN_STEPS` | 16 / 32 | sixteenths per bar; the whole pattern is two bars, because the arp ascends over two |
+| `MUSIC_BAR_STEPS` / `MUSIC_PATTERN_STEPS` | 16 / 64 | sixteenths per bar; the whole pattern is four bars — the length of the lead riff (call, response, call, turn) |
 | `MUSIC_BAR` | **derived** = 1.875 s | 112.5 frames. The music runs on the audio clock and the simulation on `STEP`; the two are unrelated on purpose |
 | `MUSIC_FADE` | 0.35 s | layer cross-fade. One frame may move a gain by at most `STEP / MUSIC_FADE` = 0.0476 |
 | `MUSIC_LOOKAHEAD` | 0.1 s | scheduling window = 6 frames. `FixedStepper.maxFrame` is 2.5x it, which is what forces the cursor's resync (§9) |
 | `MUSIC_GATE_HATS` / `_BASS` / `_ARP` | 0.25 / 0.45 / 0.70 | strictly greater-than; the kick is always |
 | `MUSIC_GATE_EPS` | 0.01 | gain below which a layer allocates no nodes at all |
 | `MUSIC_GAIN_MIN` / `_MAX` | 0.10 / 0.34 | master music gain across the range |
+| `LEAD_*` | see `constants.ts` | the lead synth's whole voice — register, level, gates, envelope, detune, vibrato, filter, saturation, echo send. Authored by feel like the wind-up: live-tunable in the dev tuner (`?tune=1`) via `engine/tuning.ts` |
 | `SFX_DELAY_TIME` | 0.18 s | the shared feedback-delay send |
 | `SFX_DELAY_FEEDBACK` / `_MAX` | 0.35 / 0.55 | feedback at rest and at full speed (§7's "rises slightly") |
 | `SFX_DELAY_LOWPASS` | 2000 Hz | inside the feedback loop, so repeats darken rather than merely quieten |
@@ -360,7 +361,7 @@ One number drives all of them. `speedNorm = clamp(|v| / SPEED_REF, 0, 1) · wind
 
 *(Revised after 0.2 playtesting.)* **The effects are earned over time, not bought by one fast frame.** The scene banks seconds spent at or above `SPEED_WINDUP_MIN`; `windupGate` is exactly 0 until `SPEED_WINDUP_DELAY` of that bank and climbs linearly to 1 over the following `SPEED_WINDUP_RAMP`.
 
-Filling and draining are shaped separately, because they answer separate questions. **Filling** is scaled by how far over the threshold you are: 1× at the threshold itself, `SPEED_WINDUP_FILL_BIAS` at full speed, linear between — so above 1 a flat-out run is worth more than a jog over the line, and below 1 it is worth less. **Draining** first has to outlast `SPEED_WINDUP_DRAIN_DELAY`, the grace that makes a landing, a wall bump or a moment of air cost nothing at all, and then runs at `SPEED_WINDUP_DRAIN_RATE` (0 banks permanently for the attempt). All three ship neutral, reproducing the flat symmetric bank exactly. Speed is cheap here — every pad chain buys a second of it — so gating on *duration* is what separates a fast moment, which stays clean, from a sustained run, which is the thing worth escalating for.
+Filling and draining are shaped separately, because they answer separate questions. **Filling** is scaled by how far over the threshold you are: 1× at the threshold itself, `SPEED_WINDUP_FILL_BIAS` at full speed, linear between — so above 1 a flat-out run is worth more than a jog over the line, and below 1 it is worth less. **Draining** first has to outlast `SPEED_WINDUP_DRAIN_DELAY`, the grace that makes a landing, a wall bump or a moment of air cost nothing at all, and then runs at `SPEED_WINDUP_DRAIN_RATE` (0 banks permanently for the attempt). The fill ships neutral — a flat bank that only asks *whether* you were fast — while the drain ships with a short grace and at double rate, so a stumble is forgiven and a stop is not. Speed is cheap here — every pad chain buys a second of it — so gating on *duration* is what separates a fast moment, which stays clean, from a sustained run, which is the thing worth escalating for.
 
 The three numbers are authored by feel, in the browser: `?tune=1` mounts the wind-up tuner (ARCHITECTURE.md § Dev tooling), which drives `engine/tuning.ts` live and emits the `constants.ts` lines to make a session permanent.
 

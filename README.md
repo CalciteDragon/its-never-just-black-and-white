@@ -64,6 +64,19 @@ npm run typecheck
 npm run build
 ```
 
+### Dev URL params
+
+Both are read once in [src/main.ts](src/main.ts) and work on the dev server or a
+production build — append them to the page URL, e.g. `http://localhost:5173/?tune=1`.
+
+| Param | What it does |
+| --- | --- |
+| `?editor=1` | Boots straight into the editor's picker instead of the title screen — new level, import, every draft, every shipped level. Skips the title/level-select walk when you are authoring. |
+| `?tune=1` | Mounts the [dev tuner](src/devtuner.ts) over the canvas: live sliders for the wind-up escalation numbers and the whole lead-synth instrument, with AUDITION to force the bed to full intensity from any scene. Each section's COPY puts paste-ready `constants.ts` lines on the clipboard — the tuner writes to `engine/tuning.ts` and never edits the game. Dynamically imported, so a session that never asks for it never loads the panel. |
+
+There is also `window.__bw = { game }` in every build, which is the live `Game`
+from the console — handy for `__bw.game.setScene(...)`.
+
 ### Project structure
 
 ```

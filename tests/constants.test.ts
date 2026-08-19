@@ -353,7 +353,7 @@ describe('the jump pad (phase 5)', () => {
     expect(MUSIC_SIXTEENTH).toBeCloseTo(0.1171875, 12);
     expect(MUSIC_BAR).toBeCloseTo(1.875, 12);
     expect(MUSIC_BAR_STEPS * MUSIC_SIXTEENTH).toBeCloseTo(MUSIC_BAR, 12);
-    expect(MUSIC_PATTERN_STEPS).toBe(2 * MUSIC_BAR_STEPS); // the arp needs two
+    expect(MUSIC_PATTERN_STEPS).toBe(4 * MUSIC_BAR_STEPS); // the lead riff is four bars
     // 7.03 frames to a sixteenth, 112.5 to a bar. The music runs on the audio
     // clock and the simulation on STEP; the two are unrelated ON PURPOSE, and a
     // bar that landed on a whole frame count would be an invitation to couple

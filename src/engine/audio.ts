@@ -37,6 +37,7 @@ import {
   SFX_DELAY_TIME,
 } from '../constants';
 import { Rng } from './rng';
+import { lead } from './tuning';
 
 export type SfxName =
   | 'step'
@@ -140,8 +141,8 @@ export function delayFeedback(intensity: number): number {
  * The patterns, as literal tables. NO RANDOMNESS ANYWHERE — the bed is authored,
  * so the tests can assert it note for note and hard rule 3 never comes up.
  *
- * All four are written over one bar of sixteenths except the arp, which ascends
- * over two and is therefore indexed against MUSIC_PATTERN_STEPS.
+ * All four are written over one bar of sixteenths except the lead, whose riff
+ * runs four bars and is therefore indexed against MUSIC_PATTERN_STEPS.
  */
 
 /** Four on the floor. */
@@ -155,7 +156,7 @@ const HATS_GAIN: readonly number[] = [
   0, 0.5, 1, 0.5, 0, 0.5, 1, 0.5, 0, 0.5, 1, 0.5, 0, 0.5, 1, 0.5,
 ];
 
-/** A1 and E2 — the root and its fifth, an octave apart from the arp's register. */
+/** A1 and E2 — the root and its fifth, two octaves below the lead's root. */
 const A1 = 55;
 const E2 = A1 * Math.pow(2, 7 / 12);
 const BASS_NOTES: readonly (number | 0)[] = buildBass();
@@ -177,16 +178,74 @@ function buildBass(): readonly number[] {
 }
 
 /**
- * A-minor pentatonic (A C D E G) ascending over two octaves and cycling, so the
- * lead climbs continuously without walking off the top of the register: ten
- * distinct notes from A3, three ascents and a bit per two-bar pattern.
+ * The lead: a four-bar ELECTRO-POP riff — sparse, syncopated, bouncy. Six
+ * notes per bar on a 3-3-4 tresillo pulse (0·3·6, then backbeat pickups at
+ * 10·12·14): driving without being busy, pushing against the four-on-the-floor
+ * kick instead of doubling it.
+ *
+ * - ONE RHYTHM, EVOLVING PITCH. Bars 1-3 share the same rhythmic cell, which
+ *   is what makes a riff a riff; the melody is what moves. Bar 2 answers bar 1
+ *   by lifting to D; bar 4 is the turn — the pattern's single climb to its
+ *   peak, once per four bars, tumbling back home to loop.
+ * - ACCENTED. Downbeats land full, offbeats sit back, ghosts at half — the
+ *   velocity contour is the bounce.
+ *
+ * A-minor pentatonic (A C D E G) over an A3 root by default — but the REGISTER
+ * IS A SLIDER: `lead.octave` (dev tuner, ?tune=1) shifts the whole riff to A2
+ * or A4, and `lead.gate` stretches the authored gate lengths, both applied at
+ * `patternAt`. Written as [step, semitones from the root, velocity, gate
+ * length in sixteenths].
  */
-const PENTATONIC_SEMITONES: readonly number[] = [0, 3, 5, 7, 10];
-const ARP_ROOT = 220;
-const ARP_NOTES: readonly number[] = Array.from({ length: 10 }, (_, d) => {
-  const semis = PENTATONIC_SEMITONES[d % 5] + 12 * Math.floor(d / 5);
-  return ARP_ROOT * Math.pow(2, semis / 12);
-});
+const LEAD_ROOT = 220; // A3 at lead.octave = 0
+interface LeadNote {
+  f: number;
+  gain: number;
+  dur: number;
+}
+const LEAD_RIFF: readonly (LeadNote | null)[] = buildLead();
+
+function buildLead(): readonly (LeadNote | null)[] {
+  const hits: readonly [number, number, number, number][] = [
+    // bar 1 — the call: the root driving on the tresillo, leaning onto E
+    [0, 0, 1, 0.9],
+    [3, 3, 0.7, 0.7],
+    [6, 0, 0.8, 0.7],
+    [10, -5, 0.9, 1.25],
+    [12, -2, 0.5, 0.5],
+    [14, 0, 0.7, 0.7],
+    // bar 2 — the response: same rhythm, lifted to D, pulled back through G
+    [16, 0, 1, 0.9],
+    [19, 3, 0.7, 0.7],
+    [22, 5, 0.9, 0.9],
+    [26, 3, 0.8, 1.1],
+    [28, 0, 0.5, 0.5],
+    [30, -2, 0.7, 0.7],
+    // bar 3 — the call again, so the ear has something to hold on to
+    [32, 0, 1, 0.9],
+    [35, 3, 0.7, 0.7],
+    [38, 0, 0.8, 0.7],
+    [42, -5, 0.9, 1.25],
+    [44, -2, 0.5, 0.5],
+    [46, 0, 0.7, 0.7],
+    // bar 4 — the turn: the one climb to the peak E, tumbling home
+    [48, 0, 1, 0.9],
+    [51, 5, 0.8, 0.7],
+    [54, 7, 1, 1.1],
+    [57, 5, 0.7, 0.7],
+    [59, 3, 0.7, 0.7],
+    [61, 0, 0.6, 0.7],
+    [63, -2, 0.5, 0.5],
+  ];
+  const out = new Array<LeadNote | null>(MUSIC_PATTERN_STEPS).fill(null);
+  for (const [step, semis, gain, len] of hits) {
+    out[step] = {
+      f: LEAD_ROOT * Math.pow(2, semis / 12),
+      gain,
+      dur: len * MUSIC_SIXTEENTH,
+    };
+  }
+  return out;
+}
 
 /** The note a layer plays on a pattern step, or null for a rest. */
 export function patternAt(
@@ -208,8 +267,14 @@ export function patternAt(
       return f > 0 ? { f0: f, f1: f, dur: 0.09, gain: 1 } : null;
     }
     case 'arp': {
-      const f = ARP_NOTES[step % ARP_NOTES.length];
-      return { f0: f, f1: f, dur: 0.06, gain: 0.5 };
+      const n = LEAD_RIFF[step % MUSIC_PATTERN_STEPS];
+      if (!n) {
+        return null;
+      }
+      // The two tunables that shape the WRITING rather than the voice: the
+      // register and the gate length, live from the dev tuner.
+      const f = n.f * Math.pow(2, lead.octave);
+      return { f0: f, f1: f, dur: n.dur * lead.gate, gain: n.gain };
     }
   }
 }
@@ -317,6 +382,48 @@ const STOP_TAIL = 0.02;
 /** Length of the shared noise buffer (s). Longer than any burst that reads it. */
 const NOISE_SECONDS = 1;
 
+/**
+ * The lead's instrument — a synth voice built from the last three iterations
+ * of arguing with it: two sawtooths a few cents apart plus a triangle SUB AN
+ * OCTAVE BELOW, all through one gently resonant lowpass that opens with the
+ * attack and eases shut across the note; a per-note VIBRATO LFO nudging the
+ * saw pair (the wobble that makes a note a voice instead of a buzzer); an
+ * envelope that can SUSTAIN — swell in, hold at level, release out — and, on
+ * the bus, gentle tanh saturation (see ensureGraph) as compression-glue. The
+ * pitch itself never sweeps; every bit of movement is the filter and the LFO.
+ *
+ * EVERY KNOB ON IT IS LIVE: the numbers come from `lead` in
+ * `engine/tuning.ts`, read per scheduled note, so the dev tuner's sliders
+ * (?tune=1) take effect within one MUSIC_LOOKAHEAD. The cutoff is written in
+ * MULTIPLES OF THE PITCH so a register change keeps the same darkness, with
+ * the accent riding it via the bright split below. What stays module-private
+ * (PARAM_SMOOTH sense): that split, the saturation trim, and the curve size.
+ */
+interface Stab {
+  /** Cutoff sweep (Hz), open to closed. */
+  cutoff0: number;
+  cutoff1: number;
+  q: number;
+  /** Detune of the saw pair, ± cents. */
+  cents: number;
+}
+/** How much of `lead.bright` a zero-velocity note keeps; accents get the rest. */
+const STAB_BRIGHT_FLOOR = 0.75;
+/** The trim after the saturation stage, taking back the soft knee's gain. */
+const LEAD_SAT_TRIM = 0.5;
+const LEAD_SAT_SAMPLES = 1024;
+
+/** tanh transfer curve for the lead bus, normalised to +-1. */
+function saturationCurve(drive: number): Float32Array<ArrayBuffer> {
+  const curve = new Float32Array(LEAD_SAT_SAMPLES);
+  const norm = Math.tanh(drive);
+  for (let i = 0; i < LEAD_SAT_SAMPLES; i++) {
+    const x = (2 * i) / (LEAD_SAT_SAMPLES - 1) - 1;
+    curve[i] = Math.tanh(drive * x) / norm;
+  }
+  return curve;
+}
+
 /** One voice of one effect. `kind` decides oscillator versus filtered noise. */
 interface SfxNote {
   kind: OscillatorType | 'noise';
@@ -403,6 +510,9 @@ interface Graph {
   /** The shared feedback-delay send — the echoey character of every effect. */
   send: GainNode;
   feedback: GainNode;
+  /** The lead bus post chain, held so the tuner's changes can land live. */
+  shaper: WaveShaperNode;
+  arpSend: GainNode;
   noise: AudioBuffer;
 }
 
@@ -412,6 +522,8 @@ export class AudioSys {
   private mutedFlag = false;
   private intensity = 0;
   private musicOn = false;
+  /** The drive the shaper's curve was last built with, to rebuild on change. */
+  private satDrive = 0;
   private scheduler: SchedulerState | null = null;
   private readonly buffer = createNoteBuffer(32);
   /**
@@ -485,6 +597,13 @@ export class AudioSys {
       g.ctx.currentTime,
       PARAM_SMOOTH,
     );
+    // The lead bus follows the tuner live: the send is a param, and the
+    // saturation curve is rebuilt only when the drive actually moved.
+    g.arpSend.gain.setTargetAtTime(lead.send, g.ctx.currentTime, PARAM_SMOOTH);
+    if (this.satDrive !== lead.drive) {
+      this.satDrive = lead.drive;
+      g.shaper.curve = saturationCurve(lead.drive);
+    }
     if (!this.musicOn || this.mutedFlag || !this.scheduler) {
       return;
     }
@@ -550,9 +669,29 @@ export class AudioSys {
         this.voice(g, 'triangle', ev.f0, ev.f1, ev.at, ev.dur, ev.gain * 0.9, 0, dest, 'lowpass');
         break;
       case 'arp':
-        // The arp is the only layer on the send: its blips are what the delay
-        // has anything interesting to do with.
-        this.voice(g, 'triangle', ev.f0, ev.f1, ev.at, ev.dur, ev.gain * 0.35, 0, dest);
+        // The lead is the only layer on the send: SFX_DELAY_TIME is within
+        // 2.4% of a dotted sixteenth at this tempo, so the echoes land almost
+        // on the grid and read as ghost notes rather than smear. Level sits
+        // low pre-saturation — the shaper lifts it. Every number here is the
+        // live tuning record; the sliders are the instrument's front panel.
+        this.voice(
+          g,
+          'sawtooth',
+          ev.f0,
+          ev.f1,
+          ev.at,
+          ev.dur,
+          ev.gain * lead.level,
+          0,
+          dest,
+          'bandpass',
+          {
+            cutoff0: ev.f0 * lead.bright * (STAB_BRIGHT_FLOOR + (1 - STAB_BRIGHT_FLOOR) * ev.gain),
+            cutoff1: ev.f0 * lead.dark,
+            q: lead.q,
+            cents: lead.detune,
+          },
+        );
         break;
     }
   }
@@ -576,13 +715,25 @@ export class AudioSys {
     send: number,
     dest: AudioNode | null,
     filter: BiquadFilterType = 'bandpass',
+    stab?: Stab,
   ): void {
     const ctx = g.ctx;
     const env = ctx.createGain();
-    env.gain.setValueAtTime(Math.max(vol, SILENCE), at);
-    env.gain.exponentialRampToValueAtTime(SILENCE, at + dur);
+    if (stab) {
+      // A synth envelope that can SUSTAIN: swell in, hold at level, release
+      // out. At the shipped gates the hold is brief and the note is a plucky
+      // stab; stretch `lead.gate` and the same envelope holds a pad.
+      const level = Math.max(vol, SILENCE);
+      env.gain.setValueAtTime(SILENCE, at);
+      env.gain.linearRampToValueAtTime(level, at + lead.attack);
+      env.gain.setValueAtTime(level, Math.max(at + lead.attack, at + dur - lead.release));
+      env.gain.exponentialRampToValueAtTime(SILENCE, at + dur);
+    } else {
+      env.gain.setValueAtTime(Math.max(vol, SILENCE), at);
+      env.gain.exponentialRampToValueAtTime(SILENCE, at + dur);
+    }
 
-    let source: AudioScheduledSourceNode;
+    const sources: AudioScheduledSourceNode[] = [];
     if (kind === 'noise') {
       const src = ctx.createBufferSource();
       src.buffer = g.noise;
@@ -591,14 +742,56 @@ export class AudioSys {
       biq.frequency.setValueAtTime(Math.max(1, f0), at);
       biq.frequency.exponentialRampToValueAtTime(Math.max(1, f1), at + dur);
       src.connect(biq).connect(env);
-      source = src;
+      sources.push(src);
+    } else if (stab) {
+      // The lead voice: a detuned saw pair into one warm lowpass that eases
+      // shut over the note. f0/f1 stay the pitch; the sweep lives in `stab`.
+      const biq = ctx.createBiquadFilter();
+      biq.type = 'lowpass';
+      biq.Q.setValueAtTime(stab.q, at);
+      biq.frequency.setValueAtTime(Math.max(1, stab.cutoff0), at);
+      biq.frequency.exponentialRampToValueAtTime(Math.max(1, stab.cutoff1), at + dur);
+      biq.connect(env);
+      const pair: OscillatorNode[] = [];
+      for (const sign of [-1, 1]) {
+        const det = Math.pow(2, (sign * stab.cents) / 1200);
+        const osc = ctx.createOscillator();
+        osc.type = kind;
+        osc.frequency.setValueAtTime(Math.max(1, f0 * det), at);
+        osc.frequency.exponentialRampToValueAtTime(Math.max(1, f1 * det), at + dur);
+        osc.connect(biq);
+        pair.push(osc);
+        sources.push(osc);
+      }
+      // The weight: a triangle sub an octave below, through the same filter —
+      // the cutoff never dips under 1.6x the pitch, so the sub always passes.
+      // No vibrato on the sub: the low end stays planted.
+      const sub = ctx.createOscillator();
+      sub.type = 'triangle';
+      sub.frequency.setValueAtTime(Math.max(1, f0 / 2), at);
+      sub.frequency.exponentialRampToValueAtTime(Math.max(1, f1 / 2), at + dur);
+      sub.connect(biq);
+      sources.push(sub);
+      // The voice: a per-note vibrato LFO wobbling the saw pair a few cents.
+      // Per-note rather than a bus LFO so it starts and stops with its note —
+      // the no-source-without-a-stop rule stays absolute.
+      const lfo = ctx.createOscillator();
+      lfo.type = 'sine';
+      lfo.frequency.setValueAtTime(Math.max(0.01, lead.vibRate), at);
+      const depth = ctx.createGain();
+      depth.gain.setValueAtTime(f0 * lead.vibDepth, at);
+      lfo.connect(depth);
+      for (const osc of pair) {
+        depth.connect(osc.frequency);
+      }
+      sources.push(lfo);
     } else {
       const osc = ctx.createOscillator();
       osc.type = kind;
       osc.frequency.setValueAtTime(Math.max(1, f0), at);
       osc.frequency.exponentialRampToValueAtTime(Math.max(1, f1), at + dur);
       osc.connect(env);
-      source = osc;
+      sources.push(osc);
     }
 
     env.connect(dest ?? g.master);
@@ -607,8 +800,10 @@ export class AudioSys {
       tap.gain.setValueAtTime(send, at);
       env.connect(tap).connect(g.send);
     }
-    source.start(at);
-    source.stop(at + dur + STOP_TAIL);
+    for (const source of sources) {
+      source.start(at);
+      source.stop(at + dur + STOP_TAIL);
+    }
   }
 
   private ensureGraph(): Graph | null {
@@ -646,15 +841,39 @@ export class AudioSys {
     for (const layer of MUSIC_LAYERS) {
       const node = ctx.createGain();
       node.gain.setValueAtTime(0, ctx.currentTime);
-      node.connect(music);
+      if (layer !== 'arp') {
+        node.connect(music);
+      }
       layers[layer] = node;
     }
-    // The arp is the one layer with a wet path.
+    // The lead's post chain: the layer bus runs through gentle tanh saturation
+    // into a trim. The shaper is compression-as-glue — it evens the line's
+    // dynamics and thickens the low mids — and the trim takes back the level
+    // the soft knee adds. The wet send taps AFTER both, so the echoes carry
+    // the same warmth as the dry line.
+    const shaper = ctx.createWaveShaper();
+    this.satDrive = lead.drive;
+    shaper.curve = saturationCurve(lead.drive);
+    const trim = ctx.createGain();
+    trim.gain.setValueAtTime(LEAD_SAT_TRIM, ctx.currentTime);
+    layers.arp.connect(shaper);
+    shaper.connect(trim);
+    trim.connect(music);
     const arpSend = ctx.createGain();
-    arpSend.gain.setValueAtTime(0.5, ctx.currentTime);
-    layers.arp.connect(arpSend).connect(send);
+    arpSend.gain.setValueAtTime(lead.send, ctx.currentTime);
+    trim.connect(arpSend).connect(send);
 
-    this.graph = { ctx, master, music, layers, send, feedback, noise: this.makeNoise(ctx) };
+    this.graph = {
+      ctx,
+      master,
+      music,
+      layers,
+      send,
+      feedback,
+      shaper,
+      arpSend,
+      noise: this.makeNoise(ctx),
+    };
     return this.graph;
   }
 

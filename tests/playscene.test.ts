@@ -697,11 +697,16 @@ describe('THE SCRIPTED PLAYTHROUGH', () => {
 
 describe('the bed, and the one number that drives it', () => {
   const WALK = ['..........', '..S.....G.', '####..####'];
-  /** Sixty-four tiles of floor: room to hold a run for the whole wind-up. */
+  /**
+   * A hundred and sixty tiles of floor: room to hold a run for the whole
+   * wind-up. The delay plus one and a half ramps is ~12.3 s, which is 98 tiles
+   * at RUN_SPEED — reaching the goal early would duck the bed to 0 and the
+   * test would be measuring the win, not the escalation.
+   */
   const RUNWAY = [
-    '.'.repeat(64),
-    `..S${'.'.repeat(59)}G.`,
-    '#'.repeat(64),
+    '.'.repeat(160),
+    `..S${'.'.repeat(155)}G.`,
+    '#'.repeat(160),
   ];
 
   it('is scene-scoped: enter starts it, exit stops it', () => {

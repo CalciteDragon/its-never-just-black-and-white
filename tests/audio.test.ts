@@ -14,6 +14,8 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  LEAD_DETUNE,
+  LEAD_GATE,
   MUSIC_BAR,
   MUSIC_FADE,
   MUSIC_GAIN_MAX,
@@ -42,6 +44,7 @@ import {
   scheduleWindow,
 } from '../src/engine/audio';
 import type { MusicLayer, NoteEvent, SfxName } from '../src/engine/audio';
+import { lead, resetLead, setLead } from '../src/engine/tuning';
 
 /**
  * GAME-DESIGN §9's set, in full. Listed here rather than derived from the union
@@ -59,6 +62,9 @@ const ALL_SFX: readonly SfxName[] = [
   'menuMove',
   'menuPick',
 ];
+
+/** An arbitrary interior index to spot-check the saturation curve's shape at. */
+const LEAD_CURVE_PROBE = 256;
 
 // --- The fake context. Small enough to read, complete enough to catch a leak.
 
@@ -136,6 +142,12 @@ class FakeCtx {
   };
   /** Every gain node handed out, so a test can look at the master or a layer. */
   readonly gainNodes: { gain: FakeParam }[] = [];
+  /** Every oscillator handed out — `type` is assigned after creation. */
+  readonly oscs: { type: string; frequency: FakeParam }[] = [];
+  /** Every biquad handed out, so a test can see the lead's lowpass close. */
+  readonly biquads: { type: string; frequency: FakeParam; Q: FakeParam }[] = [];
+  /** Every waveshaper handed out — the lead bus saturation. */
+  readonly shapers: { curve: Float32Array | null }[] = [];
 
   private source(): { start(t: number): void; stop(t: number): void; connect(d: unknown): unknown } {
     const t = this.tally;
@@ -169,7 +181,9 @@ class FakeCtx {
 
   createOscillator(): ReturnType<FakeCtx['source']> & { type: string; frequency: FakeParam } {
     this.tally.oscillators++;
-    return { ...this.source(), type: 'sine', frequency: new FakeParam(440) };
+    const node = { ...this.source(), type: 'sine', frequency: new FakeParam(440) };
+    this.oscs.push(node);
+    return node;
   }
 
   createBufferSource(): ReturnType<FakeCtx['source']> & { buffer: unknown } {
@@ -178,16 +192,24 @@ class FakeCtx {
   }
 
   createBiquadFilter(): { type: string; frequency: FakeParam; Q: FakeParam; connect(d: unknown): unknown } {
-    return {
+    const node = {
       type: 'lowpass',
       frequency: new FakeParam(350),
       Q: new FakeParam(1),
       connect: (d: unknown) => d,
     };
+    this.biquads.push(node);
+    return node;
   }
 
   createDelay(): { delayTime: FakeParam; connect(d: unknown): unknown } {
     return { delayTime: new FakeParam(0), connect: (d: unknown) => d };
+  }
+
+  createWaveShaper(): { curve: Float32Array | null; connect(d: unknown): unknown } {
+    const node = { curve: null as Float32Array | null, connect: (d: unknown) => d };
+    this.shapers.push(node);
+    return node;
   }
 
   createBuffer(_channels: number, len: number): { getChannelData(i: number): Float32Array } {
@@ -266,26 +288,92 @@ describe('the patterns', () => {
     expect(patternAt('hats', 0)).toBeNull();
   });
 
-  it('the arp plays every sixteenth and ascends in A-minor pentatonic', () => {
-    const freqs: number[] = [];
+  it('the lead is an ELECTRO-POP RIFF: sparse, syncopated, and accented', () => {
+    // Collect the four bars as (position, note) lists.
+    const bars: { pos: number; f0: number; gain: number }[][] = [[], [], [], []];
     for (let s = 0; s < MUSIC_PATTERN_STEPS; s++) {
       const n = patternAt('arp', s);
-      expect(n).not.toBeNull();
-      freqs.push(n!.f0);
+      if (n) {
+        bars[Math.floor(s / 16)].push({ pos: s % 16, f0: n.f0, gain: n.gain });
+      }
     }
-    expect(freqs[0]).toBeCloseTo(220, 6); // A3
-    expect(freqs[1] / freqs[0]).toBeCloseTo(Math.pow(2, 3 / 12), 6); // minor third
-    expect(freqs[5] / freqs[0]).toBeCloseTo(2, 6); // the sixth note is the octave
-    // Ten distinct notes, ascending, then back to the root.
-    for (let i = 1; i < 10; i++) {
-      expect(freqs[i]).toBeGreaterThan(freqs[i - 1]);
+    // Sparse: six or seven notes per bar out of sixteen steps, never wall-to-wall.
+    for (const bar of bars) {
+      expect(bar.length).toBeGreaterThanOrEqual(4);
+      expect(bar.length).toBeLessThanOrEqual(8);
     }
-    expect(freqs[10]).toBeCloseTo(freqs[0], 6);
-    // Never shrill: the top of the run stays under a kilohertz.
-    expect(Math.max(...freqs)).toBeLessThan(1000);
+    // One rhythm, evolving pitch: bars 1-3 share the same rhythmic cell — the
+    // 3-3-4 tresillo plus backbeat pickups — which is what makes it a riff.
+    const rhythm = (bar: { pos: number }[]): number[] => bar.map((n) => n.pos);
+    expect(rhythm(bars[1])).toEqual(rhythm(bars[0]));
+    expect(rhythm(bars[2])).toEqual(rhythm(bars[0]));
+    expect(rhythm(bars[0]).slice(0, 3)).toEqual([0, 3, 6]); // the tresillo pulse
+    // Bar 3 restates bar 1 exactly; bars 2 and 4 answer with different pitches.
+    expect(bars[2]).toEqual(bars[0]);
+    expect(bars[1].map((n) => n.f0)).not.toEqual(bars[0].map((n) => n.f0));
+    expect(bars[3].map((n) => n.f0)).not.toEqual(bars[0].map((n) => n.f0));
+    // Every bar opens on the root, full velocity — the anchor of the loop.
+    for (const bar of bars) {
+      expect(bar[0].pos).toBe(0);
+      expect(bar[0].f0).toBeCloseTo(220, 6); // A3 at the default octave
+      expect(bar[0].gain).toBe(1);
+    }
+    // Accented: real velocity contour, ghosts at half — the bounce.
+    const gains = bars.flat().map((n) => n.gain);
+    expect(Math.min(...gains)).toBe(0.5);
+    expect(Math.max(...gains)).toBe(1);
+    // The peak note arrives EXACTLY ONCE per four bars — bar 4's turn — the
+    // pattern's landmark against repetition.
+    const freqs = bars.flat().map((n) => n.f0);
+    const peak = Math.max(...freqs);
+    expect(peak).toBeCloseTo(220 * Math.pow(2, 7 / 12), 3); // E4 at octave 0
+    expect(freqs.filter((f) => f === peak).length).toBe(1);
+    // Everything stays in A-minor pentatonic (A C D E G), consonant with the
+    // bass's A and E under it, and never shrill even an octave up.
+    const pentatonic = new Set([0, 3, 5, 7, 10]);
+    for (const f of freqs) {
+      const semis = Math.round(12 * Math.log2(f / 220));
+      expect(pentatonic.has(((semis % 12) + 12) % 12)).toBe(true);
+      expect(Math.abs(12 * Math.log2(f / 220) - semis)).toBeLessThan(1e-6);
+    }
+    expect(2 * peak).toBeLessThan(1000); // the whole riff at octave +1
   });
 
-  it('the bass is the root and its fifth, an octave below the arp', () => {
+  it('the lead rests where the kick needs air, and gates vary with the note', () => {
+    // Bar 1 leaves the second and third kick (steps 4 and 8) completely clean.
+    expect(patternAt('arp', 4)).toBeNull();
+    expect(patternAt('arp', 8)).toBeNull();
+    // Gate lengths vary — the lean-back notes ring longer than the ghosts —
+    // and every note is shorter than a beat at the default gate scale.
+    const durs = new Set<number>();
+    for (let s = 0; s < MUSIC_PATTERN_STEPS; s++) {
+      const n = patternAt('arp', s);
+      if (n) {
+        durs.add(n.dur);
+        expect(n.dur).toBeLessThan(4 * MUSIC_SIXTEENTH);
+        expect(n.f0).toBe(n.f1); // the pitch never sweeps; the filter does
+      }
+    }
+    expect(durs.size).toBeGreaterThan(2);
+  });
+
+  it('the tuner reaches the writing: octave shifts the register, gate stretches notes', () => {
+    const base = patternAt('arp', 0)!;
+    try {
+      setLead({ ...lead, octave: 1, gate: 2 });
+      const tuned = patternAt('arp', 0)!;
+      expect(tuned.f0).toBeCloseTo(base.f0 * 2, 9);
+      expect(tuned.dur).toBeCloseTo((base.dur * 2) / LEAD_GATE, 9);
+      // The other layers never read the lead record.
+      expect(patternAt('bass', 0)!.f0).toBeCloseTo(55, 6);
+      expect(patternAt('kick', 0)!.dur).toBe(0.12);
+    } finally {
+      resetLead();
+    }
+    expect(patternAt('arp', 0)!.f0).toBeCloseTo(base.f0, 9);
+  });
+
+  it('the bass is the root and its fifth, two octaves below the lead', () => {
     expect(patternAt('bass', 0)?.f0).toBeCloseTo(55, 6); // A1
     expect(patternAt('bass', 6)?.f0).toBeCloseTo(82.407, 3); // E2
     expect(patternAt('arp', 0)!.f0 / patternAt('bass', 0)!.f0).toBeCloseTo(4, 6);
@@ -478,7 +566,7 @@ describe('AudioSys through a fake context', () => {
   it('EVERY NODE CREATED IS STOPPED — the leak a browser reveals in three minutes', () => {
     const { sys, ctx } = fakeSys();
     sys.startMusic();
-    for (let i = 0; i < 100; i++) {
+    for (let i = 0; i < 200; i++) {
       ctx.currentTime += STEP;
       sys.setIntensity(1);
     }
@@ -504,6 +592,107 @@ describe('AudioSys through a fake context', () => {
     expect(ctx.tally.bufferSources).toBe(0);
     expect(ctx.tally.oscillators).toBeGreaterThan(4);
     expect(ctx.tally.oscillators).toBeLessThan(16);
+  });
+
+  it('the lead is a sustained synth voice: saw pair, sub, vibrato, sustain, saturation', () => {
+    const { sys, ctx } = fakeSys();
+    sys.startMusic();
+    for (let i = 0; i < 400; i++) {
+      ctx.currentTime += STEP;
+      sys.setIntensity(1);
+    }
+    // The saw pairs, created lo/hi per note.
+    const saws = ctx.oscs.filter((o) => o.type === 'sawtooth');
+    expect(saws.length).toBeGreaterThan(0);
+    expect(saws.length % 2).toBe(0);
+    for (let i = 0; i < saws.length; i += 2) {
+      const lo = saws[i].frequency.ops[0].value;
+      const hi = saws[i + 1].frequency.ops[0].value;
+      // ±LEAD_DETUNE cents around the written pitch — the width of the voice,
+      // and a single oscillator's worth of it when the detune ships at 0.
+      expect(hi / lo).toBeCloseTo(Math.pow(2, (2 * LEAD_DETUNE) / 1200), 9);
+      // And the pitch itself never sweeps — both ops carry the same frequency.
+      expect(saws[i].frequency.ops[1].value).toBeCloseTo(lo, 9);
+    }
+    // The movement is the FILTER: each lead lowpass opens above twice the
+    // pitch and eases down onto the note, with gentle resonance. (Geometric
+    // mean of the pair recovers the written pitch.)
+    const leads = ctx.biquads.filter((b) => b.Q.ops.length > 0);
+    expect(leads.length).toBe(saws.length / 2);
+    for (let i = 0; i < leads.length; i++) {
+      const pitch = Math.sqrt(
+        saws[2 * i].frequency.ops[0].value * saws[2 * i + 1].frequency.ops[0].value,
+      );
+      const open = leads[i].frequency.ops[0].value;
+      const closed = leads[i].frequency.ops[1].value;
+      expect(open).toBeGreaterThan(2 * pitch);
+      expect(closed).toBeLessThan(open);
+      expect(closed).toBeGreaterThan(pitch); // closes onto the note, not under it
+      expect(leads[i].Q.ops[0].value).toBeGreaterThanOrEqual(1); // flat or warm, never thin
+      expect(leads[i].Q.ops[0].value).toBeLessThan(4); // and SMOOTH: gentle Q
+    }
+    // The weight: every note carries a triangle sub an octave below the pitch.
+    // Root notes are A3 = 220, so their subs sit at 110 — a frequency the bass
+    // itself never plays (it holds A1/E2), which makes them attributable.
+    const rootLeads = leads.filter((_, i) => {
+      const pitch = Math.sqrt(
+        saws[2 * i].frequency.ops[0].value * saws[2 * i + 1].frequency.ops[0].value,
+      );
+      return Math.abs(pitch - 220) < 0.01;
+    });
+    const subs = ctx.oscs.filter(
+      (o) => o.type === 'triangle' && Math.abs(o.frequency.ops[0].value - 110) < 0.01,
+    );
+    expect(rootLeads.length).toBeGreaterThan(0);
+    expect(subs.length).toBe(rootLeads.length);
+    // The voice: one vibrato LFO per note — a sine well below audio rate.
+    const lfos = ctx.oscs.filter((o) => o.type === 'sine' && o.frequency.ops[0].value < 20);
+    expect(lfos.length).toBe(leads.length);
+    // The envelope can SUSTAIN: silence → linear swell → hold at level →
+    // release. Four ops, the hold anchor at the level the swell reached, and
+    // never out of order — at the shipped short gates the hold is brief and
+    // the note is a plucky stab; a stretched gate holds a pad.
+    const sustains = ctx.gainNodes.filter(
+      (n) =>
+        n.gain.ops.length === 4 &&
+        n.gain.ops[0].kind === 'set' &&
+        n.gain.ops[0].value < 0.001 &&
+        n.gain.ops[1].kind === 'linear' &&
+        n.gain.ops[1].value > 0.01 &&
+        n.gain.ops[2].kind === 'set' &&
+        n.gain.ops[2].value === n.gain.ops[1].value &&
+        n.gain.ops[3].kind === 'exp',
+    );
+    expect(sustains.length).toBe(leads.length);
+    for (const s of sustains) {
+      expect(s.gain.ops[2].time).toBeGreaterThanOrEqual(s.gain.ops[1].time);
+      expect(s.gain.ops[3].time).toBeGreaterThan(s.gain.ops[2].time);
+    }
+    // The post chain: exactly one waveshaper on the lead bus, loaded with a
+    // symmetric soft curve normalised to ±1 — saturation, not distortion.
+    expect(ctx.shapers.length).toBe(1);
+    const curve = ctx.shapers[0].curve!;
+    expect(curve).not.toBeNull();
+    const mid = (curve.length - 1) / 2;
+    expect(curve[0]).toBeCloseTo(-1, 6);
+    expect(curve[curve.length - 1]).toBeCloseTo(1, 6);
+    expect(Math.abs(curve[Math.floor(mid)])).toBeLessThan(0.01); // odd symmetry
+    // And the DRIVE slider lands live: moving it rebuilds the curve (still
+    // normalised) on the next pump, and only then.
+    try {
+      const before = ctx.shapers[0].curve;
+      setLead({ ...lead, drive: 6 });
+      expect(ctx.shapers[0].curve).toBe(before); // not until a pump
+      ctx.currentTime += STEP;
+      sys.setIntensity(1);
+      expect(ctx.shapers[0].curve).not.toBe(before);
+      expect(ctx.shapers[0].curve![LEAD_CURVE_PROBE]).toBeCloseTo(
+        Math.tanh(6 * ((2 * LEAD_CURVE_PROBE) / 1023 - 1)) / Math.tanh(6),
+        6,
+      );
+    } finally {
+      resetLead();
+    }
   });
 
   it('mute acts: it ducks the master to zero and stops scheduling within one pump', () => {

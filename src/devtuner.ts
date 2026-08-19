@@ -1,8 +1,12 @@
 /**
- * THE WIND-UP TUNER — a dev-only DOM panel for the GAME-DESIGN §7 numbers
- * that can only be judged by playing: what counts as fast, how long that has to
- * hold before the effects start, how slowly they arrive once they do, and what
- * being faster or slower than the threshold is worth to the bank.
+ * THE DEV TUNER — a dev-only DOM panel for the numbers that can only be judged
+ * by playing. Two sections, one per record in `engine/tuning.ts`:
+ *
+ * - WIND-UP: the GAME-DESIGN §7 escalation numbers — what counts as fast, how
+ *   long that has to hold, how slowly the effects arrive.
+ * - LEAD SYNTH: the 'arp' layer's whole instrument — register, envelope,
+ *   filter, vibrato, saturation, send. AUDITION forces the bed to full
+ *   intensity so the lead can be tuned from any scene without holding a run.
  *
  * Browser-only, and deliberately outside `src/engine/`: it reaches into the
  * live scene to read the wind-up bank, and an engine module that knew about a
@@ -13,15 +17,24 @@
  * this file.
  *
  * It writes to `engine/tuning.ts` and nowhere else. When the feel is right,
- * COPY CONSTANTS puts the paste-ready `constants.ts` lines on the clipboard;
- * the tuner never edits the game.
+ * each section's COPY puts its paste-ready `constants.ts` lines on the
+ * clipboard; the tuner never edits the game.
  */
 
 import { SPEED_REF } from './constants';
 import { copyToClipboard, detectClipboard } from './engine/levelio';
 import { palette } from './engine/palette';
-import { resetWindup, setWindup, windup, windupSource } from './engine/tuning';
-import type { WindupTuning } from './engine/tuning';
+import {
+  lead,
+  leadSource,
+  resetLead,
+  resetWindup,
+  setLead,
+  setWindup,
+  windup,
+  windupSource,
+} from './engine/tuning';
+import type { LeadTuning, WindupTuning } from './engine/tuning';
 import type { Game, Scene } from './game';
 import { windupFillRate, windupGate } from './scenes/play';
 
@@ -62,8 +75,8 @@ function readScene(scene: Scene | null): Readout | null {
   return ok ? (s as Readout) : null;
 }
 
-interface Row {
-  readonly key: keyof WindupTuning;
+interface Row<T> {
+  readonly key: keyof T & string;
   readonly label: string;
   readonly min: number;
   readonly max: number;
@@ -71,13 +84,29 @@ interface Row {
   readonly unit: string;
 }
 
-const ROWS: readonly Row[] = [
+const WINDUP_ROWS: readonly Row<WindupTuning>[] = [
   { key: 'min', label: 'MIN', min: 0, max: 1, step: 0.01, unit: `of ${SPEED_REF} px/s` },
   { key: 'delay', label: 'DELAY', min: 0, max: 8, step: 0.05, unit: 's of speed' },
   { key: 'ramp', label: 'RAMP', min: 0.05, max: 10, step: 0.05, unit: 's to full' },
   { key: 'fillBias', label: 'FILL', min: 0, max: 4, step: 0.05, unit: '× at full speed' },
   { key: 'drainDelay', label: 'GRACE', min: 0, max: 5, step: 0.05, unit: 's before drain' },
   { key: 'drainRate', label: 'DRAIN', min: 0, max: 4, step: 0.05, unit: '× once draining' },
+];
+
+const LEAD_ROWS: readonly Row<LeadTuning>[] = [
+  { key: 'octave', label: 'OCTAVE', min: -1, max: 1, step: 1, unit: 'A2 / A3 / A4 root' },
+  { key: 'level', label: 'LEVEL', min: 0, max: 0.5, step: 0.005, unit: 'pre-saturation' },
+  { key: 'gate', label: 'GATE', min: 0.25, max: 4, step: 0.05, unit: '× note length' },
+  { key: 'attack', label: 'ATTACK', min: 0.001, max: 0.3, step: 0.001, unit: 's swell in' },
+  { key: 'release', label: 'RELEASE', min: 0.02, max: 1, step: 0.01, unit: 's fade out' },
+  { key: 'detune', label: 'DETUNE', min: 0, max: 30, step: 0.5, unit: '± cents, width' },
+  { key: 'vibRate', label: 'VIB RATE', min: 0, max: 15, step: 0.1, unit: 'Hz' },
+  { key: 'vibDepth', label: 'VIB DEPTH', min: 0, max: 0.02, step: 0.0005, unit: 'of pitch' },
+  { key: 'bright', label: 'BRIGHT', min: 1.5, max: 10, step: 0.1, unit: '× pitch, open' },
+  { key: 'dark', label: 'DARK', min: 1, max: 3, step: 0.05, unit: '× pitch, closed' },
+  { key: 'q', label: 'RESONANCE', min: 0.3, max: 8, step: 0.1, unit: 'filter Q' },
+  { key: 'drive', label: 'DRIVE', min: 0.5, max: 8, step: 0.1, unit: 'tanh saturation' },
+  { key: 'send', label: 'ECHO', min: 0, max: 1, step: 0.05, unit: 'to the delay' },
 ];
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -108,107 +137,194 @@ export function mountDevTuner(game: Game, doc: Document, win: Window): () => voi
       'font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace',
       'padding:10px 12px;border-width:2px;border-style:solid',
       'min-width:290px;letter-spacing:0.04em',
+      // Two sections of sliders outgrow a laptop viewport; the panel scrolls.
+      'max-height:calc(100vh - 40px);overflow-y:auto',
     ].join(';'),
   );
 
   const head = el(doc, 'div', 'display:flex;justify-content:space-between;margin-bottom:8px');
   head.append(
-    el(doc, 'strong', 'letter-spacing:0.12em', 'WIND-UP TUNER'),
+    el(doc, 'strong', 'letter-spacing:0.12em', 'DEV TUNER'),
     el(doc, 'span', 'opacity:0.6', '` hides'),
   );
   root.append(head);
 
-  // --- The sliders. Range and box stay in sync both ways: the slider is for
-  // feel, the box is for saying 2.25 exactly. ---
-  const fields = new Map<keyof WindupTuning, { range: HTMLInputElement; box: HTMLInputElement }>();
-
-  const sync = (): void => {
-    for (const row of ROWS) {
-      const f = fields.get(row.key);
-      if (!f) {
-        continue;
-      }
-      const v = windup[row.key];
-      f.range.value = String(v);
-      // Not while the box is being typed into, or a half-finished keystroke
-      // ("2." on the way to "2.5") gets rewritten under the cursor.
-      if (doc.activeElement !== f.box) {
-        f.box.value = String(v);
-      }
-    }
-  };
-
-  for (const row of ROWS) {
-    const line = el(doc, 'label', 'display:block;margin:6px 0');
-    const top = el(doc, 'div', 'display:flex;justify-content:space-between');
-    top.append(
-      el(doc, 'span', 'font-weight:700', row.label),
-      el(doc, 'span', 'opacity:0.6', row.unit),
-    );
-
-    const controls = el(doc, 'div', 'display:flex;gap:8px;align-items:center');
-    const range = el(doc, 'input', 'flex:1;min-width:0;accent-color:currentColor');
-    range.type = 'range';
-    range.min = String(row.min);
-    range.max = String(row.max);
-    range.step = String(row.step);
-
-    const box = el(
-      doc,
-      'input',
-      'width:64px;font:inherit;color:inherit;background:transparent;border:1px solid currentColor;padding:1px 4px',
-    );
-    box.type = 'number';
-    box.min = String(row.min);
-    box.max = String(row.max);
-    box.step = String(row.step);
-
-    const write = (raw: string): void => {
-      setWindup({ ...windup, [row.key]: Number.parseFloat(raw) });
-      sync();
-    };
-    range.addEventListener('input', () => write(range.value));
-    box.addEventListener('change', () => write(box.value));
-
-    controls.append(range, box);
-    line.append(top, controls);
-    root.append(line);
-    fields.set(row.key, { range, box });
-  }
-
-  // --- The readout: what those numbers are doing to the run in progress.
-  // Tuning a two-second delay blind is guesswork; watching the bank fill while
-  // you hold a run is the whole reason this beats editing constants.ts. ---
-  const readout = el(doc, 'div', 'margin-top:8px;white-space:pre', '');
-  const track = el(doc, 'div', 'height:6px;margin:5px 0 9px;border:1px solid currentColor');
-  const fill = el(doc, 'div', 'height:100%;width:0%;background:currentColor');
-  track.append(fill);
-
   const btnStyle =
     'font:inherit;letter-spacing:inherit;color:inherit;background:transparent;border:1px solid currentColor;padding:3px 8px;cursor:pointer';
-  const buttons = el(doc, 'div', 'display:flex;gap:8px');
-  const copy = el(doc, 'button', btnStyle, 'COPY CONSTANTS');
-  const reset = el(doc, 'button', btnStyle, 'RESET');
-  buttons.append(copy, reset);
-
   const note = el(doc, 'div', 'margin-top:6px;min-height:1.5em;opacity:0.75', '');
-  root.append(readout, track, buttons, note);
 
-  copy.addEventListener('click', () => {
-    const text = windupSource();
+  const copyOut = (text: string, what: string): void => {
     void copyToClipboard(detectClipboard(), text).then((ok) => {
       // The console line is not a nicety. The clipboard is refused on a LAN
       // address and in a tab that has had no gesture, and losing a tuning
       // session to that would be absurd, so it is printed either way.
-      console.info(`[wind-up tuner]\n${text}`);
+      console.info(`[dev tuner: ${what}]\n${text}`);
       note.textContent = ok ? 'copied, and logged to the console' : 'clipboard refused — see console';
     });
+  };
+
+  // --- One section per tuning record. The sliders and boxes stay in sync both
+  // ways: the slider is for feel, the box is for saying 2.25 exactly. The
+  // header collapses the body, because two open sections are a lot of panel. --
+  const syncs: (() => void)[] = [];
+
+  function section<T extends { [K in keyof T]: number }>(
+    title: string,
+    rows: readonly Row<T>[],
+    live: T,
+    write: (key: keyof T & string, value: number) => void,
+    reset: () => void,
+    source: () => string,
+    open: boolean,
+  ): HTMLDivElement {
+    const box = el(doc, 'div', 'margin-top:4px');
+    const bar = el(
+      doc,
+      'div',
+      'display:flex;justify-content:space-between;cursor:pointer;font-weight:700;letter-spacing:0.12em;border-top:1px solid currentColor;padding-top:6px',
+    );
+    const caret = el(doc, 'span', '', open ? '▾' : '▸');
+    bar.append(el(doc, 'span', '', title), caret);
+    const body = el(doc, 'div', open ? '' : 'display:none');
+    bar.addEventListener('click', () => {
+      const hidden = body.style.display === 'none';
+      body.style.display = hidden ? '' : 'none';
+      caret.textContent = hidden ? '▾' : '▸';
+    });
+
+    const fields = new Map<keyof T & string, { range: HTMLInputElement; box: HTMLInputElement }>();
+    const sync = (): void => {
+      for (const row of rows) {
+        const f = fields.get(row.key);
+        if (!f) {
+          continue;
+        }
+        const v = live[row.key];
+        f.range.value = String(v);
+        // Not while the box is being typed into, or a half-finished keystroke
+        // ("2." on the way to "2.5") gets rewritten under the cursor.
+        if (doc.activeElement !== f.box) {
+          f.box.value = String(v);
+        }
+      }
+    };
+    syncs.push(sync);
+
+    for (const row of rows) {
+      const line = el(doc, 'label', 'display:block;margin:6px 0');
+      const top = el(doc, 'div', 'display:flex;justify-content:space-between');
+      top.append(
+        el(doc, 'span', 'font-weight:700', row.label),
+        el(doc, 'span', 'opacity:0.6', row.unit),
+      );
+
+      const controls = el(doc, 'div', 'display:flex;gap:8px;align-items:center');
+      const range = el(doc, 'input', 'flex:1;min-width:0;accent-color:currentColor');
+      range.type = 'range';
+      range.min = String(row.min);
+      range.max = String(row.max);
+      range.step = String(row.step);
+
+      const numBox = el(
+        doc,
+        'input',
+        'width:64px;font:inherit;color:inherit;background:transparent;border:1px solid currentColor;padding:1px 4px',
+      );
+      numBox.type = 'number';
+      numBox.min = String(row.min);
+      numBox.max = String(row.max);
+      numBox.step = String(row.step);
+
+      const writeRaw = (raw: string): void => {
+        write(row.key, Number.parseFloat(raw));
+        sync();
+      };
+      range.addEventListener('input', () => writeRaw(range.value));
+      numBox.addEventListener('change', () => writeRaw(numBox.value));
+
+      controls.append(range, numBox);
+      line.append(top, controls);
+      body.append(line);
+      fields.set(row.key, { range, box: numBox });
+    }
+
+    const buttons = el(doc, 'div', 'display:flex;gap:8px;margin-top:2px');
+    const copy = el(doc, 'button', btnStyle, 'COPY CONSTANTS');
+    const resetBtn = el(doc, 'button', btnStyle, 'RESET');
+    copy.addEventListener('click', () => copyOut(source(), title));
+    resetBtn.addEventListener('click', () => {
+      reset();
+      sync();
+      note.textContent = `${title.toLowerCase()}: back to the shipped values`;
+    });
+    buttons.append(copy, resetBtn);
+    body.append(buttons);
+
+    box.append(bar, body);
+    root.append(box);
+    return body;
+  }
+
+  section(
+    'WIND-UP',
+    WINDUP_ROWS,
+    windup,
+    (k, v) => setWindup({ ...windup, [k]: v }),
+    resetWindup,
+    windupSource,
+    false,
+  );
+
+  // --- The readout: what the wind-up numbers are doing to the run in
+  // progress. Tuning a two-second delay blind is guesswork; watching the bank
+  // fill while you hold a run is the whole reason this beats constants.ts. ---
+  const readout = el(doc, 'div', 'margin-top:8px;white-space:pre', '');
+  const track = el(doc, 'div', 'height:6px;margin:5px 0 9px;border:1px solid currentColor');
+  const fill = el(doc, 'div', 'height:100%;width:0%;background:currentColor');
+  track.append(fill);
+  root.append(readout, track);
+
+  const leadBody = section(
+    'LEAD SYNTH',
+    LEAD_ROWS,
+    lead,
+    (k, v) => setLead({ ...lead, [k]: v }),
+    resetLead,
+    leadSource,
+    true,
+  );
+
+  // --- AUDITION: hold the bed at full intensity so every layer (the lead
+  // included) plays whatever scene is up, without having to keep a run alive
+  // with one hand while sliding with the other. Scheduling is pumped from the
+  // panel's own rAF tick. In a level the play scene pumps too; audition's
+  // forced 1 simply outbids it. ---
+  let auditioning = false;
+  let auditionStarted = false;
+  const audition = el(doc, 'button', `${btnStyle};margin-top:8px`, 'AUDITION: OFF');
+  audition.addEventListener('click', () => {
+    auditioning = !auditioning;
+    audition.textContent = auditioning ? 'AUDITION: ON' : 'AUDITION: OFF';
+    if (auditioning) {
+      // In a level the bed is already running; elsewhere the panel owns it.
+      auditionStarted = readScene(game.activeScene) === null;
+      if (auditionStarted) {
+        game.audio.startMusic();
+      }
+      note.textContent = game.audio.muted
+        ? 'the game is muted — M unmutes'
+        : 'bed held at full intensity';
+    } else {
+      if (auditionStarted) {
+        game.audio.stopMusic();
+      }
+      auditionStarted = false;
+      note.textContent = '';
+    }
   });
-  reset.addEventListener('click', () => {
-    resetWindup();
-    sync();
-    note.textContent = 'back to the shipped values';
-  });
+  leadBody.prepend(audition);
+
+  root.append(note);
 
   // Keys and pointer events stop here. `Input.attach` listens on the window in
   // the bubble phase, so without this the arrow keys that nudge a slider also
@@ -231,6 +347,9 @@ export function mountDevTuner(game: Game, doc: Document, win: Window): () => voi
   let raf = 0;
   const tick = (): void => {
     raf = win.requestAnimationFrame(tick);
+    if (auditioning) {
+      game.audio.setIntensity(1);
+    }
     if (root.style.display === 'none') {
       return;
     }
@@ -264,7 +383,9 @@ export function mountDevTuner(game: Game, doc: Document, win: Window): () => voi
     fill.style.width = `${(gate * 100).toFixed(1)}%`;
   };
 
-  sync();
+  for (const sync of syncs) {
+    sync();
+  }
   note.textContent = 'RESET returns the shipped values';
   doc.body.append(root);
   raf = win.requestAnimationFrame(tick);
@@ -272,6 +393,9 @@ export function mountDevTuner(game: Game, doc: Document, win: Window): () => voi
   return (): void => {
     win.cancelAnimationFrame(raf);
     win.removeEventListener('keydown', onKey);
+    if (auditioning && auditionStarted) {
+      game.audio.stopMusic();
+    }
     root.remove();
   };
 }

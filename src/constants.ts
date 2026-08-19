@@ -195,15 +195,16 @@ export const SPEED_SMOOTH_RATE = 6;
  * questions. Filling is scaled by how far over the threshold you are
  * (SPEED_WINDUP_FILL_BIAS). Draining waits SPEED_WINDUP_DRAIN_DELAY before it
  * starts — the grace that stops a landing or a wall bump costing anything at
- * all — and then runs at SPEED_WINDUP_DRAIN_RATE. All three ship neutral: the
- * defaults reproduce the flat symmetric bank exactly.
+ * all — and then runs at SPEED_WINDUP_DRAIN_RATE. The fill ships neutral (a
+ * flat bank that only asks *whether* you were fast); the drain ships with a
+ * short grace and at double rate, so a stumble is forgiven and a stop is not.
  */
 /** speedNorm at or above which the wind-up bank fills rather than drains. */
-export const SPEED_WINDUP_MIN = 0.5;
+export const SPEED_WINDUP_MIN = 0.7;
 /** Seconds banked before any speed effect is non-zero. */
 export const SPEED_WINDUP_DELAY = 2.0;
 /** Seconds from the gate opening to full strength — deliberately slow. */
-export const SPEED_WINDUP_RAMP = 3.0;
+export const SPEED_WINDUP_RAMP = 7.0;
 /**
  * How fast the bank fills at FULL speed, as a multiple of real time. The rate
  * lerps from 1× at exactly `SPEED_WINDUP_MIN` to this at speedNorm 1, so above
@@ -213,12 +214,12 @@ export const SPEED_WINDUP_RAMP = 3.0;
  */
 export const SPEED_WINDUP_FILL_BIAS = 1.0;
 /** Seconds below the threshold before the bank starts draining at all. */
-export const SPEED_WINDUP_DRAIN_DELAY = 0.0;
+export const SPEED_WINDUP_DRAIN_DELAY = 0.3;
 /**
  * How fast the bank drains once that grace is spent, as a multiple of real
  * time. 1 is symmetric with a 1× fill; 0 banks permanently for the attempt.
  */
-export const SPEED_WINDUP_DRAIN_RATE = 1.0;
+export const SPEED_WINDUP_DRAIN_RATE = 2.0;
 /** speedNorm below which chromatic aberration is exactly zero. */
 export const CA_THRESHOLD = 0.45;
 /** Channel split at speedNorm 1 (px). */
@@ -386,9 +387,9 @@ export const MUSIC_BPM = 128;
  * accumulating — so a three-minute session is still exactly on the grid.
  */
 export const MUSIC_SIXTEENTH = 60 / MUSIC_BPM / 4;
-/** Sixteenths per bar, and the length of the whole pattern (the arp is 2 bars). */
+/** Sixteenths per bar, and the length of the whole pattern (the lead riff is 4 bars). */
 export const MUSIC_BAR_STEPS = 16;
-export const MUSIC_PATTERN_STEPS = 32;
+export const MUSIC_PATTERN_STEPS = 64;
 /** One bar (s) = 1.875. NOT a whole number of frames, and it must not be. */
 export const MUSIC_BAR = MUSIC_SIXTEENTH * MUSIC_BAR_STEPS;
 /**
@@ -420,6 +421,34 @@ export const MUSIC_GATE_EPS = 0.01;
 /** Master music gain at speedNorm 0 and 1 — the bed swells between the gates too. */
 export const MUSIC_GAIN_MIN = 0.1;
 export const MUSIC_GAIN_MAX = 0.34;
+
+// --- The lead synth (the 'arp' layer's voice). Authored by FEEL like the
+// wind-up: every one of these is live in the dev tuner (?tune=1) through
+// `engine/tuning.ts`, and these are the shipped defaults a session starts
+// from and RESET restores. ---
+
+/** Riff register, octaves from the authored A3 root (-1 = A2, 1 = A4). */
+export const LEAD_OCTAVE = 0;
+/** Peak envelope level of a full-velocity note, pre-saturation. */
+export const LEAD_LEVEL = 0.05;
+/** Multiplier on the riff's authored gate lengths (1 = as written). */
+export const LEAD_GATE = 1.8;
+/** Envelope (s): linear swell in, hold at level, exponential release out. */
+export const LEAD_ATTACK = 0.02;
+export const LEAD_RELEASE = 0.02;
+/** Detune of the saw pair, ± cents — the width of the voice. */
+export const LEAD_DETUNE = 0.0;
+/** Vibrato rate (Hz) and depth as a fraction of the pitch. */
+export const LEAD_VIB_RATE = 0.5;
+export const LEAD_VIB_DEPTH = 0.001;
+/** Filter: cutoff opens near bright × pitch (velocity-scaled), eases to dark ×. */
+export const LEAD_BRIGHT = 8.0;
+export const LEAD_DARK = 2.0;
+export const LEAD_Q = 1.0;
+/** tanh drive of the lead bus saturation — the glue, and some of the warmth. */
+export const LEAD_SAT_DRIVE = 3.5;
+/** How much of the (post-saturation) lead feeds the shared delay send. */
+export const LEAD_SEND = 0.2;
 
 // --- SFX send (GAME-DESIGN §9). One shared feedback delay is what gives every
 // effect the same room, instead of nine effects each with their own. ---
