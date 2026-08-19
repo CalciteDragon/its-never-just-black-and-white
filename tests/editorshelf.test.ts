@@ -274,10 +274,11 @@ describe('the controls panel', () => {
 });
 
 describe('the level picker', () => {
-  it('offers NEW, then every draft, then every shipped level', () => {
+  it('offers NEW and IMPORT, then every draft, then every shipped level', () => {
     const { scene } = openPicker(['cellar', 'attic']);
     expect(scene.state.rows.map((r) => r.kind)).toEqual([
       'new',
+      'import',
       'draft',
       'draft',
       ...LEVELS.map(() => 'builtin'),
@@ -299,7 +300,7 @@ describe('the level picker', () => {
 
   it('opens a draft with its own rows, not a blank grid', () => {
     const { h, scene } = openPicker(['cellar']);
-    down(h, scene, 1);
+    down(h, scene, 2); // past NEW and IMPORT, onto the draft
     tap(h, scene, 'Enter');
     const editor = h.scenes[0] as EditorScene;
     expect(editor.state.id).toBe('cellar');
@@ -308,7 +309,7 @@ describe('the level picker', () => {
 
   it('OPENS A SHIPPED LEVEL AS A COPY, on the shelf, before a single edit', () => {
     const { h, scene } = openPicker();
-    down(h, scene, 1); // past NEW, onto the first built-in
+    down(h, scene, 2); // past NEW and IMPORT, onto the first built-in
     tap(h, scene, 'Enter');
     const editor = h.scenes[0] as EditorScene;
     expect(editor.state.id).toBe(`${LEVELS[0].id}-copy`);
@@ -320,7 +321,7 @@ describe('the level picker', () => {
 
   it('DELETING ASKS FIRST, and N keeps it', () => {
     const { h, scene } = openPicker(['cellar']);
-    down(h, scene, 1);
+    down(h, scene, 2);
     tap(h, scene, 'KeyX');
     expect(scene.state.confirming).toBe('cellar');
     tap(h, scene, 'KeyN');
@@ -335,7 +336,7 @@ describe('the level picker', () => {
 
   it('the prompt swallows Esc, so leaving is never one keystroke from deleting', () => {
     const { h, scene } = openPicker(['cellar']);
-    down(h, scene, 1);
+    down(h, scene, 2);
     tap(h, scene, 'KeyX');
     tap(h, scene, 'Escape');
     expect(scene.state.confirming).toBeNull();
@@ -345,7 +346,7 @@ describe('the level picker', () => {
 
   it('REFUSES TO DELETE A BUILT-IN, and says why rather than doing nothing', () => {
     const { h, scene } = openPicker();
-    down(h, scene, 1);
+    down(h, scene, 2);
     tap(h, scene, 'KeyX');
     expect(scene.state.confirming).toBeNull();
     expect(scene.state.status).toContain('BUILT-IN');

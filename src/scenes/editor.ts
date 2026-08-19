@@ -27,6 +27,7 @@ import {
   EDITOR_GRID_ALPHA,
   EDITOR_MARQUEE_ALPHA,
   EDITOR_MARQUEE_WIDTH,
+  EDITOR_NAME_MAX,
   EDITOR_PAN_SPEED,
   EDITOR_ZOOM_STEPS,
   PAD_CHEVRON_LEN,
@@ -54,7 +55,7 @@ import { draftExists, renameDraft, uniqueDraftId, writeDraft } from '../editor/d
 import { zoomLabel, zoomRange } from '../editor/zoom';
 import { measureText } from '../engine/font';
 import { MOUSE_LEFT, MOUSE_MIDDLE, MOUSE_RIGHT } from '../engine/input';
-import { saveLevel } from '../engine/levelio';
+import { exportLevel } from '../engine/levelio';
 import { LEVEL_ID_PATTERN } from '../engine/levelio';
 import { palette } from '../engine/palette';
 import type { Renderer } from '../engine/renderer';
@@ -134,7 +135,6 @@ const BAR_W = GRID_CHARS.length * BAR_CELL + (GRID_CHARS.length - 1) * BAR_GAP;
 const HELP_LABEL = 'CONTROLS AND TOOLS  (H)';
 
 /** Longest display name a copy keeps, so the header plate cannot outgrow the frame. */
-const NAME_MAX = 40;
 
 /** `Digit1`…`Digit8`, in palette order. */
 const DIGIT_CODES: readonly string[] = GRID_CHARS.map((_, i) => `Digit${i + 1}`);
@@ -315,7 +315,7 @@ export class EditorScene implements Scene {
         this.afterEdit(game, this.grid.redo() ? 'REDO' : 'NOTHING TO REDO');
       }
       if (input.codePressed('KeyS')) {
-        this.save(game);
+        this.exportFile(game);
       }
       return;
     }
@@ -545,7 +545,7 @@ export class EditorScene implements Scene {
       return;
     }
     if (this.mode === 'id') {
-      // Enforced here as well as in `saveLevel` and in the vite sink: the id is
+      // Enforced here as well as in `exportLevel`: the id is
       // a filename, and the first place to say so is the field you type it in.
       if (!LEVEL_ID_PATTERN.test(this.buffer)) {
         this.status = 'BAD ID: LOWERCASE, DIGITS AND -, NOT STARTING WITH -';
@@ -954,24 +954,35 @@ export class EditorScene implements Scene {
     game.setScene(new PlayScene(res.level, { kind: 'playtest', back: this }));
   }
 
-  private save(game: Game): void {
+  /**
+   * EXPORT: the level, as a `.json` file in the author's downloads folder.
+   *
+   * It is deliberately not called "save", because the editor already saves —
+   * every stroke ends in a write to the draft shelf, and the shelf is what
+   * CUSTOM LEVELS lists. Calling this "save" made an author who never pressed
+   * it wonder whether their work was kept, and made the one who did press it
+   * believe the file was the only copy. Export answers a different question:
+   * how does this level leave this browser — to be committed to `src/levels/`,
+   * or sent to somebody who drops it back onto an import row.
+   */
+  private exportFile(game: Game): void {
     this.revalidate();
     // The copy rule, enforced where it bites. Unreachable by the ordinary route
     // — a built-in is opened under a copy's id and the id field refuses to type
     // one back — which is exactly why it is checked once more before the write.
     if (isBuiltinId(this.id)) {
-      this.status = 'CANNOT SAVE OVER A BUILT-IN LEVEL: PRESS N FOR A NEW ID';
+      this.status = 'THAT ID BELONGS TO A BUILT-IN LEVEL: PRESS N FOR A NEW ONE';
       return;
     }
     if (this.errors.length > 0) {
-      this.status = `CANNOT SAVE: ${this.errors[0]}`;
+      this.status = `CANNOT EXPORT: ${this.errors[0]}`;
       return;
     }
-    this.status = 'SAVING...';
+    this.status = 'EXPORTING...';
     const payload = { id: this.id, name: this.name, rows: this.grid.rows };
-    // `saveLevel` never rejects — it reports which transport it took — so the
+    // `exportLevel` never rejects — it reports which transport it took — so the
     // only thing to do with the promise is show what it says.
-    void saveLevel(payload).then((outcome) => {
+    void exportLevel(payload).then((outcome) => {
       this.status = outcome.message;
       game.audio.play(outcome.ok ? 'goal' : 'death');
     });
@@ -1364,7 +1375,7 @@ export function isBuiltinId(id: string): boolean {
 export function editorInitFromLevel(level: Level, taken: readonly string[] = []): EditorInit {
   return {
     id: uniqueDraftId(`${level.id}-copy`, [...builtinIds(), ...taken]),
-    name: `${level.name} COPY`.slice(0, NAME_MAX),
+    name: `${level.name} COPY`.slice(0, EDITOR_NAME_MAX),
     rows: levelRows(level),
     copyOf: level.id,
   };

@@ -1,26 +1,28 @@
 /**
- * The editor's save transport. Two halves, and the split is the point.
+ * Levels in and out of the browser: the file transport. Two halves, and the
+ * split is the point.
  *
- * The **pure half** — `buildLevelPayload` and the id charset — is what the
- * editor and the vite middleware both have to agree on, and it is testable
- * without a server, a browser or a disk. `buildLevelPayload` produces bytes
- * identical to `world/level.ts`'s `serializeLevel`, so a level saved from the
- * editor and a level serialised from a parsed `Level` are the same file: what
- * the editor writes is what `git diff` shows (PHASES phase 7, decision 1).
- * That equality is asserted by round-tripping through the real parser, not by
- * a second copy of the formatting rules.
+ * The **pure half** — `buildLevelPayload` and the id charset — is testable
+ * without a browser or a disk. `buildLevelPayload` produces bytes identical to
+ * `world/level.ts`'s `serializeLevel`, so a level exported from the editor and
+ * a level serialised from a parsed `Level` are the same file: an exported level
+ * can be committed to `src/levels/` verbatim, and `git diff` shows exactly what
+ * the editor drew (PHASES phase 7, decision 1). That equality is asserted by
+ * round-tripping through the real parser, not by a second copy of the rules.
  *
- * The **transport half** is behaviour-detected, not build-flag gated. The
- * obvious shape is `if (import.meta.env.DEV)`, and it is wrong for one reason:
- * it makes the fallback — the branch that only ever runs in a production
- * build — the branch nobody exercises until it ships. So `saveLevel` simply
- * attempts `POST /__level` and falls back on anything that is not a 200,
- * reporting which happened so the editor can say so on its status line. A dev
- * server with the plugin takes the disk path; `vite preview`, a real build and
- * a dev server missing the plugin all take the same fallback, in that order of
- * how much it would hurt to discover it late.
+ * The **transport half** is behaviour-detected, not build-flag gated. It used
+ * to POST to a dev-only vite middleware that wrote `src/levels/<id>.json`,
+ * which made the tool useful to exactly one person: whoever had the repo
+ * checked out. Export is now a **download**, which works the same in `npm run
+ * dev`, in `vite preview` and on a static host, and produces a file an author
+ * can keep, send to somebody, or drop back onto an import row. The fallbacks
+ * below it — clipboard, then storage — exist because a download can still be
+ * refused, and each outcome says which one happened rather than assuming.
  *
- * Node-safe: nothing here touches `fetch`, `localStorage` or `navigator` at
+ * `FileDropbox` is the way back in. It is the only DOM listener here, and it
+ * converts a `drop` event into a queue a node-safe scene can drain in `update`.
+ *
+ * Node-safe: nothing here touches `document`, `localStorage` or `navigator` at
  * import time, and every access to them is guarded, because all three can be
  * absent (node, an old browser) or throw on mere property access (a sandboxed
  * iframe, private mode) — the same defence `save.ts` applies to `localStorage`.
@@ -31,21 +33,21 @@ import type { StorageLike } from './save';
 
 /**
  * The one definition of a legal level id. The editor's id field enforces this
- * charset as you type and `vite.config.ts`'s `levelSink` re-enforces it before
- * building a path — the middleware cannot import this constant (a vite config
- * must not pull in `src/`), so the regex is duplicated there deliberately, and
- * this is the copy the duplicate is checked against by eye.
+ * charset as you type, `exportLevel` re-checks it before naming a file, and an
+ * imported level is renamed to fit it — a file from somebody else's machine is
+ * the one place an illegal id can actually arrive.
  *
  * Lowercase, digits and dashes, and it may not lead with a dash. That is not
- * cosmetic: the id becomes a filename (`src/levels/<id>.json`) and a save key
- * (`bw.best.<id>`), so it has to be safe in a path, stable across
+ * cosmetic: the id becomes a filename (`<id>.json`, and `src/levels/<id>.json`
+ * for anything committed), a storage key (`bw.editor.draft.<id>`) and a save
+ * key (`bw.best.<id>`), so it has to be safe in a path, stable across
  * case-insensitive filesystems, and free of anything a URL would re-encode.
  */
 export const LEVEL_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
 /**
  * Never throws, for any input at all — it is called on a text field's contents
- * and on whatever a hand-written POST puts in the query string. A non-string,
+ * and on whatever an imported file happens to carry in its `id`. A non-string,
  * `''`, `../evil`, `A-Z` and `-leading` are all false.
  */
 export function isValidLevelId(id: unknown): boolean {
@@ -75,8 +77,20 @@ export function buildLevelPayload(p: LevelPayload): string {
   return `${JSON.stringify({ id, name, rows }, null, 2)}\n`;
 }
 
-/** Which route the save actually took. Reported, never assumed. */
-export type SaveTransport = 'disk' | 'local';
+/** The filename an export writes, and the one an import is expected to carry. */
+export function levelFileName(id: string): string {
+  return `${id}.json`;
+}
+
+/**
+ * Which route the export actually took. Reported, never assumed.
+ *
+ * `download` is the one an author asked for — the file lands in the browser's
+ * downloads folder, which is somewhere they can find it, send it to somebody,
+ * or drop back onto an import row. The other two are what is left when a
+ * browser refuses to start a download at all.
+ */
+export type ExportTransport = 'download' | 'clipboard' | 'storage';
 
 /**
  * `message` is drawn verbatim on the editor's status line by the 5×7 bitmap
@@ -85,21 +99,20 @@ export type SaveTransport = 'disk' | 'local';
  * uppercase, no characters outside the glyph table — rather than being cased at
  * the draw call, so what is in this file is what an author reads.
  */
-export interface SaveOutcome {
+export interface ExportOutcome {
   readonly ok: boolean;
-  readonly transport: SaveTransport;
+  readonly transport: ExportTransport;
   readonly message: string;
 }
 
 /**
- * The narrowest slice of `fetch` this module uses. `globalThis.fetch` satisfies
- * it structurally, so the real one needs no adapter, and a test fake needs no
- * `Response` — a `{ status }` is the whole contract.
+ * The narrowest slice of "hand this text to the user as a file" this module
+ * uses. It reports whether the download actually started, because every step of
+ * one — the Blob, the object URL, the synthetic click — can be absent or
+ * refused, and an outcome claiming a file the author will never find is exactly
+ * the lie this module exists to avoid.
  */
-export type FetchLike = (
-  url: string,
-  init: { readonly method: string; readonly body: string },
-) => Promise<{ readonly status: number }>;
+export type DownloadLike = (filename: string, text: string) => boolean;
 
 /**
  * Every ambient the transport touches, injectable. Absent means "detect it",
@@ -107,7 +120,7 @@ export type FetchLike = (
  * global.
  */
 export interface LevelIoDeps {
-  readonly fetch?: FetchLike;
+  readonly download?: DownloadLike;
   readonly storage?: StorageLike;
   readonly clipboard?: (text: string) => Promise<void>;
 }
@@ -115,22 +128,73 @@ export interface LevelIoDeps {
 /** Written on a bad id. Names the charset, because "bad id" alone is a riddle. */
 const BAD_ID_MESSAGE = 'BAD ID: USE LOWERCASE LETTERS, DIGITS AND -, NOT STARTING WITH -.';
 
-/** The endpoint `vite.config.ts`'s `levelSink` serves. Dev only, by design. */
-const LEVEL_SINK_PATH = '/__level';
-
-function detectFetch(): FetchLike | null {
-  try {
-    return (globalThis as { fetch?: FetchLike }).fetch ?? null;
-  } catch {
-    return null;
-  }
-}
+/**
+ * How long an object URL is left alive after the click. Revoking it in the same
+ * turn cancels the download in some browsers — the anchor has been clicked but
+ * the fetch of the blob has not begun — and leaking one 1.3 KB blob per export
+ * for ten seconds is the cheaper of the two mistakes.
+ */
+const OBJECT_URL_TTL_MS = 10_000;
 
 function detectStorage(): StorageLike | null {
   try {
     return (globalThis as { localStorage?: StorageLike }).localStorage ?? null;
   } catch {
     return null; // Access to localStorage itself can throw (sandboxed iframes).
+  }
+}
+
+/**
+ * The download, as an anchor with a `download` attribute over a blob URL. Null
+ * whenever any part of that is missing (node, and any environment without a
+ * document), so the caller falls back rather than throwing.
+ *
+ * The anchor goes into the document before the click and out after it: Firefox
+ * ignores a click on an element that is not in the tree, which is the kind of
+ * difference that only ever shows up in the browser nobody tested in.
+ */
+export function detectDownload(): DownloadLike | null {
+  try {
+    const g = globalThis as {
+      document?: Document;
+      URL?: typeof URL;
+      Blob?: typeof Blob;
+      setTimeout?: typeof setTimeout;
+    };
+    const doc = g.document;
+    const urls = g.URL;
+    const blobs = g.Blob;
+    if (!doc || typeof doc.createElement !== 'function' || !doc.body) {
+      return null;
+    }
+    if (!urls || typeof urls.createObjectURL !== 'function' || !blobs) {
+      return null;
+    }
+    return (filename: string, text: string): boolean => {
+      try {
+        const url = urls.createObjectURL(new blobs([text], { type: 'application/json' }));
+        const a = doc.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.rel = 'noopener';
+        a.style.display = 'none';
+        doc.body.appendChild(a);
+        a.click();
+        a.remove();
+        g.setTimeout?.(() => {
+          try {
+            urls.revokeObjectURL(url);
+          } catch {
+            // An object URL outliving the page is harmless; throwing is not.
+          }
+        }, OBJECT_URL_TTL_MS);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -157,9 +221,9 @@ export function detectClipboard(): ((text: string) => Promise<void>) | null {
 /**
  * Best-effort: reports whether it stuck. Storage can throw on quota, in private
  * mode, or because the object itself is unreachable — none of which should cost
- * the author the clipboard copy that comes next.
+ * the author the clipboard copy that comes first.
  */
-function writeDraft(storage: StorageLike | null, text: string): boolean {
+function writeFallbackCopy(storage: StorageLike | null, text: string): boolean {
   if (storage === null) {
     return false;
   }
@@ -193,74 +257,231 @@ export async function copyToClipboard(
 }
 
 /**
- * Save a level. Resolves to an outcome; never rejects, whatever the ambients
- * do — a save that throws in the middle of an editing session is a save that
- * loses work, and every failure here has a fallback worth reporting instead.
- *
- * Order of attempts: reject a bad id outright (no request, no draft — the id is
- * the filename and guessing at it is the middleware's job to refuse, not this
- * one's to paper over), then the dev-server disk write, then localStorage plus
- * the clipboard. The clipboard matters most in the branch that has no server:
- * in a production build it is the only way the author gets the file out.
+ * The `detectDownload` implementation already catches its own throws, so this
+ * guard is for the *other* one — an injected `DownloadLike`, from a test or
+ * from whatever wires this up next. `exportLevel` promises never to reject, and
+ * a promise that keeps that word only for the implementation it happens to
+ * ship with is not keeping it at all.
  */
-export async function saveLevel(p: LevelPayload, deps: LevelIoDeps = {}): Promise<SaveOutcome> {
+function tryDownload(download: DownloadLike, file: string, body: string): boolean {
+  try {
+    return download(file, body);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Export a level as a file. Resolves to an outcome; never rejects, whatever the
+ * ambients do — an export that throws mid-session is one that loses work, and
+ * every failure here has a fallback worth reporting instead.
+ *
+ * Order of attempts: reject a bad id outright (the id is the filename, and
+ * guessing at it would put a level somewhere nobody looks for it), then the
+ * download, then the clipboard, then `bw.editor.draft` as the last thing short
+ * of losing it.
+ *
+ * **The draft shelf is not one of the fallbacks**, and that is the shape of the
+ * whole feature: the editor autosaves to the shelf on every stroke, so the
+ * level is already kept and already listed under CUSTOM LEVELS. Exporting is
+ * about getting a *file* out — to keep, to send to somebody, to drop back onto
+ * an import row — which is why the primary route is the downloads folder and
+ * not another key in storage.
+ */
+export async function exportLevel(p: LevelPayload, deps: LevelIoDeps = {}): Promise<ExportOutcome> {
   if (!isValidLevelId(p.id)) {
-    return { ok: false, transport: 'local', message: BAD_ID_MESSAGE };
+    return { ok: false, transport: 'download', message: BAD_ID_MESSAGE };
   }
 
   const body = buildLevelPayload(p);
-  const shown = p.id.toUpperCase();
-  const post = deps.fetch ?? detectFetch();
+  const file = levelFileName(p.id);
+  const shown = file.toUpperCase();
+  const download = deps.download ?? detectDownload();
 
-  if (post !== null) {
-    try {
-      // The id is already `[a-z0-9-]+`, so it needs no escaping in a query
-      // string; encoding it anyway would only obscure that the guard above is
-      // what makes this safe.
-      const res = await post(`${LEVEL_SINK_PATH}?id=${p.id}`, { method: 'POST', body });
-      if (res.status === 200) {
-        // The sink deliberately does not touch src/levels/index.ts — rewriting
-        // a TypeScript source file from a middleware is codegen. So the
-        // confirmation names the one-line edit that finishes the job.
-        return {
-          ok: true,
-          transport: 'disk',
-          message: `SAVED SRC/LEVELS/${shown}.JSON - ADD IT TO SRC/LEVELS/INDEX.TS`,
-        };
-      }
-    } catch {
-      // A refused connection, a CORS failure, a dev server that died mid-edit:
-      // all of them are the fallback, not an exception for the editor to catch.
+  if (download !== null && tryDownload(download, file, body)) {
+    return { ok: true, transport: 'download', message: `EXPORTED ${shown} TO YOUR DOWNLOADS` };
+  }
+
+  if (await copyToClipboard(deps.clipboard ?? detectClipboard(), body)) {
+    return {
+      ok: true,
+      transport: 'clipboard',
+      message: `DOWNLOAD REFUSED - JSON ON CLIPBOARD, PASTE IT INTO ${shown}`,
+    };
+  }
+  if (writeFallbackCopy(deps.storage ?? detectStorage(), body)) {
+    return {
+      ok: true,
+      transport: 'storage',
+      message: `NO DOWNLOAD, NO CLIPBOARD - JSON IS IN ${SAVE_KEYS.editorDraft.toUpperCase()}`,
+    };
+  }
+  // Nothing handed the file over. The draft on the shelf still holds the level,
+  // so this says what failed rather than implying the work is gone.
+  return {
+    ok: false,
+    transport: 'download',
+    message: 'EXPORT FAILED: NO DOWNLOAD, NO CLIPBOARD. THE DRAFT IS STILL SAVED.',
+  };
+}
+
+// --- Import: the other direction, and the reason a level file is worth having. ---
+
+/** A file the author dropped on the window, already read as text. */
+export interface DroppedFile {
+  readonly name: string;
+  readonly text: string;
+}
+
+/**
+ * How many dropped files are held at once. A drop of forty files is a slip, and
+ * queueing all of them would import forty levels before the author could look
+ * at the first one.
+ */
+const DROP_QUEUE_MAX = 8;
+
+/** Bigger than this is not a level: a 200×60 grid serialises to about 14 KB. */
+const DROP_SIZE_MAX = 1 << 20;
+
+/**
+ * Drag-and-drop, turned into something a scene can poll.
+ *
+ * Scenes are node-safe (hard rule 2) and cannot listen for a `drop` event, and
+ * a callback fired from a DOM handler would run scene logic outside the
+ * fixed-step loop — halfway through a frame, or into a scene that has already
+ * been swapped out. So `attach` is the only half that touches the DOM, it does
+ * nothing but read text into a queue, and the scene drains that queue in its
+ * own `update`. A test pushes onto the queue directly and needs no event.
+ *
+ * `hovering` is what lets a screen say DROP IT HERE while a file is over the
+ * window, which is the only feedback drag-and-drop has to offer.
+ */
+export class FileDropbox {
+  private readonly queue: DroppedFile[] = [];
+  private over = false;
+  private attached = false;
+
+  /** Is a drag over the window? Cosmetic; never trusted for logic. */
+  get hovering(): boolean {
+    return this.over;
+  }
+
+  /** The test seam, and what `attach`'s reader calls. */
+  push(file: DroppedFile): void {
+    this.queue.push(file);
+    while (this.queue.length > DROP_QUEUE_MAX) {
+      this.queue.shift();
     }
   }
 
-  // Fallback. Storage first, because it is the one that survives a reload; the
-  // clipboard is what gets the JSON into a file, and it is the more fragile of
-  // the two (it can need a user gesture, which a Ctrl+S may not count as).
-  const stored = writeDraft(deps.storage ?? detectStorage(), body);
-  const copied = await copyToClipboard(deps.clipboard ?? detectClipboard(), body);
+  /**
+   * Every file dropped since the last call; the queue is emptied. Draining
+   * rather than peeking is deliberate — two screens must never both import the
+   * same drop, and a file left behind would be imported again by whatever
+   * screen came next.
+   */
+  take(): readonly DroppedFile[] {
+    if (this.queue.length === 0) {
+      return [];
+    }
+    const out = this.queue.slice();
+    this.queue.length = 0;
+    return out;
+  }
 
-  if (copied) {
-    return {
-      ok: true,
-      transport: 'local',
-      message: `SAVED LOCALLY - JSON ON CLIPBOARD, PASTE INTO SRC/LEVELS/${shown}.JSON`,
-    };
+  /**
+   * Open the operating system's file picker and queue whatever comes back, so
+   * the IMPORT row is a row you can *press* rather than a label describing a
+   * gesture. Returns whether a picker could be opened at all — under node, and
+   * in anything without a document, it is false and the caller says so.
+   *
+   * Browsers gate this behind user activation, which a keypress or a click one
+   * frame earlier satisfies. Drag-and-drop is the path that never needs it, so
+   * both screens document the drop and offer the picker.
+   */
+  openPicker(): boolean {
+    try {
+      const doc = (globalThis as { document?: Document }).document;
+      if (!doc || typeof doc.createElement !== 'function') {
+        return false;
+      }
+      const input = doc.createElement('input');
+      input.type = 'file';
+      // A hint, not a guard: the picker's "all files" option is one click away,
+      // and `importLevelText` is what actually decides whether this is a level.
+      input.accept = '.json,application/json';
+      input.multiple = true;
+      input.addEventListener('change', () => {
+        const files = input.files;
+        if (files === null) {
+          return;
+        }
+        for (let i = 0; i < Math.min(files.length, DROP_QUEUE_MAX); i++) {
+          this.readFile(files[i]);
+        }
+      });
+      input.click();
+      return true;
+    } catch {
+      return false;
+    }
   }
-  if (stored) {
-    // Claiming the clipboard when the clipboard refused would send an author to
-    // paste nothing into an empty file, so the message follows what happened.
-    return {
-      ok: true,
-      transport: 'local',
-      message: `DRAFT SAVED TO ${SAVE_KEYS.editorDraft.toUpperCase()} - CLIPBOARD REFUSED, COPY IT FROM THERE.`,
-    };
+
+  /**
+   * One file into the queue, whatever happens. A read that fails still queues
+   * an empty entry: the importer reports it as "not a level", and an author who
+   * picked a file is owed an answer rather than a screen that does nothing.
+   */
+  private readFile(file: File): void {
+    if (file.size > DROP_SIZE_MAX) {
+      this.push({ name: file.name, text: '' });
+      return;
+    }
+    void file
+      .text()
+      .then((text) => this.push({ name: file.name, text }))
+      .catch(() => this.push({ name: file.name, text: '' }));
   }
-  // Nothing anywhere kept the level. `ok: true` here would be a lie of exactly
-  // the kind this module exists to avoid: the author would leave the editor.
-  return {
-    ok: false,
-    transport: 'local',
-    message: 'SAVE FAILED: NO SERVER, NO STORAGE, NO CLIPBOARD. KEEP THE TAB OPEN.',
-  };
+
+  /**
+   * Browser-only: wire the drag events on a window. One of the sanctioned
+   * places that may touch a DOM API; importing this module in node stays
+   * side-effect-free, and calling this twice is a no-op.
+   *
+   * **`dragover` must preventDefault or nothing else here runs.** Without it
+   * the browser's own handler wins and dropping a JSON file on the page
+   * navigates away from the game — losing the session it was about to be
+   * imported into. `dragenter` and `drop` are prevented for the same reason.
+   */
+  attach(win: Window): void {
+    if (this.attached) {
+      return;
+    }
+    this.attached = true;
+    const over = (e: DragEvent): void => {
+      e.preventDefault();
+      this.over = true;
+    };
+    win.addEventListener('dragenter', over);
+    win.addEventListener('dragover', over);
+    win.addEventListener('dragleave', (e: DragEvent) => {
+      e.preventDefault();
+      // Only the drag actually leaving the window, not every child boundary it
+      // crosses on the way across: `relatedTarget` is null exactly then.
+      if (e.relatedTarget === null) {
+        this.over = false;
+      }
+    });
+    win.addEventListener('drop', (e: DragEvent) => {
+      e.preventDefault();
+      this.over = false;
+      const files = e.dataTransfer?.files;
+      if (!files) {
+        return;
+      }
+      for (let i = 0; i < Math.min(files.length, DROP_QUEUE_MAX); i++) {
+        this.readFile(files[i]);
+      }
+    });
+  }
 }

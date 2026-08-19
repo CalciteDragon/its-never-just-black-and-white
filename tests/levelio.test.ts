@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { FALLBACK_GLYPH, glyphFor } from '../src/engine/font';
-import { buildLevelPayload, isValidLevelId, LEVEL_ID_PATTERN, saveLevel } from '../src/engine/levelio';
-import type { FetchLike, LevelPayload } from '../src/engine/levelio';
+import {
+  buildLevelPayload,
+  exportLevel,
+  FileDropbox,
+  isValidLevelId,
+  LEVEL_ID_PATTERN,
+  levelFileName,
+} from '../src/engine/levelio';
+import type { DownloadLike, LevelPayload } from '../src/engine/levelio';
 import { SAVE_KEYS } from '../src/engine/save';
 import type { StorageLike } from '../src/engine/save';
 import { parseLevel, serializeLevel } from '../src/world/level';
@@ -30,52 +37,24 @@ class ThrowingStorage implements StorageLike {
   }
 }
 
-interface FetchCall {
-  readonly url: string;
-  readonly method: string;
-  readonly body: string;
+interface DownloadCall {
+  readonly filename: string;
+  readonly text: string;
 }
 
-/** A fetch that records what it was handed and answers with a fixed status. */
-function fakeFetch(status: number, calls: FetchCall[]): FetchLike {
-  return (url, init) => {
-    calls.push({ url, method: init.method, body: init.body });
-    return Promise.resolve({ status });
+/** A download that records what it was handed and reports a fixed result. */
+function fakeDownload(ok: boolean, calls: DownloadCall[]): DownloadLike {
+  return (filename, text) => {
+    calls.push({ filename, text });
+    return ok;
   };
 }
 
-/** The dev server is not running / the machine is offline: the promise rejects. */
-function rejectingFetch(calls: FetchCall[]): FetchLike {
-  return (url, init) => {
-    calls.push({ url, method: init.method, body: init.body });
-    return Promise.reject(new Error('ECONNREFUSED'));
+/** A download that throws rather than returning false — a refused anchor. */
+function throwingDownload(): DownloadLike {
+  return () => {
+    throw new Error('no document here');
   };
-}
-
-/**
- * Runs `fn` with no `globalThis.fetch` at all — the shape a very old browser or
- * a stripped test environment has, and the one branch of `saveLevel` that
- * cannot be reached by passing a dep. Restored afterwards either way.
- */
-async function withoutGlobalFetch<T>(fn: () => Promise<T>): Promise<T> {
-  const g = globalThis as unknown as { fetch?: unknown };
-  const real = g.fetch;
-  delete g.fetch;
-  if (g.fetch !== undefined) {
-    g.fetch = undefined; // Non-configurable in some runtimes; shadow it instead.
-  }
-  // Without this the test could pass for the wrong reason: node's real fetch
-  // would reject on the relative URL and land in the same fallback branch.
-  expect(g.fetch).toBeUndefined();
-  try {
-    return await fn();
-  } finally {
-    if (real === undefined) {
-      delete g.fetch;
-    } else {
-      g.fetch = real;
-    }
-  }
 }
 
 function payload(over: Partial<LevelPayload> = {}): LevelPayload {
@@ -165,32 +144,35 @@ describe('buildLevelPayload', () => {
   });
 });
 
-describe('saveLevel transport selection', () => {
-  it('reports disk on a 200 and posts exactly the bytes serializeLevel would', async () => {
-    const calls: FetchCall[] = [];
+describe('exportLevel transport selection', () => {
+  it('downloads <id>.json with exactly the bytes serializeLevel would write', async () => {
+    const calls: DownloadCall[] = [];
     const storage = new FakeStorage();
-    const out = await saveLevel(payload(), { fetch: fakeFetch(200, calls), storage });
+    const out = await exportLevel(payload(), { download: fakeDownload(true, calls), storage });
 
-    expect(out).toMatchObject({ ok: true, transport: 'disk' });
+    expect(out).toMatchObject({ ok: true, transport: 'download' });
     expectRenderable(out.message);
-    expect(out.message).toContain('02-TEST-BED');
+    expect(out.message).toContain('02-TEST-BED.JSON');
+    expect(out.message).toContain('DOWNLOADS');
 
     expect(calls).toHaveLength(1);
-    expect(calls[0].method).toBe('POST');
-    expect(calls[0].url).toContain('/__level');
-    expect(calls[0].url).toContain('id=02-test-bed');
-    expect(calls[0].body).toBe(buildLevelPayload(payload()));
+    expect(calls[0].filename).toBe('02-test-bed.json');
+    expect(calls[0].text).toBe(buildLevelPayload(payload()));
 
-    // A disk save must not also leave a draft behind: the file IS the record.
+    // A download must not also leave a copy in storage: the draft shelf already
+    // holds the level, and `bw.editor.draft` is the legacy key, not a record.
     expect(storage.map.size).toBe(0);
   });
 
-  it('falls back to local on a 404 rather than throwing', async () => {
-    const calls: FetchCall[] = [];
-    const storage = new FakeStorage();
+  it('names the file after the id, which is the filename everywhere else', () => {
+    expect(levelFileName('02-test-bed')).toBe('02-test-bed.json');
+  });
+
+  it('falls back to the clipboard when the download reports failure', async () => {
     const copied: string[] = [];
-    const out = await saveLevel(payload(), {
-      fetch: fakeFetch(404, calls),
+    const storage = new FakeStorage();
+    const out = await exportLevel(payload(), {
+      download: fakeDownload(false, []),
       storage,
       clipboard: (t) => {
         copied.push(t);
@@ -198,66 +180,80 @@ describe('saveLevel transport selection', () => {
       },
     });
 
-    expect(calls).toHaveLength(1);
-    expect(out).toMatchObject({ ok: true, transport: 'local' });
+    expect(out).toMatchObject({ ok: true, transport: 'clipboard' });
     expectRenderable(out.message);
     expect(out.message).toContain('CLIPBOARD');
-    expect(storage.getItem(SAVE_KEYS.editorDraft)).toBe(buildLevelPayload(payload()));
     expect(copied).toEqual([buildLevelPayload(payload())]);
+    // The clipboard carried it, so nothing had to be stashed in storage.
+    expect(storage.map.size).toBe(0);
   });
 
-  it('falls back to local when the request rejects outright', async () => {
-    const calls: FetchCall[] = [];
+  it('falls back to storage when the download throws and the clipboard refuses', async () => {
     const storage = new FakeStorage();
-    const out = await saveLevel(payload(), { fetch: rejectingFetch(calls), storage });
+    const out = await exportLevel(payload(), {
+      download: throwingDownload(),
+      storage,
+      clipboard: () => Promise.reject(new Error('not allowed without a gesture')),
+    });
 
-    expect(calls).toHaveLength(1);
-    expect(out).toMatchObject({ ok: true, transport: 'local' });
-    expect(storage.getItem(SAVE_KEYS.editorDraft)).toBe(buildLevelPayload(payload()));
-  });
-
-  it('falls back to local when there is no fetch at all', async () => {
-    const storage = new FakeStorage();
-    const out = await withoutGlobalFetch(() => saveLevel(payload(), { storage }));
-
-    expect(out).toMatchObject({ ok: true, transport: 'local' });
+    expect(out).toMatchObject({ ok: true, transport: 'storage' });
     expectRenderable(out.message);
     expect(storage.getItem(SAVE_KEYS.editorDraft)).toBe(buildLevelPayload(payload()));
   });
 
-  it('uses globalThis.fetch when no fetch dep is given', async () => {
-    const calls: FetchCall[] = [];
-    const g = globalThis as unknown as { fetch?: unknown };
-    const real = g.fetch;
-    g.fetch = fakeFetch(200, calls);
-    try {
-      const out = await saveLevel(payload(), { storage: new FakeStorage() });
-      expect(out.transport).toBe('disk');
-      expect(calls).toHaveLength(1);
-    } finally {
-      if (real === undefined) {
-        delete g.fetch;
-      } else {
-        g.fetch = real;
-      }
-    }
+  it('survives a clipboard that throws synchronously', async () => {
+    const storage = new FakeStorage();
+    const out = await exportLevel(payload(), {
+      download: fakeDownload(false, []),
+      storage,
+      clipboard: () => {
+        throw new Error('no clipboard here');
+      },
+    });
+
+    expect(out.transport).toBe('storage');
+    expect(storage.getItem(SAVE_KEYS.editorDraft)).toBe(buildLevelPayload(payload()));
+  });
+
+  it('reports failure honestly when nothing at all takes the file', async () => {
+    const out = await exportLevel(payload(), {
+      download: fakeDownload(false, []),
+      storage: new ThrowingStorage(),
+      clipboard: () => Promise.reject(new Error('nope')),
+    });
+
+    expect(out.ok).toBe(false);
+    expectRenderable(out.message);
+    // And it says the draft is still there, because it is: the shelf autosaves
+    // on every stroke, so a failed export is not lost work.
+    expect(out.message).toContain('DRAFT');
+  });
+
+  it('detects no download under node and still reports something renderable', async () => {
+    // No `download` dep and no document: the branch a production build would
+    // only reach on a browser that refuses blobs, exercised here for free.
+    const out = await exportLevel(payload(), {
+      storage: new FakeStorage(),
+      clipboard: () => Promise.resolve(),
+    });
+    expect(out.transport).toBe('clipboard');
+    expectRenderable(out.message);
   });
 });
 
-describe('saveLevel id guard', () => {
-  it('refuses a bad id without touching the network or the draft', async () => {
-    const calls: FetchCall[] = [];
+describe('exportLevel id guard', () => {
+  it('refuses a bad id without downloading anything or writing a draft', async () => {
+    const calls: DownloadCall[] = [];
     const storage = new FakeStorage();
-    const out = await saveLevel(payload({ id: '../evil' }), {
-      fetch: fakeFetch(200, calls),
+    const out = await exportLevel(payload({ id: '../evil' }), {
+      download: fakeDownload(true, calls),
       storage,
     });
 
     expect(out.ok).toBe(false);
-    expect(out.transport).toBe('local');
     expectRenderable(out.message);
     // The message has to name the legal charset; a bare "bad id" leaves the
-    // author guessing at the one field the sink refuses to guess for them.
+    // author guessing at the one field nothing else can guess for them.
     expect(out.message.toUpperCase()).toContain('-');
     expect(out.message.toUpperCase()).toContain('DIGIT');
     expect(calls).toEqual([]);
@@ -265,57 +261,41 @@ describe('saveLevel id guard', () => {
   });
 
   it('refuses an empty id', async () => {
-    const calls: FetchCall[] = [];
-    const out = await saveLevel(payload({ id: '' }), { fetch: fakeFetch(200, calls) });
+    const calls: DownloadCall[] = [];
+    const out = await exportLevel(payload({ id: '' }), { download: fakeDownload(true, calls) });
     expect(out.ok).toBe(false);
     expect(calls).toEqual([]);
   });
 });
 
-describe('saveLevel fallback is best-effort', () => {
-  it('survives a clipboard that rejects, and still writes the draft', async () => {
-    const storage = new FakeStorage();
-    const out = await saveLevel(payload(), {
-      fetch: fakeFetch(500, []),
-      storage,
-      clipboard: () => Promise.reject(new Error('not allowed without a gesture')),
-    });
+describe('FileDropbox', () => {
+  it('drains the queue exactly once', () => {
+    const box = new FileDropbox();
+    box.push({ name: 'a.json', text: '{}' });
+    box.push({ name: 'b.json', text: '{}' });
 
-    expect(out.transport).toBe('local');
-    expect(out.ok).toBe(true); // The draft is safe even when the clipboard is not.
-    expectRenderable(out.message);
-    expect(storage.getItem(SAVE_KEYS.editorDraft)).toBe(buildLevelPayload(payload()));
+    expect(box.take().map((f) => f.name)).toEqual(['a.json', 'b.json']);
+    // The second read is empty, which is what stops two screens importing the
+    // same drop — and what stops one screen importing it every frame.
+    expect(box.take()).toEqual([]);
   });
 
-  it('survives a clipboard that throws synchronously', async () => {
-    const storage = new FakeStorage();
-    const out = await saveLevel(payload(), {
-      fetch: fakeFetch(500, []),
-      storage,
-      clipboard: () => {
-        throw new Error('no clipboard here');
-      },
-    });
-
-    expect(out.transport).toBe('local');
-    expect(storage.getItem(SAVE_KEYS.editorDraft)).toBe(buildLevelPayload(payload()));
+  it('caps the queue rather than growing without bound', () => {
+    const box = new FileDropbox();
+    for (let i = 0; i < 40; i++) {
+      box.push({ name: `${i}.json`, text: '{}' });
+    }
+    const taken = box.take();
+    expect(taken.length).toBeLessThanOrEqual(8);
+    // The newest survive: a drop of forty files is a slip, and the last ones
+    // are the ones the author was still looking at.
+    expect(taken[taken.length - 1].name).toBe('39.json');
   });
 
-  it('survives a storage that throws on every call', async () => {
-    const copied: string[] = [];
-    const out = await saveLevel(payload(), {
-      fetch: fakeFetch(500, []),
-      storage: new ThrowingStorage(),
-      clipboard: (t) => {
-        copied.push(t);
-        return Promise.resolve();
-      },
-    });
-
-    expect(out.transport).toBe('local');
-    expectRenderable(out.message);
-    // Storage failed but the clipboard carried the JSON, so the save stands.
-    expect(out.ok).toBe(true);
-    expect(copied).toEqual([buildLevelPayload(payload())]);
+  it('is inert under node: no DOM, no throw', () => {
+    const box = new FileDropbox();
+    expect(box.hovering).toBe(false);
+    expect(box.openPicker()).toBe(false);
+    expect(box.take()).toEqual([]);
   });
 });

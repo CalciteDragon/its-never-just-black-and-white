@@ -17,6 +17,11 @@ declare global {
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const game = new Game(canvas);
 game.input.attach(window, canvas);
+// Drag-and-drop level import, on the WINDOW rather than the canvas: a file
+// dropped an inch outside the letterboxed frame is still a file the author
+// meant to import, and without a handler the browser would navigate away from
+// the game to display it.
+game.files.attach(window);
 
 // Refit only on real size changes. A ResizeObserver on the root element also
 // fires once immediately, which covers embedded panes that lay out after load

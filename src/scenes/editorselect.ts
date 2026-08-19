@@ -28,6 +28,7 @@ import {
 } from '../editor/drafts';
 import type { DraftRecord } from '../editor/drafts';
 import { blankRows } from '../editor/grid';
+import { importDroppedFiles } from '../editor/transfer';
 import { palette } from '../engine/palette';
 import type { Renderer } from '../engine/renderer';
 import type { Game, Scene } from '../game';
@@ -36,14 +37,15 @@ import { EditorScene, builtinIds, editorInitFromLevel } from './editor';
 import { updateMenu } from './menu';
 import { TitleScene } from './title';
 
-/** One row of the list. `new` is a verb; the other two are levels. */
+/** One row of the list. `new` and `import` are verbs; the other two are levels. */
 type Row =
   | { readonly kind: 'new' }
+  | { readonly kind: 'import' }
   | { readonly kind: 'draft'; readonly draft: DraftRecord }
   | { readonly kind: 'builtin'; readonly index: number };
 
-/** How many rows fit between the heading and the footer. */
-const VISIBLE = 9;
+/** How many rows fit between the heading and the instructions. */
+const VISIBLE = 7;
 const ROW_H = 34;
 const TOP = 132;
 const LEFT = 120;
@@ -51,6 +53,18 @@ const RIGHT = VIEW_W - 120;
 
 /** Alpha of the trailing detail on a row — size, or what a copy came from. */
 const DETAIL_ALPHA = 0.55;
+
+/**
+ * The instructions, as data rather than as three draw calls, so a test can
+ * assert the screen says the three things it has to say: that a draft needs no
+ * importing, how a file gets in, and how one gets out. Brief on purpose — the
+ * long version is in the editor's CONTROLS AND TOOLS panel, one key away.
+ */
+export const IMPORT_HELP: readonly string[] = [
+  'DRAFTS SAVE THEMSELVES AS YOU DRAW, AND APPEAR UNDER LEVELS - CUSTOM LEVELS.',
+  'TO IMPORT: DROP A LEVEL .JSON ANYWHERE ON THIS WINDOW, OR PRESS ENTER ON IMPORT.',
+  'TO SHARE: CTRL+S IN THE EDITOR EXPORTS THE .JSON TO YOUR DOWNLOADS.',
+];
 
 export class EditorSelectScene implements Scene {
   private rows: Row[] = [];
@@ -77,6 +91,7 @@ export class EditorSelectScene implements Scene {
     const drafts = listDrafts(game.save);
     this.rows = [
       { kind: 'new' },
+      { kind: 'import' },
       ...drafts.map((draft): Row => ({ kind: 'draft', draft })),
       ...LEVELS.map((_, index): Row => ({ kind: 'builtin', index })),
     ];
@@ -105,7 +120,11 @@ export class EditorSelectScene implements Scene {
     if (input.pressed('mute')) {
       game.toggleMute();
     }
-    // The confirm swallows everything, for the same reason the editor's text
+    // Drops are drained BEFORE the confirm guard: a file that arrived while a
+    // delete prompt was up is still a file the author meant to import, and
+    // leaving it in the queue would import it onto whatever screen came next.
+    this.drain(game);
+    // The confirm swallows everything else, for the same reason the editor's text
     // fields do: a key that means one thing on this screen and another inside a
     // prompt is how somebody deletes a level while trying to leave.
     if (this.confirming !== null) {
@@ -127,6 +146,31 @@ export class EditorSelectScene implements Scene {
     }
     if (step.picked) {
       this.open(game);
+    }
+  }
+
+  /** Whatever was dropped since the last frame, onto the shelf. */
+  private drain(game: Game): void {
+    const dropped = game.files.take();
+    if (dropped.length === 0) {
+      return;
+    }
+    // Built-ins are `taken` too: a draft that shadowed a shipped level's id
+    // would break the copy rule this screen enforces everywhere else.
+    const batch = importDroppedFiles(game.save, dropped, [...builtinIds(), ...this.draftIds()]);
+    this.rebuild(game);
+    this.status = batch.status;
+    if (batch.lastId !== null) {
+      // Onto the level that just arrived. Importing something and leaving the
+      // cursor where it was makes an author hunt a list for their own act.
+      const at = this.rows.findIndex((r) => r.kind === 'draft' && r.draft.id === batch.lastId);
+      if (at !== -1) {
+        this.index = at;
+        this.clampScroll();
+      }
+      game.audio.play('goal');
+    } else {
+      game.audio.play('death');
     }
   }
 
@@ -167,6 +211,14 @@ export class EditorSelectScene implements Scene {
     }
     if (row.kind === 'draft') {
       game.setScene(new EditorScene(row.draft));
+      return;
+    }
+    if (row.kind === 'import') {
+      // The picker needs user activation, which the Enter that got here
+      // satisfies. When there is none to open, the drop is still the answer.
+      this.status = game.files.openPicker()
+        ? 'PICK A LEVEL .JSON'
+        : 'DROP A LEVEL .JSON ANYWHERE ON THIS WINDOW';
       return;
     }
     if (row.kind === 'builtin') {
@@ -220,6 +272,12 @@ export class EditorSelectScene implements Scene {
       r.text(`${this.index + 1}/${this.rows.length}`, RIGHT + 12, TOP, palette.inkRgba(DETAIL_ALPHA));
     }
 
+    let hy = 388;
+    for (const line of IMPORT_HELP) {
+      r.textCentered(line, VIEW_W / 2, hy, palette.inkRgba(DETAIL_ALPHA));
+      hy += 16;
+    }
+
     if (this.confirming !== null) {
       r.textCentered(
         `DELETE ${this.confirming.toUpperCase()}? Y DELETES, N KEEPS IT`,
@@ -228,6 +286,11 @@ export class EditorSelectScene implements Scene {
         palette.ink,
         2,
       );
+    } else if (game.files.hovering) {
+      // While a file is over the window this replaces the status line: it is
+      // the only feedback drag-and-drop has, and right now it is worth more
+      // than whatever the last act reported.
+      r.textCentered('DROP IT ANYWHERE', VIEW_W / 2, VIEW_H - 76, palette.ink, 2);
     } else if (this.status !== '') {
       r.textCentered(this.status, VIEW_W / 2, VIEW_H - 72, palette.ink);
     }
@@ -250,6 +313,11 @@ export class EditorSelectScene implements Scene {
     }
     if (row.kind === 'new') {
       r.text('+ NEW LEVEL', LEFT, y, palette.ink, 2);
+      return;
+    }
+    if (row.kind === 'import') {
+      r.text('+ IMPORT A LEVEL', LEFT, y, palette.ink, 2);
+      r.text('DROP A .JSON, OR ENTER', RIGHT - 260, y + 4, palette.inkRgba(DETAIL_ALPHA));
       return;
     }
     if (row.kind === 'draft') {

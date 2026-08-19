@@ -80,7 +80,17 @@ type PlayState = 'running' | 'dying' | 'respawning' | 'won';
  */
 export type PlayContext =
   | { readonly kind: 'campaign'; readonly index: number }
-  | { readonly kind: 'playtest'; readonly back: Scene };
+  | { readonly kind: 'playtest'; readonly back: Scene }
+  /**
+   * A level off the CUSTOM LEVELS shelf — imported, or drawn here and saved as
+   * a draft. It sits between the other two on every one of those three
+   * questions: a win goes to the results screen (it is a real run, and a time
+   * is the point of playing it), a best time IS written (the id cannot collide
+   * with a shipped level — the shelf refuses a built-in id — so `bw.best.<id>`
+   * is its own), and `bw.progress` is NOT touched, because a custom level is
+   * not a rung on the campaign ladder and finishing one must never unlock it.
+   */
+  | { readonly kind: 'custom'; readonly back: Scene };
 
 /** The pause overlay, in order. `Esc` opens it; the sim is frozen behind it. */
 const PAUSE_ITEMS: readonly string[] = ['RESUME', 'RESTART', 'QUIT'];
@@ -438,15 +448,15 @@ export class PlayScene implements Scene {
     }
   }
 
-  /** Where `QUIT` goes, which is the whole difference between the two contexts. */
+  /** Where `QUIT` goes, which is most of the difference between the contexts. */
   private leave(game: Game): void {
-    game.setScene(this.ctx.kind === 'playtest' ? this.ctx.back : new TitleScene());
+    game.setScene(this.ctx.kind === 'campaign' ? new TitleScene() : this.ctx.back);
   }
 
   /**
-   * The run is over. A campaign run has a results screen to show; a playtest
-   * goes straight back to the editor **instance** it came from, edits intact —
-   * which is GAME-DESIGN §10's requirement stated as an object identity.
+   * The run is over. A campaign or custom run has a results screen to show; a
+   * playtest goes straight back to the editor **instance** it came from, edits
+   * intact — GAME-DESIGN §10's requirement stated as an object identity.
    */
   private finish(game: Game): void {
     if (this.ctx.kind === 'playtest') {
@@ -454,9 +464,11 @@ export class PlayScene implements Scene {
       return;
     }
     const stats: ResultsStats = {
-      levelId: this.level.id,
-      levelName: this.level.name,
-      index: this.ctx.index,
+      level: this.level,
+      // Null is what "there is no next level and no ladder" looks like, and it
+      // is what the results screen branches on rather than on a scene type.
+      index: this.ctx.kind === 'campaign' ? this.ctx.index : null,
+      back: this.ctx.kind === 'campaign' ? null : this.ctx.back,
       timeMs: this.finishedMs,
       previousBestMs: this.previousBestMs,
       isNewBest: this.isNewBest,
@@ -582,7 +594,10 @@ export class PlayScene implements Scene {
     this.stateT = 0;
     this.fadePhase = palette.phase;
     this.finishedMs = Math.round(this.timeSec * 1000);
-    if (this.ctx.kind === 'campaign') {
+    // A playtest writes NOTHING: the grid it ran on exists only in an editor,
+    // and a draft carrying a shipped level's id would otherwise overwrite that
+    // level's best time with a run on a map nobody else has.
+    if (this.ctx.kind !== 'playtest') {
       const key = SAVE_KEYS.best(this.level.id);
       const previous = game.save.getBest(key);
       this.previousBestMs = previous?.timeMs ?? null;
@@ -592,7 +607,10 @@ export class PlayScene implements Scene {
         timeMs: this.finishedMs,
         dateIso: new Date().toISOString(),
       }).isNewBest;
+    }
+    if (this.ctx.kind === 'campaign') {
       // Monotone, so replaying an early level cannot re-lock the later ones.
+      // Campaign only: a custom level is not a rung on this ladder.
       game.save.setProgress(this.ctx.index + 1);
     }
     game.audio.play('goal');

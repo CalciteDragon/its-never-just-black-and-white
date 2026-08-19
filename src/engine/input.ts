@@ -75,6 +75,22 @@ const PREVENT_DEFAULT_CODES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Keys whose browser default must be suppressed **only when Ctrl or Cmd is
+ * held** — the editor's shortcuts, which collide with the browser's own.
+ *
+ * `KeyS` is already in the set above, as one of the four WASD keys, so Ctrl+S
+ * happens to be suppressed today by accident. That is precisely why this table
+ * exists: the day somebody rebinds movement off WASD, "save this page" would
+ * start appearing over the editor and nothing would explain why. Stated here,
+ * the suppression survives any change to the movement keys.
+ *
+ * Cmd is included because `e.code` is `KeyS` on a Mac too, and Cmd+S there is
+ * the same dialog. The editor still only acts on Ctrl (`ctrlDown`); this list
+ * is about the browser, not about the binding.
+ */
+const CTRL_PREVENT_DEFAULT_CODES: ReadonlySet<string> = new Set(['KeyS']);
+
+/**
  * Codes whose label is not the code with its prefix stripped. `Escape` is the
  * one that earns the table: "ESCAPE" is six glyphs of a footer that has to fit
  * several bindings on one line.
@@ -341,7 +357,7 @@ export class Input {
    */
   attach(win: Window, canvas?: HTMLCanvasElement): void {
     win.addEventListener('keydown', (e: KeyboardEvent) => {
-      if (PREVENT_DEFAULT_CODES.has(e.code)) {
+      if (preventsDefault(e.code, e.ctrlKey || e.metaKey)) {
         e.preventDefault();
       }
       if (e.repeat) {
@@ -350,7 +366,7 @@ export class Input {
       this.onKey(e.code, true);
     });
     win.addEventListener('keyup', (e: KeyboardEvent) => {
-      if (PREVENT_DEFAULT_CODES.has(e.code)) {
+      if (preventsDefault(e.code, e.ctrlKey || e.metaKey)) {
         e.preventDefault();
       }
       this.onKey(e.code, false);
@@ -403,4 +419,13 @@ export class Input {
       this.btnReleased.add(button);
     }
   }
+}
+
+/**
+ * Should this keydown/keyup have its browser default suppressed? Exported so
+ * the rule is testable without a DOM: the whole point of naming Ctrl+S here is
+ * that a test can assert it, rather than it being an accident of WASD.
+ */
+export function preventsDefault(code: string, ctrlOrMeta: boolean): boolean {
+  return PREVENT_DEFAULT_CODES.has(code) || (ctrlOrMeta && CTRL_PREVENT_DEFAULT_CODES.has(code));
 }

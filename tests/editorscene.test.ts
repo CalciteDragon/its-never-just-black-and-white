@@ -341,12 +341,12 @@ describe('validation and the panel', () => {
     expect(scene.state.errors[0]).toBe(validateLevel(scene.state.rows)[0]);
     expect(scene.state.errors[0]).toContain('found 0 spawn markers');
 
-    // Ctrl+S must refuse. It never reaches `saveLevel`, so there is no fetch to
+    // Ctrl+S must refuse. It never reaches `exportLevel`, so there is no file to
     // stub — the status line is the whole observable effect.
     h.input.onKey('ControlLeft', true);
     tap(h, scene, 'KeyS');
     h.input.onKey('ControlLeft', false);
-    expect(scene.state.status).toContain('CANNOT SAVE');
+    expect(scene.state.status).toContain('CANNOT EXPORT');
     expect(scene.state.status).toContain('found 0 spawn markers');
   });
 

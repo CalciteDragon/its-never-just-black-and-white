@@ -7,6 +7,7 @@
 import { STEP } from './constants';
 import { AudioSys } from './engine/audio';
 import { Input } from './engine/input';
+import { FileDropbox } from './engine/levelio';
 import { Renderer } from './engine/renderer';
 import { SAVE_KEYS, SaveStore } from './engine/save';
 
@@ -54,6 +55,14 @@ export class Game {
   readonly renderer: Renderer;
   readonly save: SaveStore;
   readonly audio: AudioSys;
+  /**
+   * Files the author has dropped on the window, waiting to be drained by
+   * whichever screen imports. It lives on `Game` rather than on a scene for the
+   * reason `Input` does: the listener has to outlive any one scene, and a drop
+   * that lands between two screens must not be lost. Constructing it touches
+   * nothing — `attach` is the only browser half — so this stays node-safe.
+   */
+  readonly files = new FileDropbox();
   /** Total simulated seconds (advances in fixed steps). */
   time = 0;
 

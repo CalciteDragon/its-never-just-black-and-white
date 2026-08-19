@@ -566,3 +566,10 @@ export const EDITOR_DEFAULT_H = 20;
  */
 export const EDITOR_MAX_W = 200;
 export const EDITOR_MAX_H = 60;
+
+/**
+ * How long a level's display name may be, in characters. The editor's name
+ * field clips to it and an import clips to it, so a file from somewhere else
+ * cannot put a 400-character title on a menu row.
+ */
+export const EDITOR_NAME_MAX = 40;

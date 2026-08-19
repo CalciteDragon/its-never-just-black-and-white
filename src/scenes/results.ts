@@ -12,20 +12,29 @@ import { VIEW_H, VIEW_W } from '../constants';
 import { palette } from '../engine/palette';
 import type { Renderer } from '../engine/renderer';
 import type { Game, Scene } from '../game';
-import { LEVELS, nextLevel } from '../levels/index';
+import { nextLevel } from '../levels/index';
+import type { Level } from '../world/level';
 import { LevelSelectScene } from './levelselect';
 import { updateMenu } from './menu';
 import { PlayScene, formatTime } from './play';
+import type { PlayContext } from './play';
 
 /**
  * Everything the results screen shows, gathered by the scene that measured it.
- * `index` is a campaign index — a playtest never reaches this screen, which is
- * why nothing here is optional.
+ * A playtest never reaches this screen, so nothing here is about the editor.
+ *
+ * `index` and `back` are the two shapes a finished run comes in, and exactly
+ * one of them is set. A campaign run has a rung on the ladder (`index`), which
+ * is what NEXT walks; a custom level has no ladder and a screen to return to
+ * (`back`), which is what the last item goes to. The level itself is carried
+ * rather than looked up, because a custom one is not in `LEVELS` to look up.
  */
 export interface ResultsStats {
-  readonly levelId: string;
-  readonly levelName: string;
-  readonly index: number;
+  readonly level: Level;
+  /** Campaign index, or null for a level off the CUSTOM LEVELS shelf. */
+  readonly index: number | null;
+  /** Where the last menu item goes for a custom level; null for a campaign. */
+  readonly back: Scene | null;
   readonly timeMs: number;
   readonly previousBestMs: number | null;
   readonly isNewBest: boolean;
@@ -38,11 +47,12 @@ export class ResultsScene implements Scene {
 
   constructor(stats: ResultsStats) {
     this.stats = stats;
-    // NEXT is absent rather than disabled at the end of the set: a menu item
-    // that cannot be chosen is a menu item that has to explain itself.
-    this.items = nextLevel(stats.index)
-      ? ['NEXT', 'RETRY', 'LEVELS']
-      : ['RETRY', 'LEVELS'];
+    // NEXT is absent rather than disabled at the end of the set, and for a
+    // custom level it is absent because there is no set: a menu item that
+    // cannot be chosen is a menu item that has to explain itself.
+    const last = stats.index === null ? 'BACK' : 'LEVELS';
+    this.items =
+      stats.index !== null && nextLevel(stats.index) ? ['NEXT', 'RETRY', last] : ['RETRY', last];
   }
 
   /**
@@ -61,7 +71,7 @@ export class ResultsScene implements Scene {
       game.toggleMute();
     }
     if (input.pressed('back')) {
-      game.setScene(new LevelSelectScene());
+      this.goBack(game);
       return;
     }
     const step = updateMenu(game, this.index, this.items.length);
@@ -71,31 +81,46 @@ export class ResultsScene implements Scene {
     }
     switch (this.items[this.index]) {
       case 'NEXT': {
-        const next = nextLevel(this.stats.index);
-        if (next) {
-          game.setScene(new PlayScene(next, { kind: 'campaign', index: this.stats.index + 1 }));
+        const at = this.stats.index;
+        const next = at === null ? null : nextLevel(at);
+        if (next !== null && at !== null) {
+          game.setScene(new PlayScene(next, { kind: 'campaign', index: at + 1 }));
         }
         break;
       }
       case 'RETRY':
-        game.setScene(
-          new PlayScene(LEVELS[this.stats.index], {
-            kind: 'campaign',
-            index: this.stats.index,
-          }),
-        );
+        // From `stats.level`, not from `LEVELS[index]`: a custom level is not
+        // in that array, and a campaign one is the same object either way.
+        game.setScene(new PlayScene(this.stats.level, this.replayContext()));
         break;
       default:
-        game.setScene(new LevelSelectScene());
+        this.goBack(game);
         break;
     }
+  }
+
+  /** The context a RETRY runs under: the one this result was measured in. */
+  private replayContext(): PlayContext {
+    const at = this.stats.index;
+    return at === null
+      ? { kind: 'custom', back: this.stats.back ?? new LevelSelectScene() }
+      : { kind: 'campaign', index: at };
+  }
+
+  /**
+   * Where ESC and the last menu item go. Both, so they cannot disagree — and
+   * named `goBack` rather than `exit` because `Scene.exit` is the lifecycle
+   * hook the loop calls, and one of the two would eventually shadow the other.
+   */
+  private goBack(game: Game): void {
+    game.setScene(this.stats.back ?? new LevelSelectScene());
   }
 
   render(r: Renderer, game: Game): void {
     r.setCamera(0, 0);
     r.clear(palette.paper);
 
-    r.textCentered(this.stats.levelName, VIEW_W / 2, 70, palette.ink, 3);
+    r.textCentered(this.stats.level.name, VIEW_W / 2, 70, palette.ink, 3);
     r.textCentered('COMPLETE', VIEW_W / 2, 118, palette.ink, 2);
     r.textCentered(formatTime(this.stats.timeMs), VIEW_W / 2, 165, palette.ink, 6);
 
@@ -119,7 +144,12 @@ export class ResultsScene implements Scene {
     if (game.audio.muted) {
       r.text('MUTED', 16, 16, palette.ink);
     }
-    r.textCentered('ESC  LEVELS', VIEW_W / 2, VIEW_H - 40, palette.ink);
+    r.textCentered(
+      this.stats.index === null ? 'ESC  BACK' : 'ESC  LEVELS',
+      VIEW_W / 2,
+      VIEW_H - 40,
+      palette.ink,
+    );
 
     // At rest, so vignette only — the frame stays consistent between screens
     // rather than the post pass appearing when play starts.

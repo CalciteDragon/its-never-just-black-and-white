@@ -6,7 +6,7 @@ A minimalist momentum platformer built from scratch with **TypeScript and the Ca
 
 ![The first level mid-flip: gravity is up, so paper and ink have swapped and the square is hanging under a ceiling slab, warm accent sparks trailing behind it, chromatic fringing on every edge and the vignette closing in at speed.](docs/screenshot.png)
 
-> **0.2, and the overhaul is done.** This is a total rebuild of Pixel Quest — the dungeon platformer this repo used to hold, preserved in git history before `d7a54ff` — remade from the loop up in seven phases. All seven have landed: the square is a real rigid body that tumbles and catches on corners and rights itself, the world inverts on a keypress, four layers of synthesised techno arrive as you get fast, and levels are drawn in a browser editor that writes JSON straight to disk. What is left is **levels**, which is the work the editor exists to enable. See [docs/PHASES.md](docs/PHASES.md) for the plan and everything that was learned building it.
+> **0.2, and the overhaul is done.** This is a total rebuild of Pixel Quest — the dungeon platformer this repo used to hold, preserved in git history before `d7a54ff` — remade from the loop up in seven phases. All seven have landed: the square is a real rigid body that tumbles and catches on corners and rights itself, the world inverts on a keypress, four layers of synthesised techno arrive as you get fast, and levels are drawn in a browser editor that exports, imports and shares JSON. What is left is **levels**, which is the work the editor exists to enable. See [docs/PHASES.md](docs/PHASES.md) for the plan and everything that was learned building it.
 
 ## Play
 
@@ -28,6 +28,8 @@ Then open http://localhost:5173.
 | Pause | `Esc` or `P` |
 | Mute / Fullscreen | `M` / `F` |
 | Level editor | `E` from the title screen or a level-select row |
+| Custom levels | `C` from the level select, or its pinned first row |
+| — on that screen | `Enter` play · `E` export · `D` edit · `X` delete |
 
 There is no double jump. The flip is the air move — and **it only recharges when you touch ground**, so every gap is a jump, a flip, or a jump-then-flip.
 
@@ -45,7 +47,9 @@ But linear motion stays arcade: left and right set velocity directly, and the ve
 
 **One number drives the whole feel.** Normalised speed closes the vignette, splits the colour channels, bounces the screen, and gates four layers of synthesised techno. They share an input, so they arrive together: the game visibly and audibly opens up as you get fast.
 
-**Levels are drawn in the browser.** `E` opens a picker — new level, every work-in-progress draft, every shipped level — and a shipped level opens as a *copy* with an id of its own, because a level in `src/levels/` is a file under version control. The editor itself is a scene inside the game, not a separate tool, and it edits the level's *characters* rather than a parsed model — so validation, saving and playtesting are the same three functions the game already had, and playtest hands the grid to the real `PlayScene` with no second parser and no preview mode. In dev it writes `src/levels/*.json` straight to disk through a Vite middleware; a production build has no such endpoint, so it falls back to localStorage and clipboard export — chosen by *trying* rather than by a build flag, so the fallback is not a branch nobody exercises until it ships.
+**Levels are drawn in the browser.** `E` opens a picker — new level, import, every work-in-progress draft, every shipped level — and a shipped level opens as a *copy* with an id of its own, because a level in `src/levels/` is a file under version control. The editor itself is a scene inside the game, not a separate tool, and it edits the level's *characters* rather than a parsed model — so validation, exporting and playtesting are the same three functions the game already had, and playtest hands the grid to the real `PlayScene` with no second parser and no preview mode.
+
+**And they can be shared.** The editor **autosaves** every stroke to a shelf of drafts, and every draft shows up under LEVELS → CUSTOM LEVELS ready to play, with no import step — a level you made here is already here. `Ctrl+S` is **export**, which is a different act: it downloads `<id>.json`, byte-identical to what `serializeLevel` writes, so the file can be sent to somebody or committed to `src/levels/` verbatim. `E` on a CUSTOM LEVELS row does the same thing without opening the editor. Going the other way, drop a `.json` anywhere on the window (or press Enter on `+ IMPORT A LEVEL`) and it lands on the shelf — validated by the same function the editor's own error panel uses, and **renamed rather than overwritten** if the id is taken. A custom level records a best time and never touches campaign progress.
 
 The shipped `02-second-nature` was built in it, start to finish, without opening a text editor. That was the point.
 

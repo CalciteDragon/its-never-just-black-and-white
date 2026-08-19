@@ -29,9 +29,9 @@ function enter<T extends { enter?(game: never): void }>(h: Harness, scene: T): T
 
 function stats(over: Partial<ResultsStats> = {}): ResultsStats {
   return {
-    levelId: LEVELS[0].id,
-    levelName: LEVELS[0].name,
+    level: LEVELS[0],
     index: 0,
+    back: null,
     timeMs: 4321,
     previousBestMs: null,
     isNewBest: true,

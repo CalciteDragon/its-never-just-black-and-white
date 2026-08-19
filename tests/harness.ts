@@ -16,6 +16,7 @@
 import { AudioSys } from '../src/engine/audio';
 import type { SfxName } from '../src/engine/audio';
 import { Input } from '../src/engine/input';
+import { FileDropbox } from '../src/engine/levelio';
 import { SaveStore } from '../src/engine/save';
 import type { StorageLike } from '../src/engine/save';
 import { STEP } from '../src/constants';
@@ -75,6 +76,8 @@ export class FakeStorage implements StorageLike {
 export interface Harness {
   game: Game;
   input: Input;
+  /** The drop queue. A test pushes onto it; no DOM event is involved. */
+  files: FileDropbox;
   save: SaveStore;
   storage: FakeStorage;
   audio: SpyAudio;
@@ -89,11 +92,13 @@ export function fakeGame(): Harness {
   // assert on the bytes rather than only on the accessors.
   const storage = new FakeStorage();
   const save = new SaveStore(storage);
+  const files = new FileDropbox();
   const scenes: Scene[] = [];
   const game = {
     input,
     audio,
     save,
+    files,
     time: 0,
     setScene(s: Scene): void {
       scenes.push(s);
@@ -102,7 +107,7 @@ export function fakeGame(): Harness {
       audio.muted = !audio.muted;
     },
   };
-  return { game: game as unknown as Game, input, save, storage, audio, scenes };
+  return { game: game as unknown as Game, input, files, save, storage, audio, scenes };
 }
 
 /** One frame: update, then clear the edges exactly as Game.stepFrame does. */
