@@ -405,36 +405,22 @@ describe('resizing', () => {
 });
 
 describe('gridWarnings', () => {
-  it('THE DOWN-PAD TRAP IS A WARNING AND NOT AN ERROR', () => {
-    // A pad whose facing points into its own geometry re-fires every step and
-    // pins the body. The grid is well-formed, parseLevel must accept it, and
-    // src/levels/index.ts throws on anything validateLevel rejects -- so
-    // promoting a level-design footgun to a format error would make a shipped
-    // level a build failure. All three assertions, because that is the failure
-    // mode: a warning that quietly became a build break.
+  it('A PAD FIRING INTO A SOLID FACE IS ALLOWED, AND SAYS NOTHING', () => {
+    // It was once warned about as the down-pad trap; it is authored on purpose
+    // -- a pad flush against geometry is a deliberate shape, not a mistake --
+    // so the panel stays quiet about it, in every facing and against the
+    // sealed sides too.
     const rows = ['..........', '..S....G..', '....v.....', '##########'];
-    const warnings = gridWarnings(rows);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain('row 2');
-    expect(warnings[0]).toContain('column 4');
+    expect(gridWarnings(rows)).toEqual([]);
     expect(validateLevel(rows)).toEqual([]);
     expect(parseLevel({ id: 'x', name: 'X', rows }).ok).toBe(true);
+
+    expect(gridWarnings(['........', '<S....G>', '########'])).toEqual([]);
+    expect(gridWarnings(['..####..', '..^.....', '.S....G.', '########'])).toEqual([]);
+    expect(gridWarnings(['........', '.S....G.', '..v.....', '..####..', '########'])).toEqual([]);
   });
 
-  it('catches all four facings, including into the sealed sides', () => {
-    // The left and right edges read as Solid out of bounds, so a pad on the
-    // border facing outward fires into a wall exactly like an interior one.
-    expect(gridWarnings(['........', '<S....G>', '########'])).toHaveLength(2);
-
-    const up = gridWarnings(['..####..', '..^.....', '.S....G.', '########']);
-    expect(up).toHaveLength(1);
-    expect(up[0]).toContain('column 2');
-
-    const down = gridWarnings(['........', '.S....G.', '..v.....', '..####..', '########']);
-    expect(down).toHaveLength(1);
-  });
-
-  it('says nothing about a pad with somewhere to fire', () => {
+  it('says nothing about a pad with somewhere to fire either', () => {
     expect(gridWarnings(['..........', '..S....G..', '....^.....'])).toEqual([]);
     expect(gridWarnings(['..........', '..S....G..', '####^#####', '..........'])).toEqual([]);
   });
@@ -791,15 +777,6 @@ describe('pickups in the grid model', () => {
     expect(grid.paint(1, 0, 'o')).toBe(true);
     expect(grid.rows[0]).toBe('oo..');
     expect(validateLevel(grid.rows)).toEqual([]);
-  });
-
-  it('IS NOT GEOMETRY: a pad firing into one is not firing into a wall', () => {
-    // The warning exists because a pad firing into blocking geometry re-fires
-    // every step and pins the body. A pickup blocks nothing, so a pad pointed
-    // at one is a pad pointed at open air with something to collect in it —
-    // which is a line an author draws on purpose.
-    expect(gridWarnings(['.o..', '.^..', 'S..G', '####'])).toEqual([]);
-    expect(gridWarnings(['.#..', '.^..', 'S..G', '####'])).toHaveLength(1);
   });
 
   it('does not enclose a marker either', () => {

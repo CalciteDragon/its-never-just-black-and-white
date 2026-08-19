@@ -350,22 +350,22 @@ describe('validation and the panel', () => {
     expect(scene.state.status).toContain('found 0 spawn markers');
   });
 
-  it('a down-pad in a floor is a WARNING, and does not block anything', () => {
+  it('a walled-in spawn is a WARNING, and does not block anything', () => {
     const { h, scene } = open([
+      '..#.......',
+      '.#S#...G..',
       '..........',
-      '..S....G..',
-      '....v.....',
       '..........',
       '##########',
     ]);
     expect(scene.state.errors).toEqual([]);
-    expect(scene.state.warnings).toHaveLength(0); // the cell below is empty
+    expect(scene.state.warnings).toHaveLength(0); // the cell below is still open
 
     tap(h, scene, 'Digit2');
-    drag(h, scene, [[4, 3]]); // wall it in from below
+    drag(h, scene, [[2, 2]]); // seal it from below
     expect(scene.state.errors).toEqual([]);
     expect(scene.state.warnings).toHaveLength(1);
-    expect(scene.state.warnings[0]).toContain('row 2');
+    expect(scene.state.warnings[0]).toContain('row 1');
     // And it still parses, because a warning is advice and not a format error.
     expect(parseLevel({ id: 'w', name: 'W', rows: scene.state.rows }).ok).toBe(true);
   });

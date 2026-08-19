@@ -85,14 +85,6 @@ export function clipRect(
   return rx0 > rx1 || ry0 > ry1 ? null : { x0: rx0, y0: ry0, x1: rx1, y1: ry1 };
 }
 
-/** Pad character → the cell it fires into, in canvas orientation (−y is up). */
-const PAD_FACINGS: Readonly<Record<string, { readonly dx: number; readonly dy: number }>> = {
-  '^': { dx: 0, dy: -1 },
-  v: { dx: 0, dy: 1 },
-  '<': { dx: -1, dy: 0 },
-  '>': { dx: 1, dy: 0 },
-};
-
 export function isGridChar(ch: string): boolean {
   return ch.length === 1 && GRID_CHARS.includes(ch);
 }
@@ -211,9 +203,8 @@ export function gridWarnings(rows: readonly string[]): string[] {
       return true;
     }
     const ch = row[tx];
-    // A pickup is as blocking as an empty cell, which is to say not at all: a
-    // pad pointed at one is a pad pointed at open air with something to collect
-    // in it, and warning about that would train an author to ignore the panel.
+    // A pickup is as blocking as an empty cell, which is to say not at all:
+    // it is a thing to collect in open air, not geometry.
     return ch !== EMPTY_CHAR && ch !== PICKUP_CHAR && !isMarker(ch);
   };
 
@@ -224,15 +215,6 @@ export function gridWarnings(rows: readonly string[]): string[] {
     }
     for (let tx = 0; tx < row.length; tx++) {
       const ch = row[tx];
-      const facing = PAD_FACINGS[ch];
-      if (facing && blockingAt(tx + facing.dx, ty + facing.dy)) {
-        // Phase 5's down-pad trap, generalised to all four facings: a pad
-        // firing into its own geometry re-fires every step and pins the body.
-        warnings.push(
-          `pad "${ch}" at row ${ty}, column ${tx} (both 0-based) fires into solid ` +
-            'geometry: it will re-fire every step and pin the player.',
-        );
-      }
       if (!isMarker(ch)) {
         continue;
       }
