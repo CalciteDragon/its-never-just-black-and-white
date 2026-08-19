@@ -32,7 +32,7 @@ import {
   JUMP_VELOCITY,
   MAX_ANG_SPEED,
   MAX_FALL_SPEED,
-  PAD_FACE_DOT,
+  PAD_BACK_DOT,
   PAD_IMPULSE,
   PAD_SPIN_MAX,
   PLAYER_CORE_INSET,
@@ -51,17 +51,22 @@ import { Tile, padDirection } from '../world/tiles';
 import type { EntityWorld } from './context';
 
 /**
- * Did this contact strike the launching face of a pad?
+ * Did this contact strike a launching face of a pad?
  *
  * The normal runs tile → box and a pad's facing is the direction it throws
- * you, so on the face the two point the same way and on the back they oppose.
- * Anything within PAD_FACE_DOT of the facing fires; everything else — the
- * back, both sides, and a glancing corner clip — is left as the ordinary solid
- * collision the solver has already resolved.
+ * you, so on the face the two point the same way, on the back they oppose, and
+ * on either side they are perpendicular. **Everything but the back fires** —
+ * the back is left as the ordinary solid collision the solver has already
+ * resolved, because launching there would throw the body through the slab that
+ * just caught it.
+ *
+ * Note it fires along the PAD's facing, never along the contact normal: walk
+ * into the side of an up-pad and you go up, not sideways. A pad has one
+ * direction, and that is the thing an author places.
  */
-function padFaceStruck(c: Contact): boolean {
+function padStruck(c: Contact): boolean {
   const dir = padDirection(c.pad);
-  return dir !== null && c.nx * dir.dx + c.ny * dir.dy > PAD_FACE_DOT;
+  return dir !== null && c.nx * dir.dx + c.ny * dir.dy > -PAD_BACK_DOT;
 }
 
 /**
@@ -262,15 +267,20 @@ export class Player {
     for (let i = 0; i < res.contactCount; i++) {
       const c = res.contacts[i];
       // Ground is whichever surface opposes gravity, so this reads the same
-      // predicate the solver does — but only a PLAIN SOLID recharges. A pad is
-      // a ground-normal contact too, and §5 says a pad chain is a commitment.
+      // predicate the solver does. A SOLID recharges only from the ground —
+      // scraping a wall is not standing on it.
       const isGroundNormal = -c.ny * gs > GROUND_NORMAL_DOT;
-      // Only the face a pad points out of launches; its back and its sides are
-      // plain platform, so a contact there recharges exactly like a solid.
-      const launches = padFaceStruck(c);
-      if (isGroundNormal && (c.onSolid || (c.pad !== Tile.Empty && !launches))) {
+      // A PAD recharges from any contact at all, ground normal or not, face or
+      // back. Amended after 0.2 playtesting: phase 5 spent the whole of a pad
+      // chain with the flip unavailable, which took the game's other verb away
+      // from its most interesting line. Touching a pad hands it straight back,
+      // so a chain is a chain of choices — and it is the TILE that does it, so
+      // the rule is one an author can see on the grid.
+      if ((isGroundNormal && c.onSolid) || c.pad !== Tile.Empty) {
         this.charged = true;
       }
+      // Everything but a pad's back launches.
+      const launches = padStruck(c);
       if (isGroundNormal && (!splash || c.impulse > splash.impulse)) {
         splash = c;
       }

@@ -365,10 +365,11 @@ describe('the flip and its charge (GAME-DESIGN §5)', () => {
     expect(p.body.y).toBe(twin.body.y);
   });
 
-  it('recharges on solid ground and NOT on a pad — by tile, not by normal', () => {
-    // GAME-DESIGN §5: a pad chain is a real commitment. Landing on a pad is a
-    // ground-NORMAL contact either way, so only the contact's tile separates
-    // them — which is the whole of decision 2.
+  it('recharges on solid ground AND on a pad — a pad hit is a recharge', () => {
+    // Amended after 0.2 playtesting: phase 5 made a pad chain a commitment by
+    // refusing it the recharge, which left the flip — the game's other verb —
+    // unavailable for the whole of the most interesting line in any level.
+    // Touching a pad now recharges, so a chain is a chain of CHOICES.
     const solid = new TileMap(40, 12);
     solid.fillRect(0, 10, 40, 2, Tile.Solid);
     const padded = new TileMap(40, 12);
@@ -377,22 +378,25 @@ describe('the flip and its charge (GAME-DESIGN §5)', () => {
 
     for (const [map, expected] of [
       [solid, true],
-      [padded, false],
+      [padded, true],
     ] as const) {
       const p = new Player(0, 0);
       p.spawnAt(3 * TILE + TILE / 2, 8 * TILE);
       const w = world(map);
       spendCharge(p, w);
       expect(p.flipCharged).toBe(false);
-      // Read it at the ground contact itself: landing on a pad launches you
-      // straight back off it, so "thirty steps later" is not on the floor.
+      // Read it at the contact itself: landing on a pad launches you straight
+      // back off it, so "thirty steps later" is not on the floor. `charged` is
+      // sampled per step because the pad's own launch leaves the ground again.
       let touched = false;
+      let charged = false;
       for (let i = 0; i < 60 && !touched; i++) {
         p.update(STEP, NO_INPUTS, w);
-        touched = p.onGround;
+        touched = p.onGround || p.body.vy < -100;
+        charged = charged || p.flipCharged;
       }
       expect(touched).toBe(true);
-      expect(p.flipCharged).toBe(expected);
+      expect(charged).toBe(expected);
     }
   });
 
@@ -609,25 +613,33 @@ describe('jump pads (GAME-DESIGN §5, decision 4)', () => {
     expect(doubles).toBe(0);
   });
 
-  it('does not recharge the flip, however many pads you chain', () => {
+  it('recharges the flip on the first bounce of a chain', () => {
     const map = padFloor();
     const p = new Player(0, 0);
     p.spawnAt(3 * TILE + TILE / 2, 10 * TILE - PLAYER_SIZE / 2 - 100);
     const w = world(map);
     spendCharge(p, w);
-    for (let i = 0; i < 400; i++) {
+    let steps = 0;
+    while (!p.flipCharged && steps < 400) {
       p.update(STEP, NO_INPUTS, w);
-      expect(p.flipCharged).toBe(false);
+      steps++;
     }
+    expect(p.flipCharged).toBe(true);
+    // It was the PAD that did it, on the way through: the body is being thrown
+    // back up, not resting on a floor somewhere.
+    expect(p.body.vy).toBeLessThan(0);
     // ...and it really was bouncing, not sitting somewhere inert.
+    for (let i = 0; i < 200; i++) {
+      p.update(STEP, NO_INPUTS, w);
+    }
     expect(p.body.y).toBeLessThan(10 * TILE - PLAYER_SIZE);
   });
 
-  it('LAUNCHES OFF ITS FACE ONLY: a side hit is plain platform', () => {
-    // A pad set into geometry has its sides masked as interior faces, so this
-    // only arises on a free-standing slab — where firing on the side threw the
-    // body up out of a contact it should simply have been stopped by. Walking
-    // left into the side of an up-pad is a wall, and nothing else.
+  it('ITS SIDES FIRE TOO: walking into a free-standing pad launches you', () => {
+    // Amended after 0.2 playtesting. A pad set into geometry has its sides
+    // masked as interior faces, so this only arises on a free-standing slab —
+    // and there, a pad that merely stops you reads as a pad that is broken.
+    // Everything but the BACK fires now.
     const map = new TileMap(40, 14);
     map.fillRect(0, 12, 40, 2, Tile.Solid);
     map.set(3, 11, Tile.PadUp);
@@ -639,11 +651,10 @@ describe('jump pads (GAME-DESIGN §5, decision 4)', () => {
       p.update(STEP, inp({ left: true }), w);
       launched = p.body.vy < -100;
     }
-    expect(launched).toBe(false);
-    // ...and it really did reach the pad and stop against it, rather than
-    // wandering off and never touching the thing.
-    expect(p.body.x).toBeGreaterThan(4 * TILE);
-    expect(p.body.x).toBeLessThan(5 * TILE);
+    expect(launched).toBe(true);
+    // It fired along the pad's OWN facing — up — not along the contact normal,
+    // which pointed left out of the side that was struck.
+    expect(p.body.vy).toBe(-PAD_IMPULSE);
   });
 
   it('ITS BACK IS A PLATFORM: it blocks, it recharges, and it never launches', () => {
@@ -666,6 +677,22 @@ describe('jump pads (GAME-DESIGN §5, decision 4)', () => {
     // It came to rest ON TOP of the pad — not through it, not on the floor two
     // rows below — and the landing recharged the flip like any other solid.
     expect(p.body.y).toBeCloseTo(10 * TILE - PLAYER_SIZE / 2, 0);
+    expect(p.flipCharged).toBe(true);
+  });
+
+  it('a back contact still recharges — the recharge is the tile, not the face', () => {
+    // The back is plain platform, and plain platform recharges. Stated apart
+    // from the launch rule so the two cannot be collapsed back into one test.
+    const map = new TileMap(40, 14);
+    map.fillRect(0, 12, 40, 2, Tile.Solid);
+    map.set(3, 10, Tile.PadDown);
+    const p = new Player(0, 0);
+    p.spawnAt(3 * TILE + TILE / 2, 10 * TILE - PLAYER_SIZE / 2 - 60);
+    const w = world(map);
+    spendCharge(p, w);
+    for (let i = 0; i < 120; i++) {
+      p.update(STEP, NO_INPUTS, w);
+    }
     expect(p.flipCharged).toBe(true);
   });
 });

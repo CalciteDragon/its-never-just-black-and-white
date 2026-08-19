@@ -257,17 +257,21 @@ export const PAD_IMPULSE = 820;
  */
 export const PAD_SPIN_MAX = 8.0;
 /**
- * How square-on a contact must be to count as hitting a pad's FACE.
+ * How square-on a contact must be to count as hitting a pad's BACK.
  *
- * A pad launches along its facing, and only the face it points out of does
- * that: its back and its two sides are plain platform. Without this test a
- * body landing on the back of an up-pad was launched up *through* the slab it
- * had just landed on, which reads as the pad having no collision at all.
- * Shares GROUND_NORMAL_DOT's value and its reasoning — a box balanced on one
- * of its own corners contacts up to 45° off the face normal, and that contact
- * is still on the face.
+ * A pad launches along its facing from every face BUT that one. The back has
+ * to be excluded — a body landing on the back of an up-pad was launched up
+ * *through* the slab it had just landed on, which reads as the pad having no
+ * collision at all — but the sides must not be, because a free-standing pad
+ * that merely stops you when you walk into its edge reads as broken.
+ *
+ * So the test is on the back alone: a contact whose normal opposes the facing
+ * by more than this is plain platform, and everything else fires. Shares
+ * GROUND_NORMAL_DOT's value and its reasoning — a box balanced on one of its
+ * own corners contacts up to 45° off the face normal, and that contact is
+ * still on the same face.
  */
-export const PAD_FACE_DOT = 0.7;
+export const PAD_BACK_DOT = 0.7;
 /** Death fade out, then back in after the respawn (s). */
 export const DEATH_FADE_OUT = 0.35;
 export const DEATH_FADE_IN = 0.25;

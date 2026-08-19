@@ -174,16 +174,18 @@ The threshold exists because tiles are axis-aligned but the *box* isn't: a squar
 
 Because `up` is derived from `gravitySign`, landing on what was the ceiling is ground in every sense: it stops you, it recharges the flip, it triggers the landing particles and sound.
 
-*(Amended in phase 5.)* **Grounded and "recharges the flip" are different predicates.** Pads became collidable geometry in phase 5, so landing on one *is* a ground-normal contact — and GAME-DESIGN §5 is explicit that a pad does not recharge you. `StepResult.grounded` therefore cannot answer the recharge question, and each `Contact` carries two extra bits instead:
+*(Amended in phase 5.)* **Grounded and "recharges the flip" are different predicates.** Pads became collidable geometry in phase 5, so landing on one *is* a ground-normal contact, and the recharge rule has always keyed off the *tile* rather than the normal. `StepResult.grounded` therefore cannot answer the recharge question, and each `Contact` carries two extra bits instead:
 
 | Field | Meaning |
 | --- | --- |
 | `pad: Tile` | the pad tile that produced this contact, `Tile.Empty` for none |
 | `onSolid: boolean` | whether any plain `Tile.Solid` pooled into it |
 
-Both are needed rather than one enum, because a body straddling a pad and the floor beside it must **launch** (the pad fired) *and* **recharge** (it genuinely touched ground). They are set on the manifold as tiles pool into it — `pad` from the first pad seen, `onSolid` from any plain solid — and accumulate across sub-steps in `recordContact`, since one normal can be re-resolved against a different tile each pass.
+Both are needed rather than one enum, because the two halves are read independently and a body can be on both at once — straddling a pad and the floor beside it launches (the pad fired) *and* recharges. They are set on the manifold as tiles pool into it — `pad` from the first pad seen, `onSolid` from any plain solid — and accumulate across sub-steps in `recordContact`, since one normal can be re-resolved against a different tile each pass.
 
-The recharge is then `onSolid && n · up > GROUND_NORMAL_DOT`: the same threshold as `grounded`, so balancing on a corner still recharges you.
+*(Amended after 0.2 playtesting: pads now recharge — see GAME-DESIGN §5.)* The recharge is `(onSolid && n · up > GROUND_NORMAL_DOT) || pad !== Tile.Empty`. A solid keeps the ground test at the same threshold as `grounded`, so balancing on a corner still recharges you; a pad recharges from any contact, including its back, because the rule an author can see is the tile.
+
+The launch is the complementary test on the same contact: `n · facing > -PAD_BACK_DOT` — every face **but** the back — and it always fires along the pad's own facing, never along the contact normal.
 
 Pads are blocking geometry to the broadphase in **both** places it asks — the collision test *and* the interior-face mask. Masking only the first rebuilds the tile-seam bug of § Interior faces at every pad in the game: the pad's neighbours would leave their faces toward it exposed, and landing across the seam finds a sideways cheapest-axis. Measured at **8.32 rad/s** with the mask still reading `=== Tile.Solid`, against the 8.07 the same failure produced between two plain tiles.
 

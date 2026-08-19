@@ -773,9 +773,11 @@ describe('contacts carry tile identity (phase 5, decision 2)', () => {
     });
   });
 
-  it('landing on a pad reports the pad and NOT onSolid — pads must not recharge', () => {
+  it('landing on a pad reports the pad and NOT onSolid — the two are separable', () => {
     // StepResult.grounded is true either way; that is exactly why one bit is
-    // not enough and the contact has to carry which tile produced it.
+    // not enough and the contact has to carry which tile produced it. The
+    // controller reads the two independently — a solid recharges only from the
+    // ground, a pad from any contact — so the solver must keep them apart.
     expect(dropOnto(['....', '....', '.^..'], TILE + TILE / 2)).toEqual({
       pad: Tile.PadUp,
       onSolid: false,

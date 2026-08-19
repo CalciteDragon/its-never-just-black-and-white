@@ -137,13 +137,13 @@ A tile that applies a fixed impulse in its facing direction (`up`, `down`, `left
 
 - Override the relevant velocity component rather than adding to it, so a pad's launch height is predictable regardless of approach speed.
 - Emit a continuous animated particle chevron in their direction (the pad's idle state), plus a burst on trigger.
-- Do **not** recharge the flip. Only ground contact does. A pad chain is a real commitment.
+- **Recharge the flip on contact** *(revised after 0.2 playtesting; phase 5 shipped the opposite)*. Spending a whole pad chain with the flip unavailable took the game's other verb away from its most interesting line — and "a pad chain is a commitment" turned out to mean "a pad chain is a corridor". Touching a pad hands the flip straight back, so a chain is a chain of choices.
 - Impart angular velocity proportional to how off-centre the contact was — hitting a pad with a corner sends you spinning.
 
 > *(Amended in phase 5.)* **A pad is a tile, not a trigger volume.** The off-centre torque above needs a real contact *point*, and §2 draws a pad as an `ink` slab, so the solver collides with pads exactly as it does with solid. Two consequences:
 >
-> - *(Revised after 0.2 playtesting.)* **Only the face a pad points out of launches.** "Fires on any contact" was kept in phase 5 on the grounds that a pad set into geometry has its buried faces masked as interior, so the case mostly cannot arise — but where it does, on a free-standing slab, the rule reads as the pad having no collision at all: a body landing on the back of a down-pad was fired straight down through the slab that had just caught it. A contact within `PAD_FACE_DOT` of the facing launches; the back and the two sides are plain platform, and being plain platform they recharge the flip like any other solid.
-> - Because landing on a pad is a ground-*normal* contact, "does not recharge" cannot be expressed through `grounded`. Contacts carry tile identity instead; see [PHYSICS.md](PHYSICS.md) § Grounded. A body straddling a pad and the floor beside it both launches and recharges, which is the case that forces two bits rather than one.
+> - *(Revised twice after 0.2 playtesting.)* **Every face but the back launches.** "Fires on any contact" was kept in phase 5 on the grounds that a pad set into geometry has its buried faces masked as interior, so the case mostly cannot arise — but where it does, on a free-standing slab, it reads as the pad having no collision at all: a body landing on the back of a down-pad was fired straight down through the slab that had just caught it. The first revision excluded the sides along with the back, and that was an over-correction in the other direction — walking into the edge of a free-standing pad and simply *stopping* reads as a pad that is broken. So the test is on the back alone (`PAD_BACK_DOT`): the back is plain platform, and the face and both sides fire. **A side hit fires along the pad's own facing, not along the contact normal** — a pad has one direction, and that is the thing an author placed.
+> - Because landing on a pad is a ground-*normal* contact, the recharge rule cannot be expressed through `grounded` in either of its versions. Contacts carry tile identity instead; see [PHYSICS.md](PHYSICS.md) § Grounded. The rules now read off different halves of that: a **solid** recharges only from a ground-normal contact, a **pad** from any contact at all — so the two bits the solver reports are still both needed.
 >
 > The spin needs its own scale (`PAD_SPIN_MAX`) because the physical impulse form saturates at five times `MAX_ANG_SPEED`, and the arm is measured from the **body's** centre — see PHYSICS.md § Game feel for both, and for why the controller's horizontal clamp had to become one-sided before sideways pads could exist at all.
 
@@ -231,7 +231,7 @@ Added in phase 4. These are not feel knobs — each one is the answer to a speci
 | `SPEED_WINDUP_FILL_BIAS` | 1.0 × | fill rate at full speed; 1× at the threshold, linear between |
 | `SPEED_WINDUP_DRAIN_DELAY` | 0.0 s | grace below the threshold before the bank drains at all |
 | `SPEED_WINDUP_DRAIN_RATE` | 1.0 × | drain rate once that grace is spent |
-| `PAD_FACE_DOT` | 0.7 | how square-on a contact must be to count as a pad's launching face |
+| `PAD_BACK_DOT` | 0.7 | how square-on a contact must be to count as a pad's non-launching **back** (every other face fires) |
 | `BOUNCE_AMP` | 2.5 px | screen bounce amplitude at full speed |
 | `BOUNCE_FREQ` | 9.0 rad/s | bounce frequency at full speed |
 | `PAD_IMPULSE` | 820 px/s | jump pad launch velocity |
