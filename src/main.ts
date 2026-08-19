@@ -4,7 +4,7 @@
  */
 
 import { Game } from './game';
-import { EditorScene, draftFromSave } from './scenes/editor';
+import { EditorSelectScene } from './scenes/editorselect';
 import { TitleScene } from './scenes/title';
 
 declare global {
@@ -59,8 +59,9 @@ const wantsEditor = params.get('editor') === '1';
 if (params.get('tune') === '1') {
   void import('./devtuner').then(({ mountDevTuner: mount }) => mount(game, document, window));
 }
-game.setScene(
-  wantsEditor ? new EditorScene(draftFromSave(game.save) ?? undefined) : new TitleScene(),
-);
+// `?editor=1` lands on the picker rather than on a level: which level to work
+// on is a question the editor cannot answer for you now that there can be more
+// than one draft.
+game.setScene(wantsEditor ? new EditorSelectScene() : new TitleScene());
 game.start();
 window.__bw = { game };

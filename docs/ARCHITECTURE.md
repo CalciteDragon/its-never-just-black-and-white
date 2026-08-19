@@ -184,7 +184,7 @@ The title's controls footer is built from `BINDINGS` through `bindingLabel`, not
 
 ## The editor
 
-`EditorScene` is the deliverable that outlives the phase that built it: everything after 0.2 is levels, and levels are made here or they are not made at all. It is also the first scene in the project with **modal state** — a text field that swallows every key, a pan that owns the mouse, a stroke in progress — so `mode` is a single explicit field of type `'paint' | 'id' | 'name'`, it is checked before anything else in `update`, and it is printed on screen. Mode bugs are the ones that survive a browser pass, because the tester knows which mode they are in.
+`EditorScene` is the deliverable that outlives the phase that built it: everything after 0.2 is levels, and levels are made here or they are not made at all. It is also the first scene in the project with **modal state** — a text field that swallows every key, a pan that owns the mouse, a stroke in progress — so `mode` is a single explicit field of type `'paint' | 'id' | 'name' | 'size' | 'help'`, it is checked before anything else in `update`, and it is printed on screen. Mode bugs are the ones that survive a browser pass, because the tester knows which mode they are in.
 
 **The grid model edits characters, not tiles.** `editor/grid.ts` holds a `readonly string[]` — GAME-DESIGN §8's own on-disk shape. The obvious model is a `TileMap` plus a spawn and a goal beside it, and it is wrong for one reason: `S` and `G` are metadata on an empty cell in a `Level`, but they are *paintable cells* in an editor, and a `TileMap` cannot hold them. Characters make `world/level.ts` the editor's entire format layer:
 
@@ -193,7 +193,7 @@ The title's controls footer is built from `BINDINGS` through `bindingLabel`, not
 | validate | `validateLevel(rows)` verbatim — the same function `src/levels/index.ts` runs at load |
 | save | `buildLevelPayload`, byte-identical to `serializeLevel`, so what the editor writes is what `git diff` shows |
 | playtest | `parseLevel({ id, name, rows })`, handing the real `PlayScene` a real `Level` — no second parser, no preview mode |
-| open a shipped level | `editorInitFromLevel`, over `levelRows(level)` — `parseLevel`'s inverse, factored out of `serializeLevel` |
+| open a shipped level | `editorInitFromLevel`, over `levelRows(level)` — `parseLevel`'s inverse, factored out of `serializeLevel` — **as a copy, under an id of its own** |
 
 Two more things fall out for free: a resize from the left or the top moves the spawn and the goal, because they are characters in the rows being shifted, where a `TileMap` model would carry two coordinate pairs to fix up by hand at every edge; and an undo snapshot is a `string[]` copy, 1200 characters at 60×20. Undo is scoped to the **stroke** — the snapshot is pushed on pointer-down, so one `Ctrl+Z` reverts a whole drag however many frames it spanned, a stroke that changed nothing pushes nothing, and any new edit clears the redo stack.
 
@@ -204,6 +204,10 @@ The model also makes two edits **unrepresentable**, which is worth more than any
 **A pickup is metadata, not a tile.** *(Added after 0.2.)* `o` parses onto a cell that stays `Tile.Empty` and lands in `Level.pickups`, exactly as `S` and `G` land in `spawn` and `goal`. The alternative — growing the tile enum — costs `isBlocking` an exception, makes the broadphase ask "but is this one blocking?" at every tile it tests, and changes the physics in order to add a thing that has no physics. `PlayScene` holds one respawn timer per entry, indexed against the list, and collection is a radius test run **after** the step in `updatePickups`: nothing there touches the body, which is what makes "no collision" a fact about the code rather than a promise in a comment.
 
 **The tools are a field, and the drag is one more.** *(Added after 0.2.)* `EditorScene` now has `tool: 'brush' | 'rect' | 'select'` beside its `mode`, and they are separate fields on purpose: `mode` is modal state — a text field open, swallowing every key — while `tool` is what the left button *means* in paint mode. A rectangle drag is not a mode and a name field is not a tool, and collapsing the two into one enum is how a scene ends up painting a level's worth of `S` into a grid. The drag in progress is likewise **one** nullable field for all four kinds (`brush | rect | select | move`), because the bugs in a drag are the ones where two of them are half-live at once. Only the brush edits per frame; the rest commit in `endDrag`.
+
+**The shelf is keyed by the id, and a built-in is opened as a copy.** *(Added after 0.2.)* `editor/drafts.ts` is a JSON array of ids under `bw.editor.drafts` plus one record per id, and `EditorSelectScene` is the front door: NEW, the drafts, then the shipped levels. The id is the key because the id is already the filename *and* the best-time key, so a second identifier beside it would be a second thing to keep in step — which makes a rename a **move** (`renameDraft`), makes two drafts sharing an id impossible (the id field refuses rather than merging two levels), and makes "never save over a built-in" a fact about what `editorInitFromLevel` hands back rather than a check at the save. The check at the save exists anyway, in two places, because the id is a path.
+
+**Zoom is a ladder whose ends depend on the grid.** *(Added after 0.2; it was a `Z` toggle between two steps.)* `editor/zoom.ts` is pure arithmetic over the grid size and the frame: `¼ ½ 1 2 4`, every rung a whole-pixel cell, with **out** stopping at the step that already shows the whole level (never above `1×`, or a tiny level would open with no cells to see) and **in** stopping at `2×` or at the fit step, whichever is further. It is a separate module for the reason `obb.ts` is: it is arithmetic with interesting edges at both ends of the size range, and a test should be able to ask what a 200×60 can do without a canvas.
 
 `EditorGrid.fillRect` and `EditorGrid.moveRect` are both `paint` in a loop under one `atomic`, so the marker rules and the undo granularity are inherited rather than restated — except for the move's *lift*, which writes through `writeChar` directly, because `paint` refuses to erase a marker and a marker inside the selection is precisely the thing that has to move.
 
@@ -224,7 +228,9 @@ The two zoom steps are 32 px and 16 px, both integer, and `½` is not one option
 | `bw.progress` | `PlayScene.win`, campaign only, `setProgress(index + 1)` | the title's PLAY (continue where you got to), the level select's lock |
 | `bw.best.<levelId>` | `PlayScene.win`, campaign only, `submit` | the level select's per-row time, the results screen's previous best |
 | `bw.muted` | `Game.toggleMute` | `Game`'s constructor, once |
-| `bw.editor.draft` | `EditorScene` on every stroke end, and `saveLevel`'s fallback | `draftFromSave`, entering the editor from the title or from `?editor=1` |
+| `bw.editor.drafts` | `editor/drafts.ts`, as levels are made, renamed and deleted | the picker, and every id check the editor makes |
+| `bw.editor.draft.<id>` | `EditorScene` on every stroke end, through `writeDraft` | the picker's rows, and `EditorScene` when one is opened |
+| `bw.editor.draft` | `saveLevel`'s last-ditch fallback only | `migrateLegacyDraft`, once, on the first visit to the picker |
 
 `setProgress` is **monotone** — `max(stored, n)` — because completing an early level again must not re-lock the later ones, and a player who replays level 1 for a better time would otherwise find the rest of the game gone. `getProgress` reads anything missing, corrupt, negative or non-finite as **0**, which unlocks exactly the first level: not none, which would lock a player out of their own game, and not all of them, which would make the key pointless.
 

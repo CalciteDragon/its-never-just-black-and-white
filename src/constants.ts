@@ -511,15 +511,20 @@ export const PARTICLE_CULL_MARGIN = 64;
 // to SEE what you are building. ---
 
 /**
- * The two zoom steps, and there are deliberately only two. `½` is not one
- * option among many: 60 tiles × 32 px × ½ = 960 px = `VIEW_W` exactly, so half
- * zoom is precisely "one screen per sixty tiles", and the example stage is 60
- * wide. A continuous or cursor-anchored zoom buys nothing over that and costs a
- * wheel path in `Input`, fractional tile geometry, and seams between adjacent
- * cells at every non-integer scale — the exact problem phase 3's coordinate
- * policy exists to avoid. Both steps are whole-pixel cells: 32 and 16.
+ * The zoom ladder, ascending, in whole-pixel cells: 8, 16, 32, 64, 128 px.
+ *
+ * Every step is an integer cell on purpose — a fractional cell seams between
+ * adjacent cells at every non-integer scale, which is the exact problem phase
+ * 3's coordinate policy exists to avoid. `0.5` is the one that earns its place
+ * twice over: 60 tiles x 32 px x 1/2 = 960 px = `VIEW_W` exactly, so half zoom
+ * is precisely "one screen per sixty tiles".
+ *
+ * **Which of these steps an author can actually reach depends on the level**
+ * (`editor/zoom.ts`): there is no point zooming out past the step that already
+ * shows the whole grid, and no point zooming in past 2x on a level too big to
+ * fit at 4x. The ladder is the menu; the level picks which entries are on it.
  */
-export const EDITOR_ZOOM_STEPS: readonly number[] = [1, 0.5];
+export const EDITOR_ZOOM_STEPS: readonly number[] = [0.25, 0.5, 1, 2, 4];
 /**
  * Keyboard pan speed (px/s) = 20 tiles/s, crossing the frame in 1.5 s.
  * Deliberately faster than RUN_SPEED — navigating a level you are building is

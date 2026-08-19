@@ -1,14 +1,17 @@
 /**
  * The campaign, one row per level: name, best time, and a lock past
  * `bw.progress`. `confirm` plays it, `back` returns to the title, and the raw
- * `KeyE` opens that level in the editor — raw, because "edit this row" is not a
- * game verb and GAME-DESIGN §12 pins the `Action` list.
+ * `KeyE` opens a COPY of that level in the editor — raw, because "edit this
+ * row" is not a game verb and GAME-DESIGN §12 pins the `Action` list, and a
+ * copy because a shipped level is a file under version control, which
+ * `editorInitFromLevel` explains at length.
  *
  * Locked entries are drawn at `inkRgba(0.35)`: the palette already has the
  * accessor, and dimming is the only two-colour way to say "not yet".
  */
 
 import { VIEW_H, VIEW_W } from '../constants';
+import { listDrafts, writeDraft } from '../editor/drafts';
 import { palette } from '../engine/palette';
 import type { Renderer } from '../engine/renderer';
 import { SAVE_KEYS } from '../engine/save';
@@ -65,7 +68,12 @@ export class LevelSelectScene implements Scene {
     // tool hostage to the campaign.
     if (input.codePressed('KeyE')) {
       game.audio.play('menuPick');
-      game.setScene(new EditorScene(editorInitFromLevel(LEVELS[this.index])));
+      // As a COPY, with its own id, and written to the draft shelf on the way
+      // in — a shipped level is a file in this repo, and the editor's job is to
+      // give you one beside it rather than one on top of it.
+      const init = editorInitFromLevel(LEVELS[this.index], listDrafts(game.save).map((d) => d.id));
+      writeDraft(game.save, init);
+      game.setScene(new EditorScene(init));
       return;
     }
     const step = updateMenu(game, this.index, LEVELS.length);

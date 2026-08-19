@@ -151,3 +151,17 @@ export function drawSpawn(r: Renderer, cx: number, cy: number, size: number, ui 
   r.rectRotated(cx, cy, body, body, 0, palette.ink, ui);
   r.rectRotated(cx, cy, core, core, 0, palette.paper, ui);
 }
+
+/**
+ * A `paper` panel with an `ink` border, in UI space. Every overlay the editor
+ * draws sits on one: the grid underneath is `ink`, and ink text on ink geometry
+ * is text nobody can read — which is the two-colour version of "the HUD
+ * disappeared over the dark bit".
+ *
+ * It lives here rather than in `editor.ts` because the controls overlay draws
+ * its own and importing it back from the scene would close a cycle.
+ */
+export function plate(r: Renderer, x: number, y: number, w: number, h: number): void {
+  r.rect(x, y, w, h, palette.paper, true);
+  r.rectRotatedOutline(x + w / 2, y + h / 2, w, h, 0, palette.ink, 1, true);
+}

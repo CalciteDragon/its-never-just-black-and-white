@@ -22,7 +22,19 @@ export const SAVE_KEYS = {
   /** Furthest level reached. */
   progress: 'bw.progress',
   muted: 'bw.muted',
+  /**
+   * The pre-multi-draft key, kept for two jobs and no third: `levelio`'s
+   * last-ditch fallback writes the saved JSON here when there is no server and
+   * no clipboard, and `editor/drafts.ts` imports whatever it finds here once,
+   * so an author who left a level in the old single draft still has it.
+   */
   editorDraft: 'bw.editor.draft',
+  /** The draft index: a JSON array of level ids, in the order they were made. */
+  editorDrafts: 'bw.editor.drafts',
+  /** One work-in-progress level, e.g. draft('cellar'). */
+  draft(levelId: string): string {
+    return `bw.editor.draft.${levelId}`;
+  },
   /** Per-level best time, e.g. best('01-first-steps'). */
   best(levelId: string): string {
     return `bw.best.${levelId}`;

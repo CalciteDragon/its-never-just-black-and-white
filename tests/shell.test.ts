@@ -9,8 +9,10 @@
 import { describe, expect, it } from 'vitest';
 import { BINDINGS, bindingLabel } from '../src/engine/input';
 import { SAVE_KEYS } from '../src/engine/save';
+import { listDrafts } from '../src/editor/drafts';
 import { LEVELS } from '../src/levels/index';
 import { EditorScene } from '../src/scenes/editor';
+import { EditorSelectScene } from '../src/scenes/editorselect';
 import { LevelSelectScene } from '../src/scenes/levelselect';
 import { PlayScene } from '../src/scenes/play';
 import { ResultsScene } from '../src/scenes/results';
@@ -68,41 +70,16 @@ describe('TitleScene', () => {
     const s2 = new TitleScene();
     tap(h2, s2, 'ArrowUp'); // wraps PLAY -> EDITOR
     tap(h2, s2, 'Enter');
-    expect(h2.scenes[0]).toBeInstanceOf(EditorScene);
+    expect(h2.scenes[0]).toBeInstanceOf(EditorSelectScene);
   });
 
   it('E opens the editor directly, as GAME-DESIGN §4 has always said', () => {
     const h = fakeGame();
     const scene = new TitleScene();
     tap(h, scene, 'KeyE');
-    expect(h.scenes[0]).toBeInstanceOf(EditorScene);
-  });
-
-  it('opens the editor onto the saved draft when there is one', () => {
-    const h = fakeGame();
-    h.save.setText(
-      SAVE_KEYS.editorDraft,
-      JSON.stringify({ id: 'draft-x', name: 'DRAFT X', rows: ['.S.', '.G.', '###'] }),
-    );
-    const scene = new TitleScene();
-    tap(h, scene, 'KeyE');
-    const editor = h.scenes[0] as EditorScene;
-    expect(editor.state.id).toBe('draft-x');
-    expect(editor.state.rows).toEqual(['.S.', '.G.', '###']);
-  });
-
-  it('ignores a corrupt draft rather than refusing to open', () => {
-    // The draft is JSON from a previous session's browser. Every shape of
-    // garbage has to end at a blank grid, not at a blank screen.
-    for (const junk of ['{not json', 'null', '[]', '{"id":1}', '{"id":"a","name":"B"}']) {
-      const h = fakeGame();
-      h.save.setText(SAVE_KEYS.editorDraft, junk);
-      const scene = new TitleScene();
-      tap(h, scene, 'KeyE');
-      const editor = h.scenes[0] as EditorScene;
-      expect(editor.state.rows.length, junk).toBeGreaterThan(0);
-      expect(editor.state.id, junk).toBe('untitled');
-    }
+    // The PICKER, not a level: with a shelf of drafts, "the editor" is no
+    // longer one level, and guessing which one would be wrong most of the time.
+    expect(h.scenes[0]).toBeInstanceOf(EditorSelectScene);
   });
 });
 
@@ -178,9 +155,12 @@ describe('LevelSelectScene progress gating', () => {
     tap(h, scene, 'KeyE');
     const editor = h.scenes[0] as EditorScene;
     expect(editor).toBeInstanceOf(EditorScene);
-    expect(editor.state.id).toBe(LEVELS[0].id);
-    // Opened from the real level, so it is immediately valid and playable.
+    // As a COPY: every cell of the real level, under an id of its own, and on
+    // the draft shelf from the moment it opens.
+    expect(editor.state.id).not.toBe(LEVELS[0].id);
+    expect(editor.state.rows).toHaveLength(LEVELS[0].map.h);
     expect(editor.state.errors).toEqual([]);
+    expect(listDrafts(h.game.save).map((d) => d.id)).toEqual([editor.state.id]);
   });
 
   it('Esc returns to the title', () => {

@@ -438,6 +438,8 @@ Mute on `M`, persisted at `bw.muted`. The AudioContext is created lazily on firs
 
 An in-browser scene (`E` from the title or from a level-select row, the title's EDITOR menu item, or `?editor=1`), not a separate app.
 
+**It opens on a picker, not on a level** *(added after 0.2)*. `E`, the menu item and `?editor=1` all land on `EditorSelectScene`: `+ NEW LEVEL`, then every work-in-progress draft, then every shipped level marked `BUILT-IN - OPENS AS A COPY`. `Enter` opens a row, `X` deletes a draft after a `Y`/`N` prompt, `Esc` goes back to the title. The reason is the draft shelf below: once there can be more than one level in progress, "the editor" is no longer one level, and opening whichever one was touched last is wrong most of the time.
+
 | Input | Verb |
 | --- | --- |
 | `B` `X` `V` | brush / rectangle / select tool |
@@ -446,14 +448,15 @@ An in-browser scene (`E` from the title or from a level-select row, the title's 
 | `Shift`+click | flood-fill the connected region of equal character (4-connected); brush tool only |
 | middle-drag, `Space`-drag, arrows | pan |
 | `1`–`9` | select `. # ^ v < > o S G` |
-| `Z` | toggle `1×` / `½×` |
+| `+` `-` | zoom one rung in / out (also `Numpad +` / `Numpad -`) |
+| `H` or `?` | the CONTROLS AND TOOLS panel; the bar has a button for it too |
 | `Ctrl+Z` / `Ctrl+Y` | undo / redo |
 | `[` `]` `,` `.` | shrink / grow an edge (with `Shift` for the opposite edge) |
 | `R` | set the size outright — type `W X H` |
 | `N` | edit the id, then the name |
 | `Enter` | playtest in place |
 | `Ctrl+S` | save |
-| `Esc` | cancel the drag, then drop the selection, then back to the title |
+| `Esc` | cancel the drag, then drop the selection, then back to the picker |
 
 **The editor edits characters, not tiles, and `world/level.ts` is therefore its entire format layer.** The obvious model is a `TileMap` with a spawn and a goal beside it; it is wrong, and the reason is `S` and `G` — they are metadata on an empty cell in a `Level`, but they are *paintable cells* in an editor, and a `TileMap` cannot hold them. Modelling the grid as `readonly string[]` — §8's own on-disk shape — makes validation `validateLevel(rows)` verbatim, saving `JSON.stringify({ id, name, rows })` byte-identical to `serializeLevel`, playtesting `parseLevel` handing the **real** `PlayScene` a **real** `Level`, and a resize from the left or the top carries the spawn and the goal along for free because they are characters in the rows being shifted. Under a coordinates-beside-the-map model those are two pairs to fix up at every edge, and the one that gets forgotten is the one nobody notices until a level spawns you inside a wall.
 
@@ -478,7 +481,13 @@ Both are one undo step, both refuse to overwrite `S` and `G`, and filling **with
 
 **Save** (`Ctrl+S`) is behaviour-detected rather than build-flag gated. It attempts `POST /__level`, which a Vite middleware turns into `src/levels/<id>.json`, and falls back to `localStorage` plus a copy-to-clipboard JSON export on any non-200 or network failure — reporting which happened, and saying so if the clipboard refused rather than claiming it. `import.meta.env.DEV` would work and is the wrong shape: it makes the fallback, the branch that only ever runs in a build, the branch nobody exercises until it ships. The middleware takes **no path from the caller**: it takes an `id`, validates it against `^[a-z0-9][a-z0-9-]*$`, and builds the path itself. It deliberately does not touch `src/levels/index.ts` — a middleware rewriting a TypeScript source file is codegen, so the one-line manual edit stays manual and the save's confirmation names it.
 
-The grid is autosaved to `bw.editor.draft` on every stroke end, so a reload never costs more than the stroke in progress. A serialised 60×20 level is ~1.3 KB, which is 0.03 % of a 5 MB quota.
+**A shelf of drafts, not one draft** *(added after 0.2)*. The grid is autosaved on every stroke end, so a reload never costs more than the stroke in progress — but it is autosaved to `bw.editor.draft.<id>`, with a JSON array of ids under `bw.editor.drafts` as the index, so an author can have as many levels in progress as they like. A serialised 60×20 level is ~1.3 KB, which is 0.03 % of a 5 MB quota; the shelf is not what fills it. **The id is the key**, because the id is already the filename and the best-time key, and a second identifier beside it would be a second thing to keep in step. So a rename is a *move*, two drafts can never share an id (the id field refuses, rather than merging two levels), and the pre-shelf single `bw.editor.draft` is imported once on the first visit to the picker and then cleared.
+
+**A built-in is opened as a copy, from the first frame.** A level in `src/levels/` is a file under version control, and an editor that let you save over it would make the tool the fastest way to lose a shipped level. So opening one from the picker or from a level-select row hands the editor every cell of the real level under a *new* id — `<id>-copy`, suffixed again if that is taken — written straight to the shelf, with `COPY OF <ID>` in the header for as long as it is open. Saying so at the save would be too late to be a design; handing back a copy is the design. The id field refuses to type a built-in's id back, and `save` checks once more before it writes.
+
+**Zoom is a ladder, and the level decides how far it goes** *(added after 0.2; it was a `Z` toggle between `1×` and `½×`)*. The rungs are `¼ ½ 1 2 4`, every one a whole-pixel cell — 8, 16, 32, 64, 128 px — because a fractional cell seams between adjacent cells, which is the exact problem §6's coordinate policy exists to avoid. Which rungs an author can reach is a function of the grid: **out** stops at the step that already shows the whole level (below it the level is a speck on a field of nothing) but never above `1×`, and **in** stops at `2×`, or at the fit step when a level is small enough to sit whole at `4×`. `+` and `-` step it, the ends hold rather than wrapping, and the view holds its centre across the change. A level opens at the widest rung that shows all of it, which for a 60-wide level is `½×` — 60 × 32 × ½ = 960 = `VIEW_W`, one screen per sixty tiles.
+
+**Controls are a panel, not a first-run hint** *(added after 0.2)*. `H`, `?` or the button on the bar opens one screen listing every tool with a description, every palette character with what it is, every key and every shortcut — including the ones nothing else announces, like `Shift`+click to flood and "a built-in saves as a copy". It closes on any key or click. The content is a table (`scenes/editorhelp.ts`), not draw calls, so a test can assert that every key the editor binds is named in it: a reference that silently falls behind the tool it describes is worse than none.
 
 A pending rectangle is drawn with **both** a tint and an outline, and the selection with the outline alone. Neither cue covers both grounds on its own: an `ink` wash at `EDITOR_MARQUEE_ALPHA` is the only thing visible over `paper` cells at a glance, and an outline is the only thing visible over `ink` ones. The resting selection skips the tint because it is not about to change anything, and a permanent wash would misreport the colours of the level underneath it.
 

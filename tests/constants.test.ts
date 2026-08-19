@@ -445,36 +445,44 @@ describe('the jump pad (phase 5)', () => {
 
 describe('the editor block (phase 7)', () => {
   it('half zoom is exactly one screen per sixty tiles', () => {
-    // Not one option among many. 60 x 32 x 1/2 = 960 = VIEW_W, and the example
+    // Not one rung among many. 60 x 32 x 1/2 = 960 = VIEW_W, and the example
     // stage is 60 wide, so half zoom is precisely "one screen per sixty tiles".
-    expect(EDITOR_ZOOM_STEPS).toEqual([1, 0.5]);
-    expect(60 * TILE * EDITOR_ZOOM_STEPS[1]).toBe(VIEW_W);
+    expect(EDITOR_ZOOM_STEPS).toEqual([0.25, 0.5, 1, 2, 4]);
+    expect(60 * TILE * 0.5).toBe(VIEW_W);
     // At 1x the same level is two screens wide, which is the problem zoom exists
     // to answer -- and is why pan alone would not have been enough.
-    expect((60 * TILE * EDITOR_ZOOM_STEPS[0]) / VIEW_W).toBe(2);
+    expect((60 * TILE * 1) / VIEW_W).toBe(2);
   });
 
-  it('both zoom steps are whole-pixel cells', () => {
+  it('the ladder ascends, in whole-pixel cells', () => {
     // A fractional cell seams between adjacent cells at every non-integer
     // scale, which is the exact problem the coordinate policy was written to
-    // avoid. Two steps, 32 px and 16 px, and nothing between them.
-    for (const z of EDITOR_ZOOM_STEPS) {
+    // avoid. 8, 16, 32, 64, 128 px, and nothing between them.
+    for (let i = 0; i < EDITOR_ZOOM_STEPS.length; i++) {
+      const z = EDITOR_ZOOM_STEPS[i];
       expect(Number.isInteger(TILE * z)).toBe(true);
       expect(z).toBeGreaterThan(0);
+      // Ascending, because `+` steps up the array and `-` steps down it: a
+      // ladder out of order would put the two keys the wrong way round.
+      if (i > 0) {
+        expect(z).toBeGreaterThan(EDITOR_ZOOM_STEPS[i - 1]);
+      }
     }
-    expect(EDITOR_ZOOM_STEPS.length).toBe(2);
+    // 1x and 2x are the two the range rule names by value, so they must exist.
+    expect(EDITOR_ZOOM_STEPS).toContain(1);
+    expect(EDITOR_ZOOM_STEPS).toContain(2);
   });
 
   it('a default grid fits the frame at half zoom, and the cap deliberately does not', () => {
     // The default is a level you can see all of while you learn the tool.
-    expect(EDITOR_DEFAULT_W * TILE * EDITOR_ZOOM_STEPS[1]).toBeLessThanOrEqual(VIEW_W);
-    expect(EDITOR_DEFAULT_H * TILE * EDITOR_ZOOM_STEPS[1]).toBeLessThanOrEqual(VIEW_H);
+    expect(EDITOR_DEFAULT_W * TILE * 0.5).toBeLessThanOrEqual(VIEW_W);
+    expect(EDITOR_DEFAULT_H * TILE * 0.5).toBeLessThanOrEqual(VIEW_H);
     expect(EDITOR_DEFAULT_W).toBeLessThan(EDITOR_MAX_W);
     expect(EDITOR_DEFAULT_H).toBeLessThan(EDITOR_MAX_H);
     // The cap is not a memory argument: 200 tiles is 3.3 screens even at half
     // zoom, and a level you cannot see a third of is one the tool has stopped
     // helping with.
-    expect((EDITOR_MAX_W * TILE * EDITOR_ZOOM_STEPS[1]) / VIEW_W).toBeCloseTo(3.33, 2);
+    expect((EDITOR_MAX_W * TILE * 0.5) / VIEW_W).toBeCloseTo(3.33, 2);
   });
 
   it('the undo stack is bounded, and its worst case is kilobytes not megabytes', () => {

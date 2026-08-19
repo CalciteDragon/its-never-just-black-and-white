@@ -11,18 +11,21 @@ import {
   EDITOR_DEFAULT_W,
   EDITOR_MAX_H,
   EDITOR_MAX_W,
+  EDITOR_ZOOM_STEPS,
   TILE,
   VIEW_H,
   VIEW_W,
 } from '../src/constants';
+import { listDrafts, readDraft, writeDraft } from '../src/editor/drafts';
 import { GRID_CHARS } from '../src/editor/grid';
+import { zoomRange } from '../src/editor/zoom';
 import { MOUSE_MIDDLE, MOUSE_RIGHT } from '../src/engine/input';
 import { SAVE_KEYS } from '../src/engine/save';
 import { EditorScene, editorInitFromLevel } from '../src/scenes/editor';
+import { EditorSelectScene } from '../src/scenes/editorselect';
 import { PlayScene } from '../src/scenes/play';
-import { TitleScene } from '../src/scenes/title';
 import { LEVELS } from '../src/levels/index';
-import { parseLevel, validateLevel } from '../src/world/level';
+import { levelRows, parseLevel, validateLevel } from '../src/world/level';
 import { fakeGame, step, tap } from './harness';
 import type { Harness } from './harness';
 
@@ -64,6 +67,18 @@ function typeSize(h: Harness, scene: EditorScene, text: string): void {
   tap(h, scene, 'Enter');
 }
 
+/** N, then an id, then Enter. Leaves the scene on the name field or the refusal. */
+function typeId(h: Harness, scene: EditorScene, id: string): void {
+  tap(h, scene, 'KeyN');
+  for (let i = 0; i < 40; i++) {
+    tap(h, scene, 'Backspace');
+  }
+  for (const ch of id) {
+    tap(h, scene, ch === '-' ? 'Minus' : /[0-9]/.test(ch) ? `Digit${ch}` : `Key${ch.toUpperCase()}`);
+  }
+  tap(h, scene, 'Enter');
+}
+
 /** A drag across a row of cells, one frame per cell, as a real one arrives. */
 function drag(
   h: Harness,
@@ -96,13 +111,39 @@ describe('a fresh editor', () => {
     expect(scene.state.mode).toBe('paint');
   });
 
-  it('opens a shipped level with no errors and its own id', () => {
+  it('OPENS A SHIPPED LEVEL AS A COPY, with an id of its own', () => {
     const h = fakeGame();
     const scene = new EditorScene(editorInitFromLevel(LEVELS[0]));
     scene.enter(h.game);
-    expect(scene.state.id).toBe(LEVELS[0].id);
-    expect(scene.state.errors).toEqual([]);
+    // Every cell of the real level, under an id that is not the real level's:
+    // the id is the filename, so this is the whole of "built-ins are never
+    // saved over" - decided when it opens, not refused at the save.
     expect(scene.state.rows).toHaveLength(LEVELS[0].map.h);
+    expect(scene.state.errors).toEqual([]);
+    expect(scene.state.id).not.toBe(LEVELS[0].id);
+    expect(scene.state.id).toBe(`${LEVELS[0].id}-copy`);
+    // And a second copy lands beside the first rather than on top of it.
+    expect(editorInitFromLevel(LEVELS[0], [`${LEVELS[0].id}-copy`]).id).toBe(
+      `${LEVELS[0].id}-copy-2`,
+    );
+  });
+
+  it('REFUSES TO SAVE OVER A BUILT-IN, however the id got there', () => {
+    const h = fakeGame();
+    // The ordinary route cannot reach this: a copy arrives with a fresh id and
+    // the id field refuses to type a built-in's back. So it is forced.
+    const scene = new EditorScene({
+      id: LEVELS[0].id,
+      name: LEVELS[0].name,
+      rows: levelRows(LEVELS[0]),
+    });
+    scene.enter(h.game);
+    h.input.onKey('ControlLeft', true);
+    tap(h, scene, 'KeyS');
+    h.input.onKey('ControlLeft', false);
+    expect(scene.state.status).toContain('BUILT-IN');
+    // And nothing of it reaches the shelf, where it would shadow the level.
+    expect(listDrafts(h.game.save)).toEqual([]);
   });
 
   it('is silent — no bed on any screen but play', () => {
@@ -221,19 +262,53 @@ describe('the palette and the view', () => {
     }
   });
 
-  it('Z toggles the two zoom steps, and Ctrl+Z does not', () => {
+  it('+ AND - STEP THE ZOOM LADDER, and stop at the ends rather than wrapping', () => {
     const { h, scene } = open();
-    const first = scene.state.zoom;
-    tap(h, scene, 'KeyZ');
-    expect(scene.state.zoom).not.toBe(first);
-    tap(h, scene, 'KeyZ');
-    expect(scene.state.zoom).toBe(first);
+    const range = zoomRange(10, 5);
+    // A 10x5 stage sits whole in the frame at 2x, so that is where it opens.
+    expect(scene.state.zoomIndex).toBe(range.initial);
 
-    // With Ctrl held, Z is undo and the zoom must not move underneath it.
-    h.input.onKey('ControlLeft', true);
+    tap(h, scene, 'Minus');
+    expect(scene.state.zoomIndex).toBe(range.initial - 1);
+    tap(h, scene, 'Equal');
+    expect(scene.state.zoomIndex).toBe(range.initial);
+
+    // The ends HOLD. A ladder that wrapped would send one keystroke from the
+    // widest view to the closest, which is the most disorienting thing the
+    // editor could do to somebody looking for the level they just lost.
+    for (let i = 0; i < 8; i++) {
+      tap(h, scene, 'Equal');
+    }
+    expect(scene.state.zoomIndex).toBe(range.max);
+    expect(scene.state.status).toContain('CLOSEST');
+    for (let i = 0; i < 8; i++) {
+      tap(h, scene, 'Minus');
+    }
+    expect(scene.state.zoomIndex).toBe(range.min);
+    expect(scene.state.status).toContain('WIDEST');
+  });
+
+  it('the numpad pair does the same, and Z no longer zooms at all', () => {
+    const { h, scene } = open();
+    const start = scene.state.zoomIndex;
+    tap(h, scene, 'NumpadSubtract');
+    expect(scene.state.zoomIndex).toBe(start - 1);
+    tap(h, scene, 'NumpadAdd');
+    expect(scene.state.zoomIndex).toBe(start);
+    // Z is Ctrl+Z's letter and nothing else now: a bare Z used to toggle the
+    // zoom, which made a slip while reaching for undo move the view.
     tap(h, scene, 'KeyZ');
-    h.input.onKey('ControlLeft', false);
-    expect(scene.state.zoom).toBe(first);
+    expect(scene.state.zoomIndex).toBe(start);
+  });
+
+  it('A RESIZE PAST THE FRAME MOVES THE LADDER, and the view follows it', () => {
+    const { h, scene } = open();
+    tap(h, scene, 'KeyR');
+    typeSize(h, scene, '200X60');
+    const range = zoomRange(200, 60);
+    expect(scene.state.zoomIndex).toBeLessThanOrEqual(range.max);
+    expect(scene.state.zoomIndex).toBeGreaterThanOrEqual(range.min);
+    expect(EDITOR_ZOOM_STEPS[scene.state.zoomIndex]).toBe(scene.state.zoom);
   });
 
   it('the bracket and comma keys resize, with Shift for the opposite edge', () => {
@@ -319,7 +394,7 @@ describe('naming', () => {
     const before = scene.state.rows;
     const sel = scene.state.sel;
     tap(h, scene, 'KeyN');
-    for (const code of ['Digit2', 'KeyZ', 'BracketRight', 'KeyS']) {
+    for (const code of ['Digit2', 'Equal', 'BracketRight', 'KeyS']) {
       tap(h, scene, code);
     }
     expect(scene.state.rows).toEqual(before);
@@ -423,10 +498,10 @@ describe('playtest', () => {
 describe('the draft', () => {
   it('is written on every stroke end, so a reload costs one stroke at most', () => {
     const { h, scene } = open();
-    expect(h.storage.map.has(SAVE_KEYS.editorDraft)).toBe(false);
+    expect(h.storage.map.has(SAVE_KEYS.draft('test-level'))).toBe(false);
     tap(h, scene, 'Digit2');
     drag(h, scene, [[4, 3]]);
-    const raw = h.storage.getItem(SAVE_KEYS.editorDraft);
+    const raw = h.storage.getItem(SAVE_KEYS.draft('test-level'));
     expect(raw).not.toBeNull();
     const parsed: unknown = JSON.parse(raw as string);
     expect(parsed).toEqual({
@@ -434,22 +509,51 @@ describe('the draft', () => {
       name: 'TEST LEVEL',
       rows: scene.state.rows,
     });
+    // And it is ON THE SHELF, not merely in storage: a record no index names
+    // is a level the picker will never offer to open again.
+    expect(listDrafts(h.game.save).map((d) => d.id)).toEqual(['test-level']);
   });
 
   it('and what it holds is what parseLevel accepts', () => {
     const { h, scene } = open();
     tap(h, scene, 'Digit2');
     drag(h, scene, [[4, 3]]);
-    const parsed: unknown = JSON.parse(h.storage.getItem(SAVE_KEYS.editorDraft) as string);
+    const parsed: unknown = JSON.parse(h.storage.getItem(SAVE_KEYS.draft('test-level')) as string);
     expect(parseLevel(parsed).ok).toBe(true);
+  });
+
+  it('A RENAME MOVES THE RECORD, rather than leaving a stale twin behind', () => {
+    const { h, scene } = open();
+    tap(h, scene, 'Digit2');
+    drag(h, scene, [[4, 3]]);
+    typeId(h, scene, 'cellar');
+    expect(scene.state.mode).toBe('name'); // straight on to the name
+    tap(h, scene, 'Enter');
+    expect(listDrafts(h.game.save).map((d) => d.id)).toEqual(['cellar']);
+    expect(readDraft(h.game.save, 'test-level')).toBeNull();
+  });
+
+  it('REFUSES AN ID ANOTHER DRAFT OR A BUILT-IN ALREADY HOLDS', () => {
+    const { h, scene } = open();
+    writeDraft(h.game.save, { id: 'taken', name: 'TAKEN', rows: ['S.', 'G#'] });
+    typeId(h, scene, 'taken');
+    expect(scene.state.mode).toBe('id'); // still open, with the text still in it
+    expect(scene.state.status).toContain('ALREADY A DRAFT');
+    expect(scene.state.id).toBe('test-level');
+
+    tap(h, scene, 'Escape');
+    typeId(h, scene, LEVELS[0].id);
+    expect(scene.state.mode).toBe('id');
+    expect(scene.state.status).toContain('BUILT-IN');
+    expect(scene.state.id).toBe('test-level');
   });
 });
 
 describe('leaving, and the modes', () => {
-  it('Esc returns to the title from paint mode', () => {
+  it('Esc returns to the level picker from paint mode', () => {
     const { h, scene } = open();
     tap(h, scene, 'Escape');
-    expect(h.scenes[0]).toBeInstanceOf(TitleScene);
+    expect(h.scenes[0]).toBeInstanceOf(EditorSelectScene);
   });
 
   it('middle-drag pans without painting', () => {
@@ -493,7 +597,7 @@ describe('leaving, and the modes', () => {
 });
 
 describe('a 200x60 grid, which is the size cap', () => {
-  it('opens, draws its cells and stays valid at both zooms', () => {
+  it('opens, draws its cells and stays valid across the ladder', () => {
     // The draw budget's worst case. Nothing here measures milliseconds — that
     // is the browser pass's job — but the scene has to survive being asked.
     const rows: string[] = [];
@@ -503,7 +607,7 @@ describe('a 200x60 grid, which is the size cap', () => {
     const { h, scene } = open(rows);
     expect(scene.state.errors).toEqual([]);
     expect(scene.state.rows[0]).toHaveLength(200);
-    tap(h, scene, 'KeyZ');
+    tap(h, scene, 'Equal');
     h.input.onKey('ArrowRight', true);
     step(h, scene, 120); // pan two seconds to the right
     h.input.onKey('ArrowRight', false);
@@ -536,7 +640,7 @@ describe('regressions from the review', () => {
    */
   function openAt1x(rows: readonly string[] = TALL): { h: Harness; scene: EditorScene } {
     const r = open(rows);
-    tap(r.h, r.scene, 'KeyZ'); // half -> 1x
+    tap(r.h, r.scene, 'Equal'); // half -> 1x
     expect(r.scene.state.zoom).toBe(1);
     // Hard to the top-left corner (which clamps at -PAN_MARGIN), then back by
     // exactly PAN_MARGIN, so the view sits on the grid's origin: view space and
@@ -737,7 +841,7 @@ describe('the size field', () => {
     const before = scene.state.rows;
     const sel = scene.state.sel;
     tap(h, scene, 'KeyR');
-    for (const code of ['Digit2', 'KeyZ', 'BracketRight', 'KeyS']) {
+    for (const code of ['Digit2', 'Equal', 'BracketRight', 'KeyS']) {
       tap(h, scene, code);
     }
     expect(scene.state.rows).toEqual(before);
@@ -788,7 +892,7 @@ describe('the size field', () => {
     const { h, scene } = open();
     tap(h, scene, 'KeyR');
     typeSize(h, scene, '12X6');
-    const draft = h.game.save.getText(SAVE_KEYS.editorDraft);
+    const draft = h.game.save.getText(SAVE_KEYS.draft('test-level'));
     expect(draft).not.toBeNull();
     expect(JSON.parse(draft as string).rows[0]).toHaveLength(12);
   });
@@ -962,7 +1066,7 @@ describe('the select tool', () => {
     expect(scene.state.selection).toBeNull();
     expect(h.scenes).toHaveLength(0);
     tap(h, scene, 'Escape');
-    expect(h.scenes[0]).toBeInstanceOf(TitleScene);
+    expect(h.scenes[0]).toBeInstanceOf(EditorSelectScene);
   });
 
   it('switching tools drops the selection, so no outline outlives its tool', () => {

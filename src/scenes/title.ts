@@ -13,7 +13,7 @@ import { palette } from '../engine/palette';
 import type { Renderer } from '../engine/renderer';
 import type { Game, Scene } from '../game';
 import { LEVELS } from '../levels/index';
-import { EditorScene, draftFromSave } from './editor';
+import { EditorSelectScene } from './editorselect';
 import { LevelSelectScene } from './levelselect';
 import { updateMenu } from './menu';
 import { PlayScene } from './play';
@@ -53,10 +53,12 @@ export class TitleScene implements Scene {
       game.toggleMute();
     }
     // GAME-DESIGN §4's "Editor (dev): E from the title screen", kept as a raw
-    // code beside the menu item — the shortcut and the menu are both real.
+    // code beside the menu item — the shortcut and the menu are both real. It
+    // opens the PICKER: with a shelf of drafts, "the editor" is no longer one
+    // level, and guessing which one would be wrong most of the time.
     if (input.codePressed('KeyE')) {
       game.audio.play('menuPick');
-      game.setScene(new EditorScene(draftFromSave(game.save) ?? undefined));
+      game.setScene(new EditorSelectScene());
       return;
     }
     const step = updateMenu(game, this.index, ITEMS.length);
@@ -75,7 +77,7 @@ export class TitleScene implements Scene {
         game.setScene(new LevelSelectScene());
         break;
       default:
-        game.setScene(new EditorScene(draftFromSave(game.save) ?? undefined));
+        game.setScene(new EditorSelectScene());
         break;
     }
   }

@@ -45,7 +45,7 @@ But linear motion stays arcade: left and right set velocity directly, and the ve
 
 **One number drives the whole feel.** Normalised speed closes the vignette, splits the colour channels, bounces the screen, and gates four layers of synthesised techno. They share an input, so they arrive together: the game visibly and audibly opens up as you get fast.
 
-**Levels are drawn in the browser.** The editor is a scene inside the game, not a separate tool, and it edits the level's *characters* rather than a parsed model — so validation, saving and playtesting are the same three functions the game already had, and playtest hands the grid to the real `PlayScene` with no second parser and no preview mode. In dev it writes `src/levels/*.json` straight to disk through a Vite middleware; a production build has no such endpoint, so it falls back to localStorage and clipboard export — chosen by *trying* rather than by a build flag, so the fallback is not a branch nobody exercises until it ships.
+**Levels are drawn in the browser.** `E` opens a picker — new level, every work-in-progress draft, every shipped level — and a shipped level opens as a *copy* with an id of its own, because a level in `src/levels/` is a file under version control. The editor itself is a scene inside the game, not a separate tool, and it edits the level's *characters* rather than a parsed model — so validation, saving and playtesting are the same three functions the game already had, and playtest hands the grid to the real `PlayScene` with no second parser and no preview mode. In dev it writes `src/levels/*.json` straight to disk through a Vite middleware; a production build has no such endpoint, so it falls back to localStorage and clipboard export — chosen by *trying* rather than by a build flag, so the fallback is not a branch nobody exercises until it ships.
 
 The shipped `02-second-nature` was built in it, start to finish, without opening a text editor. That was the point.
 
@@ -70,8 +70,10 @@ src/
   engine/          rng, input, font, palette, renderer, audio, save, particles, levelio
   world/           tiles, obb, physics, level, camera
   entities/        player
-  scenes/          title, level select, play, results, editor, menu, tiledraw
-  editor/          pure grid model, undo, validation, warnings
+  scenes/          title, level select, play, results, editor + its picker
+                   and controls panel, menu, tiledraw
+  editor/          pure grid model, undo, validation, warnings, the draft
+                   shelf, the zoom ladder
   levels/          hand-authored level JSON, one file per level
 tests/             vitest, node environment — no DOM required
 docs/              design doc, build plan, architecture and physics deep-dives

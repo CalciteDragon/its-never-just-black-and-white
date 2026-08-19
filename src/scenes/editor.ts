@@ -50,35 +50,45 @@ import {
   parseSizeInput,
 } from '../editor/grid';
 import type { CellRect } from '../editor/grid';
+import { draftExists, renameDraft, uniqueDraftId, writeDraft } from '../editor/drafts';
+import { zoomLabel, zoomRange } from '../editor/zoom';
 import { measureText } from '../engine/font';
 import { MOUSE_LEFT, MOUSE_MIDDLE, MOUSE_RIGHT } from '../engine/input';
 import { saveLevel } from '../engine/levelio';
 import { LEVEL_ID_PATTERN } from '../engine/levelio';
 import { palette } from '../engine/palette';
 import type { Renderer } from '../engine/renderer';
-import { SAVE_KEYS } from '../engine/save';
-import type { SaveStore } from '../engine/save';
 import type { Game, Scene } from '../game';
+import { LEVELS } from '../levels/index';
 import { levelRows, parseLevel, validateLevel } from '../world/level';
 import type { Level } from '../world/level';
 import { Tile, padDirection, tileFromChar } from '../world/tiles';
+import { EditorSelectScene } from './editorselect';
+import { renderHelp } from './editorhelp';
 import { PlayScene } from './play';
-import { drawChevron, drawGoal, drawPickup, drawSpawn } from './tiledraw';
-import { TitleScene } from './title';
+import { drawChevron, drawGoal, drawPickup, drawSpawn, plate } from './tiledraw';
 
-/** A level as the editor holds it: §8's on-disk shape, and nothing else. */
+/**
+ * A level as the editor holds it: §8's on-disk shape, plus one fact the shape
+ * cannot carry — where a copy came from. `copyOf` is set when a **shipped**
+ * level was opened, and it is only ever a label: the id it arrived with is
+ * already a fresh one (`editorInitFromLevel`), because a built-in is opened as
+ * a copy rather than opened and then refused at the save.
+ */
 export interface EditorInit {
   readonly id: string;
   readonly name: string;
   readonly rows: readonly string[];
+  readonly copyOf?: string;
 }
 
 /**
- * The three modes, stated as a type so a fourth cannot be added by accident.
- * `id` and `name` are text entry; they swallow every key, which is precisely
- * why they are visible on screen while active.
+ * The modes, stated as a type so a fifth cannot be added by accident. `id`,
+ * `name` and `size` are text entry and `help` is the controls panel; all four
+ * swallow every key, which is precisely why they are visible on screen while
+ * active.
  */
-type Mode = 'paint' | 'id' | 'name' | 'size';
+type Mode = 'paint' | 'id' | 'name' | 'size' | 'help';
 
 /**
  * The three drawing tools. `mode` is *modal state* — a field open, a pan under
@@ -120,6 +130,12 @@ const BAR_X = 16;
 const BAR_Y = VIEW_H - 50;
 const BAR_W = GRID_CHARS.length * BAR_CELL + (GRID_CHARS.length - 1) * BAR_GAP;
 
+/** The controls button's label, and the key that does the same thing. */
+const HELP_LABEL = 'CONTROLS AND TOOLS  (H)';
+
+/** Longest display name a copy keeps, so the header plate cannot outgrow the frame. */
+const NAME_MAX = 40;
+
 /** `Digit1`…`Digit8`, in palette order. */
 const DIGIT_CODES: readonly string[] = GRID_CHARS.map((_, i) => `Digit${i + 1}`);
 
@@ -150,7 +166,13 @@ export class EditorScene implements Scene {
   private buffer = '';
 
   private sel = 1; // '#', because the first thing anyone paints is a floor
-  private zoom = 1; // index into EDITOR_ZOOM_STEPS; ½ first, to see the level
+  /**
+   * Index into `EDITOR_ZOOM_STEPS`, held between `zoomMin` and `zoomMax` —
+   * which are a function of the grid's size, so they are recomputed after every
+   * resize rather than stored (`editor/zoom.ts` says why each end is where it
+   * is). The level opens at the step that shows all of it.
+   */
+  private zoom: number;
   private panX = 0;
   private panY = 0;
 
@@ -165,12 +187,19 @@ export class EditorScene implements Scene {
 
   private errors: string[] = [];
   private warnings: string[] = [];
-  private status = 'B X V TOOLS  ·  N NAMES  ·  R RESIZES  ·  ENTER PLAYTESTS  ·  CTRL+S SAVES';
+  private status = 'H OR THE BUTTON BELOW LISTS EVERY CONTROL AND TOOL';
+  /** The shipped level this is a copy of, or null. A label, never a key. */
+  private readonly copyOf: string | null;
+  /** The id the draft is filed under. Moves with the id, via `renameDraft`. */
+  private draftKey: string;
 
   constructor(init?: EditorInit) {
     this.id = init?.id ?? 'untitled';
     this.name = init?.name ?? 'UNTITLED';
+    this.copyOf = init?.copyOf ?? null;
+    this.draftKey = this.id;
     this.grid = new EditorGrid(init?.rows ?? blankRows(EDITOR_DEFAULT_W, EDITOR_DEFAULT_H));
+    this.zoom = zoomRange(this.grid.w, this.grid.h).initial;
     this.revalidate();
   }
 
@@ -198,6 +227,7 @@ export class EditorScene implements Scene {
     tool: Tool;
     selection: CellRect | null;
     zoom: number;
+    zoomIndex: number;
     undoDepth: number;
     panning: boolean;
     errors: readonly string[];
@@ -214,6 +244,7 @@ export class EditorScene implements Scene {
       tool: this.tool,
       selection: this.selection,
       zoom: EDITOR_ZOOM_STEPS[this.zoom],
+      zoomIndex: this.zoom,
       undoDepth: this.grid.undoDepth,
       panning: this.panButton !== null,
       errors: this.errors,
@@ -224,9 +255,13 @@ export class EditorScene implements Scene {
 
   update(dt: number, game: Game): void {
     const input = game.input;
-    // Text entry FIRST and unconditionally, because it swallows everything —
-    // including `Escape`, which means four different things across four scenes
-    // and must be read by exactly one reader in each.
+    // The panel and the text fields FIRST and unconditionally, because they
+    // swallow everything — including `Escape`, which means four different
+    // things across four scenes and must be read by exactly one reader in each.
+    if (this.mode === 'help') {
+      this.updateHelp(game);
+      return;
+    }
     if (this.mode !== 'paint') {
       this.updateTextEntry(game);
       return;
@@ -248,7 +283,7 @@ export class EditorScene implements Scene {
         this.status = 'SELECTION CLEARED';
         return;
       }
-      game.setScene(new TitleScene());
+      game.setScene(new EditorSelectScene());
       return;
     }
 
@@ -289,8 +324,19 @@ export class EditorScene implements Scene {
         this.sel = i;
       }
     }
-    if (input.codePressed('KeyZ')) {
-      this.toggleZoom();
+    // Zoom is a ladder now rather than a toggle, so it is on the keys that
+    // mean "more" and "less" everywhere else. `Equal` is `+` unshifted, and the
+    // numpad pair is here because a keyboard that has one is a keyboard whose
+    // owner will reach for it.
+    if (input.codePressed('Equal') || input.codePressed('NumpadAdd')) {
+      this.stepZoom(1);
+    }
+    if (input.codePressed('Minus') || input.codePressed('NumpadSubtract')) {
+      this.stepZoom(-1);
+    }
+    if (input.codePressed('KeyH') || input.codePressed('Slash')) {
+      this.openHelp(game);
+      return;
     }
     // B, X, V - brush, box, and the move tool that every other editor also
     // calls V. They sit with the palette digits rather than on the Ctrl side,
@@ -340,21 +386,73 @@ export class EditorScene implements Scene {
   private resize(game: Game, edge: 'left' | 'right' | 'top' | 'bottom', delta: number): void {
     this.grid.resize(edge, delta);
     this.selection = null; // it named cells that may not exist any more
+    this.clampZoom();
     this.afterEdit(game, `${this.grid.w} X ${this.grid.h}`);
   }
 
-  private toggleZoom(): void {
-    // Hold the view CENTRE, in tiles, across the change. Anchoring to the top
-    // left instead would throw away wherever you were looking, which at half
-    // zoom is most of the level.
+  /**
+   * One rung in or out, and it **stops at the ends rather than wrapping**. A
+   * ladder that wrapped would send `-` from the widest view straight to the
+   * closest one, which on a 200-wide level is the most disorienting single
+   * keystroke the editor could offer.
+   */
+  private stepZoom(dir: number): void {
+    const range = zoomRange(this.grid.w, this.grid.h);
+    const next = clamp(this.zoom + dir, range.min, range.max);
+    if (next === this.zoom) {
+      this.status = dir > 0 ? 'CLOSEST ZOOM FOR THIS SIZE' : 'WIDEST ZOOM FOR THIS SIZE';
+      return;
+    }
+    this.setZoom(next);
+    this.status = `ZOOM ${zoomLabel(this.zoom)}`;
+  }
+
+  /**
+   * Hold the view CENTRE, in tiles, across the change. Anchoring to the top
+   * left instead would throw away wherever you were looking, which at the wide
+   * end is most of the level.
+   */
+  private setZoom(index: number): void {
     const before = this.cell;
     const cx = (this.panX + VIEW_W / 2) / before;
     const cy = (this.panY + VIEW_H / 2) / before;
-    this.zoom = (this.zoom + 1) % EDITOR_ZOOM_STEPS.length;
+    this.zoom = index;
     const after = this.cell;
     this.panX = cx * after - VIEW_W / 2;
     this.panY = cy * after - VIEW_H / 2;
     this.clampPan();
+  }
+
+  /**
+   * A resize moves the ends of the ladder, because both depend on the size of
+   * the grid — so a level grown past the frame must not be left sitting at a
+   * zoom that no longer exists for it.
+   */
+  private clampZoom(): void {
+    const range = zoomRange(this.grid.w, this.grid.h);
+    const next = clamp(this.zoom, range.min, range.max);
+    if (next !== this.zoom) {
+      this.setZoom(next);
+    }
+  }
+
+  // --- The controls panel. One screen, opened on demand, closed by anything:
+  // a reference nobody can dismiss by accident is a reference in the way. ---
+
+  private openHelp(game: Game): void {
+    this.cancelDrag(); // the release will land on a panel, not on the grid
+    this.mode = 'help';
+    game.audio.play('menuMove');
+  }
+
+  private updateHelp(game: Game): void {
+    // Anything at all closes it, including a click: it is a page of text with
+    // nothing to press, so every input an author could try means "done".
+    if (game.input.pressedCodes().length > 0 || game.input.pointerPressed(MOUSE_LEFT)) {
+      this.mode = 'paint';
+      this.status = `${this.tool.toUpperCase()} TOOL`;
+      game.audio.play('menuMove');
+    }
   }
 
   // --- Text entry. The id and the name have different charsets because they
@@ -439,6 +537,7 @@ export class EditorScene implements Scene {
       const changed = this.grid.setSize(size.w, size.h);
       this.selection = null;
       this.mode = 'paint';
+      this.clampZoom();
       // `afterEdit` either way: an unchanged size still owes the author a
       // status line saying what the size actually is.
       this.afterEdit(game, changed ? `${this.grid.w} X ${this.grid.h}` : 'SIZE UNCHANGED');
@@ -450,6 +549,19 @@ export class EditorScene implements Scene {
       // a filename, and the first place to say so is the field you type it in.
       if (!LEVEL_ID_PATTERN.test(this.buffer)) {
         this.status = 'BAD ID: LOWERCASE, DIGITS AND -, NOT STARTING WITH -';
+        return;
+      }
+      // Two kinds of id are already spoken for, and both refusals leave the
+      // field open with the text still in it, because the fix is a suffix away.
+      // The built-in one is load-bearing: the id IS the filename, so accepting
+      // it here is the one thing that could let a save overwrite a shipped
+      // level rather than write a copy beside it.
+      if (this.buffer !== this.id && isBuiltinId(this.buffer)) {
+        this.status = 'THAT ID IS A BUILT-IN LEVEL: PICK ANOTHER, IT SAVES AS A COPY';
+        return;
+      }
+      if (this.buffer !== this.id && draftExists(game.save, this.buffer)) {
+        this.status = 'THAT ID IS ALREADY A DRAFT: PICK ANOTHER';
         return;
       }
       this.id = this.buffer;
@@ -481,6 +593,10 @@ export class EditorScene implements Scene {
     // moves cannot leave its hit region behind.
     const overUi = this.overlayRects().some((rect) => inRect(rect, input.pointerX, input.pointerY));
 
+    if (input.pointerPressed(MOUSE_LEFT) && inRect(this.helpButton(), input.pointerX, input.pointerY)) {
+      this.openHelp(game);
+      return;
+    }
     if (input.pointerPressed(MOUSE_LEFT)) {
       if (swatch !== null) {
         this.sel = swatch;
@@ -704,7 +820,7 @@ export class EditorScene implements Scene {
   }
 
   private headerLine(): string {
-    return this.mode !== 'paint'
+    return this.mode === 'id' || this.mode === 'name' || this.mode === 'size'
       ? `${this.mode.toUpperCase()}: ${this.buffer}_`
       : `${this.id}  ·  ${this.name}`;
   }
@@ -714,10 +830,21 @@ export class EditorScene implements Scene {
     // and renders as the fallback hollow box, which reads as a missing glyph
     // rather than as a pad — which is the whole reason the palette bar draws
     // tiles instead of characters. The bar's thick border IS the readout.
+    // The copy note rides here rather than on the status line, because the
+    // status line is the last thing that happened and this is a standing fact
+    // about the level: a built-in was opened, and it will be saved BESIDE the
+    // level it came from, never over it.
+    const copy = this.copyOf === null ? '' : `   COPY OF ${this.copyOf.toUpperCase()}`;
     return (
-      `${this.grid.w} X ${this.grid.h}   ZOOM ${this.zoom === 0 ? '1X' : 'HALF'}   ` +
-      `UNDO ${this.grid.undoDepth}   ${this.tool.toUpperCase()}`
+      `${this.grid.w} X ${this.grid.h}   ZOOM ${zoomLabel(this.zoom)}   ` +
+      `UNDO ${this.grid.undoDepth}   ${this.tool.toUpperCase()}${copy}`
     );
+  }
+
+  /** The CONTROLS AND TOOLS button, at the right-hand end of the bar. */
+  private helpButton(): Rect {
+    const w = measureText(HELP_LABEL, 1) + 20;
+    return { x: VIEW_W - 16 - w, y: BAR_Y, w, h: BAR_CELL };
   }
 
   /** Which palette swatch is under this point, or null. */
@@ -787,12 +914,31 @@ export class EditorScene implements Scene {
    * The draft is written on every stroke end, so a reload never costs more than
    * the stroke in progress. A serialised 60×20 level is ~1.3 KB, which is
    * 0.03 % of a 5 MB quota — autosaving this often is free.
+   *
+   * It is filed under the id, and an id that has changed since the last write
+   * is a **move**: leaving the old record behind would put a stale copy of this
+   * level on the shelf under the name it used to have, which is exactly the
+   * confusion a shelf of drafts exists to end. A built-in's id is never written
+   * at all — nothing on the shelf may shadow a shipped level.
    */
   private writeDraft(game: Game): void {
-    game.save.setText(
-      SAVE_KEYS.editorDraft,
-      JSON.stringify({ id: this.id, name: this.name, rows: this.grid.rows }, null, 2) + '\n',
-    );
+    if (isBuiltinId(this.id)) {
+      return;
+    }
+    const rec = { id: this.id, name: this.name, rows: this.grid.rows };
+    if (this.draftKey !== this.id) {
+      if (!renameDraft(game.save, this.draftKey, rec)) {
+        // `commitTextEntry` refuses an id another draft holds, so this is only
+        // reachable if a second tab claimed it in between. The work is safe
+        // under the old key, and the id goes back to matching where it is.
+        this.id = this.draftKey;
+        this.status = `THAT ID IS ALREADY A DRAFT: STILL SAVED AS ${this.draftKey.toUpperCase()}`;
+        return;
+      }
+      this.draftKey = this.id;
+      return;
+    }
+    writeDraft(game.save, rec);
   }
 
   private playtest(game: Game): void {
@@ -810,6 +956,13 @@ export class EditorScene implements Scene {
 
   private save(game: Game): void {
     this.revalidate();
+    // The copy rule, enforced where it bites. Unreachable by the ordinary route
+    // — a built-in is opened under a copy's id and the id field refuses to type
+    // one back — which is exactly why it is checked once more before the write.
+    if (isBuiltinId(this.id)) {
+      this.status = 'CANNOT SAVE OVER A BUILT-IN LEVEL: PRESS N FOR A NEW ID';
+      return;
+    }
     if (this.errors.length > 0) {
       this.status = `CANNOT SAVE: ${this.errors[0]}`;
       return;
@@ -837,6 +990,9 @@ export class EditorScene implements Scene {
     this.renderHeader(r, game);
     this.renderPanel(r);
     this.renderBar(r);
+    if (this.mode === 'help') {
+      renderHelp(r, 'ANY KEY CLOSES');
+    }
     r.applyPost(0);
   }
 
@@ -1068,9 +1224,24 @@ export class EditorScene implements Scene {
     // Truncated rather than wrapped: the full text of anything long enough to
     // need it is already in the panel, and a status line that reflows would
     // move the bar under the pointer.
+    const button = this.helpButton();
     const statusX = BAR_X + BAR_W + 20;
-    const cols = Math.floor((VIEW_W - 16 - statusX) / 6);
-    r.text(this.status.slice(0, cols), statusX, BAR_Y + 14, palette.ink);
+    const cols = Math.floor((button.x - 12 - statusX) / 6);
+    r.text(this.status.slice(0, Math.max(0, cols)), statusX, BAR_Y + 14, palette.ink);
+    // Drawn as a button — a border and a label — because it is the one thing in
+    // this scene that is clicked rather than pressed, and a bare word on a
+    // plate reads as another status line.
+    r.rectRotatedOutline(
+      button.x + button.w / 2,
+      button.y + button.h / 2,
+      button.w,
+      button.h,
+      0,
+      palette.ink,
+      this.mode === 'help' ? 3 : 1,
+      true,
+    );
+    r.text(HELP_LABEL, button.x + 10, button.y + 14, palette.ink);
     for (let i = 0; i < GRID_CHARS.length; i++) {
       const x = BAR_X + i * (BAR_CELL + BAR_GAP);
       const cx = x + BAR_CELL / 2;
@@ -1146,17 +1317,6 @@ function drawCellContent(
   }
 }
 
-/**
- * A `paper` panel with an `ink` border, in UI space. Every overlay in this
- * scene sits on one: the grid underneath is `ink`, and ink text on ink geometry
- * is text nobody can read — which is the two-colour version of "the HUD
- * disappeared over the dark bit".
- */
-function plate(r: Renderer, x: number, y: number, w: number, h: number): void {
-  r.rect(x, y, w, h, palette.paper, true);
-  r.rectRotatedOutline(x + w / 2, y + h / 2, w, h, 0, palette.ink, 1, true);
-}
-
 function clamp(n: number, lo: number, hi: number): number {
   return n < lo ? lo : n > hi ? hi : n;
 }
@@ -1181,37 +1341,31 @@ function wrap(text: string, cols: number): string[] {
   return lines;
 }
 
-/** A shipped level, opened for editing. `levelRows` is `parseLevel`'s inverse. */
-export function editorInitFromLevel(level: Level): EditorInit {
-  return { id: level.id, name: level.name, rows: levelRows(level) };
+/** The ids `src/levels/index.ts` ships. Nothing an author edits may claim one. */
+export function builtinIds(): readonly string[] {
+  return LEVELS.map((l) => l.id);
+}
+
+export function isBuiltinId(id: string): boolean {
+  return builtinIds().includes(id);
 }
 
 /**
- * The autosaved draft, or null if there isn't a usable one. Everything here is
- * defensive because the value is JSON from a previous session's browser: it can
- * be absent, truncated, from an older shape, or something else entirely that
- * happens to share the key.
+ * A shipped level, opened for editing — **as a copy, from the first frame**.
+ * `levelRows` is `parseLevel`'s inverse, and the id is a fresh one rather than
+ * the level's own: a built-in is a file in this repo under version control, and
+ * an editor that let you save over it would make the tool the fastest way to
+ * lose a shipped level. Saying so at the save would be too late to be a design;
+ * saying so by handing back a copy is the design.
+ *
+ * `taken` is whatever else already claims an id — the draft shelf — so a second
+ * copy of the same level lands beside the first rather than on top of it.
  */
-export function draftFromSave(save: SaveStore): EditorInit | null {
-  const raw = save.getText(SAVE_KEYS.editorDraft);
-  if (raw === null) {
-    return null;
-  }
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-      return null;
-    }
-    const obj = parsed as Record<string, unknown>;
-    const rows = obj.rows;
-    if (typeof obj.id !== 'string' || typeof obj.name !== 'string' || !Array.isArray(rows)) {
-      return null;
-    }
-    if (!rows.every((row): row is string => typeof row === 'string') || rows.length === 0) {
-      return null;
-    }
-    return { id: obj.id, name: obj.name, rows };
-  } catch {
-    return null;
-  }
+export function editorInitFromLevel(level: Level, taken: readonly string[] = []): EditorInit {
+  return {
+    id: uniqueDraftId(`${level.id}-copy`, [...builtinIds(), ...taken]),
+    name: `${level.name} COPY`.slice(0, NAME_MAX),
+    rows: levelRows(level),
+    copyOf: level.id,
+  };
 }
