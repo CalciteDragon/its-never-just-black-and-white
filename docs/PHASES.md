@@ -691,7 +691,7 @@ Title ─┬─▶ Play(campaign i) ─▶ Results ─┬─▶ Play(campaign i+
 | right-drag | erase (paint `.`) |
 | `Shift`+click | flood-fill the connected region of equal character (4-connected) |
 | middle-drag, `Space`-drag, arrows | pan |
-| `1`–`8` | select `. # ^ v < > S G` |
+| `1`–`8` | select `. # ^ v < > S G` |  <!-- amended after 0.2: nine, with `o` -->
 | `Z` | toggle `1×` / `½×` |
 | `Ctrl+Z` / `Ctrl+Y` | undo / redo |
 | `[` `]` `,` `.` | grow / shrink from an edge (with `Shift` for the opposite edge) |
@@ -806,6 +806,19 @@ Two additions the brief did not scope, both because a fourth copy of the same co
 
 **Exit met.** A level can be drawn in the browser, saved to disk, and played from the title screen without touching an editor outside the game, proven by `02-second-nature`. The shell is complete. `ARCHITECTURE.md`, `PHYSICS.md`, `README.md` and `CLAUDE.md` are refreshed from as-built code; GAME-DESIGN §3, §6, §10 and §12 are amended where this phase contradicted them.
 
+
+---
+
+## After 0.2: amendments from playing it
+
+Everything above is the record of the seven phases *as planned and as built*, and it is deliberately left standing where it is now wrong — the wrong version is the argument for the right one. Four rules changed once there were levels to run, and every one of them is a rule this document states flatly somewhere above:
+
+1. **Pads fire from every face but their back.** Phase 5 fired on any contact; the phase 7 pass narrowed that to the face alone, to stop a body landing on the back of a down-pad being fired through the slab that caught it. Both were wrong in opposite directions: a free-standing pad that merely *stops* you when you walk into its edge reads as broken. The test is now on the back alone (`PAD_BACK_DOT`), and a side hit fires along the pad's own facing.
+2. **A pad recharges the flip.** Decision 2 above (contacts carry tile identity) was built to express "pads do NOT recharge, only ground does". The mechanism survives; the rule inverted. Spending the whole of a pad chain with the flip unavailable turned "a pad chain is a commitment" into "a pad chain is a corridor", and took the game's other verb away from its most interesting line. The two bits on `Contact` are still both needed — a solid recharges only from a ground normal, a pad from any contact at all.
+3. **The spin arm is `r × facing`, not `r × n`.** A consequence of 1, found in review rather than in play: the two agree only on a face hit, so once the sides fired, the normal form measured the offset *along* the launch instead of across it, and a dead-centre side hit produced no spin at all.
+4. **There is one collectible.** `o`, the flip recharge, added because the charge had exactly two sources and both were surfaces. It is metadata on an empty cell like `S` and `G` — **the tile enum still does not grow** — which is the same decision 1 made in phase 7 for the editor's grid, arrived at again from the other end.
+
+And the editor grew the two tools that authoring 0.3 wanted first: a **rectangle fill** and a **select-and-drag-to-move**, both `paint` in a loop under one `atomic` so the marker rules and the undo granularity are the brush's rather than a second set. Reviewing them turned up two bugs worth recording, because both are the shape of bug this project keeps producing: a drag left open by a text field or a playtest kept painting on hover (the per-frame paint was guarded by the drag being open, not by the button being down), and a move could *destroy* a marker — the lift erases and the stamp is allowed to refuse — which is exactly the invariant the character model exists to hold.
 
 ---
 

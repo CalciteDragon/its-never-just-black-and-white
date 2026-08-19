@@ -33,7 +33,7 @@ There is no double jump. The flip is the air move — and **it only recharges wh
 
 ### Rules
 
-Reach the goal. The only hazard is leaving the world vertically, and since gravity flips, both directions are lethal. No enemies, no collectibles, no score, no lives. Death costs you about half a second.
+Reach the goal. The only hazard is leaving the world vertically, and since gravity flips, both directions are lethal. No enemies, no score, no lives. Death costs you about half a second. The one thing there is to collect is a **flip recharge** — the flip's own charge as a placeable object, which is how a level says "here, you get a second one"; it has no collision and comes back three seconds after it is taken.
 
 ## What makes it interesting
 
