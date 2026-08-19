@@ -513,15 +513,20 @@ export class PlayScene implements Scene {
         this.pickupTimers[i] = Math.max(0, this.pickupTimers[i] - dt);
         continue;
       }
-      // Dying and won are frozen states for scoring purposes but the body keeps
-      // simulating through them, and a corpse flying through a pickup must not
-      // collect it.
+      // The body keeps simulating through `dying` — it flies out of shot, which
+      // reads as a consequence rather than a pause — so a corpse can cross a
+      // pickup and must not collect it. `won` is frozen and never reaches here
+      // through `stepPlay`, but it is excluded by the same test rather than by
+      // trusting that to stay true.
       if (this.state !== 'running' && this.state !== 'respawning') {
         continue;
       }
-      const cx = pickups[i].tx * TILE + TILE / 2;
-      const cy = pickups[i].ty * TILE + TILE / 2;
-      if (Math.hypot(b.x - cx, b.y - cy) > PICKUP_RADIUS) {
+      const dx = pickups[i].tx * TILE + TILE / 2 - b.x;
+      const dy = pickups[i].ty * TILE + TILE / 2 - b.y;
+      // Squared, not `Math.hypot`: the answer is exact rather than
+      // implementation-approximated, and a level whose author flooded a region
+      // with `o` is thousands of these per step.
+      if (dx * dx + dy * dy > PICKUP_RADIUS * PICKUP_RADIUS) {
         continue;
       }
       if (!this.player.recharge()) {
@@ -531,7 +536,7 @@ export class PlayScene implements Scene {
       game.audio.play('pickup');
       // The flip's own ring, at the pickup rather than at the body: what just
       // happened is that the flip came back, and that is what the ring means.
-      spawnRing(this.particles, cx, cy);
+      spawnRing(this.particles, b.x + dx, b.y + dy);
     }
   }
 
@@ -621,14 +626,22 @@ export class PlayScene implements Scene {
    */
   private renderPickups(r: Renderer): void {
     const pickups = this.level.pickups;
+    // Culled against the view like the pad streams, and for the same reason:
+    // `o` is not a marker, so `flood` accepts it, and one fill click is a
+    // thousand pickups. Every other draw in this scene clips — the tiles by
+    // run-merging the visible span — and an uncounted loop here would be the
+    // one that does not.
+    const x0 = this.camera.viewX - TILE;
+    const y0 = this.camera.viewY - TILE;
+    const x1 = x0 + VIEW_W + 2 * TILE;
+    const y1 = y0 + VIEW_H + 2 * TILE;
     for (let i = 0; i < pickups.length; i++) {
-      drawPickup(
-        r,
-        pickups[i].tx * TILE + TILE / 2,
-        pickups[i].ty * TILE + TILE / 2,
-        PICKUP_SIZE,
-        this.pickupTimers[i] <= 0,
-      );
+      const cx = pickups[i].tx * TILE + TILE / 2;
+      const cy = pickups[i].ty * TILE + TILE / 2;
+      if (cx < x0 || cx > x1 || cy < y0 || cy > y1) {
+        continue;
+      }
+      drawPickup(r, cx, cy, PICKUP_SIZE, this.pickupTimers[i] <= 0);
     }
   }
 

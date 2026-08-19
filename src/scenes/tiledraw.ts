@@ -20,6 +20,7 @@ import {
   PAD_CHEVRON_LEN,
   PAD_CHEVRON_WIDTH,
   PICKUP_CORE_FRACTION,
+  PICKUP_OUTLINE_WIDTH,
   PICKUP_SPENT_ALPHA,
   PLAYER_CORE_INSET,
   PLAYER_SIZE,
@@ -123,7 +124,16 @@ export function drawPickup(
 ): void {
   const turn = Math.PI / 4;
   if (!ready) {
-    r.rectRotatedOutline(cx, cy, size, size, turn, palette.inkRgba(PICKUP_SPENT_ALPHA), 2, ui);
+    r.rectRotatedOutline(
+      cx,
+      cy,
+      size,
+      size,
+      turn,
+      palette.inkRgba(PICKUP_SPENT_ALPHA),
+      PICKUP_OUTLINE_WIDTH,
+      ui,
+    );
     return;
   }
   r.rectRotated(cx, cy, size, size, turn, palette.ink, ui);

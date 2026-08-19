@@ -115,7 +115,7 @@ One flip per airtime is therefore the hard rule, and level design is built aroun
 
 Three rules, and each is the thing that keeps it from being a pad with a different shape:
 
-- **No collision, at all.** It is not a tile and nothing in the solver knows it exists; collection is a radius test (`PICKUP_RADIUS`, half a tile, centre to centre) run after the step, and the trajectory through one is bit-identical to the trajectory through empty air. A pickup that pushed, stopped or even slowed you would be a pad.
+- **No collision, at all.** It is not a tile and nothing in the solver knows it exists; collection is a radius test (`PICKUP_RADIUS`, centre to centre, sized against what is drawn rather than against the grid) run after the step, and the trajectory through one is bit-identical to the trajectory through empty air. A pickup that pushed, stopped or even slowed you would be a pad.
 - **It respawns after `PICKUP_RESPAWN` = 3 s.** Long enough that standing on one and flipping every frame cannot farm it — which would make the flip free, and the flip's cost is most of the game — and short enough that a line rehearsed after a death never waits on it. While it is spent it draws as a faint outline rather than vanishing, because a player who has just used one needs to know where it will come back.
 - **It is spent only when it gives something back.** Running one over with the flip already in hand leaves it standing, so a line can be run in either order without the pickup silently disarming itself for the way back.
 
@@ -249,9 +249,10 @@ Added in phase 4. These are not feel knobs — each one is the answer to a speci
 | `PAD_IMPULSE` | 820 px/s | jump pad launch velocity |
 | `DEATH_FADE_OUT` / `DEATH_FADE_IN` | 0.35 / 0.25 s | respawn timing |
 | `PICKUP_RESPAWN` | 3.0 s | how long a collected flip pickup stays gone |
-| `PICKUP_RADIUS` | 16 px | collection distance, centre to centre — a radius, so it is rotation-independent |
+| `PICKUP_RADIUS` | 20 px | collection distance, centre to centre — a radius, so it is rotation-independent, and sized so it fires while the two sprites visibly overlap (they touch at 21.3) |
 | `PICKUP_SIZE` | 16 px | the diamond's side |
-| `PICKUP_CORE_FRACTION` | 0.4 | its `paper` core, matched to the player's own |
+| `PICKUP_CORE_FRACTION` | 0.5 | its `paper` core, the player's own fraction: (`PLAYER_SIZE` − 2·`PLAYER_CORE_INSET`) / `PLAYER_SIZE` |
+| `PICKUP_OUTLINE_WIDTH` | 2 px | stroke of the afterimage |
 | `PICKUP_SPENT_ALPHA` | 0.25 | the afterimage left where a spent one will return |
 | `PAD_SPIN_MAX` | 8.0 rad/s | spin at a full-corner pad contact, scaled by the arm and clamped (added in phase 5; the physical impulse form saturates — see PHYSICS.md § Game feel) |
 

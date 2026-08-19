@@ -286,19 +286,29 @@ export const PICKUP_RESPAWN = 3.0;
 export const PICKUP_SIZE = 16;
 export const PICKUP_SPENT_ALPHA = 0.25;
 /**
- * The pickup's `paper` core as a fraction of its size. Matched by eye to the
- * player's own core at `PLAYER_CORE_INSET` — the pickup IS that readout rotated
- * 45°, so the two have to read as the same object at a glance or the visual
- * argument for the shape falls apart.
+ * The pickup's `paper` core as a fraction of its size, and the stroke of the
+ * outline left where a spent one will return.
+ *
+ * The fraction is the player's own, derived rather than eyeballed: the body's
+ * core is `PLAYER_SIZE − 2·PLAYER_CORE_INSET` = 10 on a 20 px square, so 0.5.
+ * The pickup IS that readout rotated 45°, and the two have to read as the same
+ * object at a glance or the visual argument for the shape falls apart.
  */
-export const PICKUP_CORE_FRACTION = 0.4;
+export const PICKUP_CORE_FRACTION = 0.5;
+export const PICKUP_OUTLINE_WIDTH = 2;
 /**
  * Collection radius (px), centre to centre. Not a box overlap: the pickup is a
  * diamond and the body is a rotating square, so a rotation-independent radius
- * is both the honest shape and the one a player can predict. Half a tile,
- * which is "the square is over it" at a glance.
+ * is both the honest shape and the one a player can predict.
+ *
+ * Sized against what is DRAWN, which is the only thing a player can judge it
+ * by: the diamond reaches PICKUP_SIZE·√2/2 = 11.3 px to a vertex and the body
+ * half-extent is 10, so the two sprites touch at 21.3 px and overlap below it.
+ * 20 fires just inside that, which is "the square is over it" — 16, the first
+ * value here, left a 5 px band where the square was drawn on top of the diamond
+ * and nothing happened.
  */
-export const PICKUP_RADIUS = 16;
+export const PICKUP_RADIUS = 20;
 
 /** Death fade out, then back in after the respawn (s). */
 export const DEATH_FADE_OUT = 0.35;

@@ -74,7 +74,7 @@ const GOAL_CHAR = 'G';
  */
 const PICKUP_CHAR = 'o';
 
-/** Quoted verbatim in the unknown-character message, in §8's table order. */
+/** Quoted verbatim in the unknown-character message. */
 const LEGAL_CHARS = '. # ^ v < > o S G';
 
 /** For error messages: `typeof` with the two cases it gets wrong spelled out. */
@@ -297,6 +297,15 @@ export function serializeLevel(level: Level): string {
 export function levelRows(level: Level): string[] {
   const { map, spawn, goal } = level;
   const rows: string[] = [];
+  const byRow = new Map<number, number[]>();
+  for (const pk of level.pickups) {
+    const list = byRow.get(pk.ty);
+    if (list) {
+      list.push(pk.tx);
+    } else {
+      byRow.set(pk.ty, [pk.tx]);
+    }
+  }
 
   for (let ty = 0; ty < map.h; ty++) {
     const row: string[] = [];
@@ -305,9 +314,12 @@ export function levelRows(level: Level): string[] {
     }
     // Pickups first, so a marker sharing a cell with one still wins — the same
     // precedence the parser reads them in, and the format cannot express both.
-    for (const pk of level.pickups) {
-      if (pk.ty === ty && pk.tx >= 0 && pk.tx < map.w) {
-        row[pk.tx] = PICKUP_CHAR;
+    // Bucketed by row before the loop rather than rescanned inside it: a 200-row
+    // level with a flooded region of pickups is 400k iterations the other way,
+    // and `flood` accepts `o` precisely because it is not a marker.
+    for (const tx of byRow.get(ty) ?? []) {
+      if (tx >= 0 && tx < map.w) {
+        row[tx] = PICKUP_CHAR;
       }
     }
     if (ty === spawn.ty && spawn.tx >= 0 && spawn.tx < map.w) {

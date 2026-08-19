@@ -1009,6 +1009,11 @@ describe('the pickup in the palette', () => {
     tap(h, scene, 'Enter');
     const play = h.scenes[0];
     expect(play).toBeInstanceOf(PlayScene);
+    // Painted here, parsed by the real parser, and standing in the real scene:
+    // asserting the class alone would pass with the character dropped on the
+    // way through, which is exactly the failure this test is named for.
+    (play as PlayScene).enter(h.game);
+    expect((play as PlayScene).status.pickupsReady).toBe(1);
   });
 });
 

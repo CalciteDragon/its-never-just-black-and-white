@@ -914,15 +914,86 @@ describe('flip pickups', () => {
     expect(h.audio.calls).not.toContain('sfx:pickup');
   });
 
-  it('comes back after PICKUP_RESPAWN, and not before', () => {
-    const { h, scene } = start(tinyLevel(SHAFT));
+  /** Flip, then step until the pickup is taken. Returns the steps it took. */
+  function collect(h: Harness, scene: PlayScene): number {
     tap(h, scene, 'Space');
-    step(h, scene, 12);
+    for (let i = 1; i < 40; i++) {
+      step(h, scene);
+      if (scene.status.pickupsReady === 0) {
+        return i + 1; // the flip's own step counts
+      }
+    }
+    throw new Error('never collected');
+  }
+
+  it('comes back after PICKUP_RESPAWN, and not one step before', () => {
+    // Probed against the exact boundary rather than near it: the collection
+    // step is found rather than assumed, so a timer wrong by a single step
+    // fails this instead of sitting inside the slack.
+    const { h, scene } = start(tinyLevel(SHAFT));
+    collect(h, scene);
+    // One step of slack on the far side and none on the near one: STEP is not
+    // exact in binary, so 180 subtractions of it from 3.0 leave a residue and
+    // the 181st step is the one that clears it. The tight half is the half that
+    // catches a timer that is wrong.
+    const ticks = Math.ceil(PICKUP_RESPAWN / STEP);
+    step(h, scene, ticks - 1);
     expect(scene.status.pickupsReady).toBe(0);
-    step(h, scene, Math.floor(PICKUP_RESPAWN / STEP) - 20);
-    expect(scene.status.pickupsReady).toBe(0);
-    step(h, scene, 24);
+    step(h, scene, 2);
     expect(scene.status.pickupsReady).toBe(1);
+  });
+
+  it('CAN BE TAKEN AGAIN once it is back, which is the whole point of it', () => {
+    // The payoff the respawn exists for — a line run in both directions — and
+    // the one thing the ready counter alone cannot show.
+    const { h, scene } = start(tinyLevel(SHAFT));
+    collect(h, scene);
+    step(h, scene, Math.ceil(PICKUP_RESPAWN / STEP) + 1);
+    expect(scene.status.pickupsReady).toBe(1);
+    // The body is resting on the ceiling by now, charged. Spend it and fall
+    // back down through the pickup.
+    tap(h, scene, 'Space');
+    expect(scene.status.flipCharged).toBe(false);
+    let recharged = false;
+    for (let i = 0; i < 40 && !recharged; i++) {
+      step(h, scene);
+      recharged = scene.status.flipCharged;
+    }
+    expect(recharged).toBe(true);
+    expect(scene.status.pickupsReady).toBe(0);
+  });
+
+  it('a corpse does not collect: the body simulates through the death fade', () => {
+    // `dying` keeps stepping the body — it flies out of shot, which reads as a
+    // consequence rather than a pause — so the guard is load-bearing.
+    const { h, scene } = start(tinyLevel(SHAFT));
+    tap(h, scene, 'Space'); // gravity up, and it will leave through the ceiling
+    // Break the ceiling open by starting from a level that has none instead.
+    const open = start(tinyLevel(['..........', '..o.......', '..S......G', '##########']));
+    tap(open.h, open.scene, 'Space');
+    let died = false;
+    for (let i = 0; i < 200 && !died; i++) {
+      step(open.h, open.scene);
+      died = open.scene.status.state === 'dying';
+    }
+    expect(died).toBe(true);
+    expect(open.h.audio.calls).toContain('sfx:pickup'); // taken on the way UP
+    const taken = open.h.audio.calls.filter((c) => c === 'sfx:pickup').length;
+    for (let i = 0; i < 20; i++) {
+      step(open.h, open.scene);
+    }
+    // ...and never a second time on the way out of the world.
+    expect(open.h.audio.calls.filter((c) => c === 'sfx:pickup')).toHaveLength(taken);
+    expect(scene.status.state).toBe('running');
+  });
+
+  it('the respawn timer is frozen by the pause, like everything else', () => {
+    const { h, scene } = start(tinyLevel(SHAFT));
+    collect(h, scene);
+    tap(h, scene, 'Escape');
+    expect(scene.status.paused).toBe(true);
+    step(h, scene, Math.ceil(PICKUP_RESPAWN / STEP) + 30);
+    expect(scene.status.pickupsReady).toBe(0);
   });
 
   it('a respawn puts every pickup back', () => {
@@ -937,9 +1008,11 @@ describe('flip pickups', () => {
   });
 
   it('a level with no pickups behaves exactly as before', () => {
-    const { h, scene } = start(tinyLevel(['..........', '..S......G', '##########']));
+    const level = tinyLevel(['..........', '..S......G', '##########']);
+    expect(level.pickups).toEqual([]); // `pickupsReady` is 0 either way
+    const { h, scene } = start(level);
     walk(h, scene, 30);
-    expect(scene.status.pickupsReady).toBe(0);
     expect(h.audio.calls).not.toContain('sfx:pickup');
+    expect(scene.status.state).toBe('running');
   });
 });
