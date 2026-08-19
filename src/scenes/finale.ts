@@ -202,7 +202,21 @@ export function drawFinaleBloom(r: Renderer, sx: number, sy: number, t: number, 
 export function drawFinaleVeil(r: Renderer, t: number, p: number): void {
   const st = finaleStage(p);
   r.blurScreen(st.blur);
+  drawFinaleSweep(r, t, st.settle);
+}
 
+/**
+ * The sweep itself, at an alpha of the caller's choosing: a smooth conical
+ * gradient through every hue, turning at `FINALE_END_SWEEP`, softened by a
+ * blur of its own to take the point out of the middle of it.
+ *
+ * Separate from the veil because it OUTLIVES the veil. `CreditsScene` draws
+ * exactly this, at full alpha, on the same `t` the play scene handed it — so
+ * the scene change happens on a frame where the swirl does not move, and the
+ * credits come up on the screen the ending settled on rather than on a copy
+ * of it that starts again from its own zero.
+ */
+export function drawFinaleSweep(r: Renderer, t: number, alpha: number): void {
   const drift = t * FINALE_GOAL_HUE_RATE;
   const stops: string[] = [];
   for (let i = 0; i < FINALE_END_STOPS; i++) {
@@ -210,6 +224,6 @@ export function drawFinaleVeil(r: Renderer, t: number, p: number): void {
     // itself instead of showing a seam where 359° meets 0°.
     stops.push(spectrum(drift + i / (FINALE_END_STOPS - 1)));
   }
-  r.conic(VIEW_W / 2, VIEW_H / 2, t * FINALE_END_SWEEP, stops, st.settle);
-  r.blurScreen(FINALE_END_SOFTEN * st.settle);
+  r.conic(VIEW_W / 2, VIEW_H / 2, t * FINALE_END_SWEEP, stops, alpha);
+  r.blurScreen(FINALE_END_SOFTEN * alpha);
 }

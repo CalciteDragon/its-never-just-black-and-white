@@ -32,8 +32,9 @@ import { palette } from '../src/engine/palette';
 import { MAX_PARTICLES } from '../src/engine/particles';
 import { SAVE_KEYS } from '../src/engine/save';
 import type { Scene } from '../src/game';
-import { LEVELS } from '../src/levels/index';
+import { LEVELS, nextLevel } from '../src/levels/index';
 import { PlayScene, formatTime, windupGate } from '../src/scenes/play';
+import { CreditsScene } from '../src/scenes/credits';
 import { FINALE_LEVEL_ID } from '../src/scenes/finale';
 import type { PlayContext } from '../src/scenes/play';
 import { ResultsScene } from '../src/scenes/results';
@@ -73,6 +74,15 @@ describe('the shipped level set', () => {
       expect(level.map.get(level.spawn.tx, level.spawn.ty)).toBe(0); // spawn is empty
       expect(level.map.get(level.goal.tx, level.goal.ty)).toBe(0);
     }
+  });
+
+  it('ends on the finale, because the finale is where the game says goodbye', () => {
+    // The colour ending and the credits are keyed to this id. A level after it
+    // would be a level the player reaches after the credits have rolled — and
+    // `nextLevel` would offer NEXT on the results screen to get there.
+    expect(LEVELS[LEVELS.length - 1].id).toBe(FINALE_LEVEL_ID);
+    expect(LEVELS.filter((l) => l.id === FINALE_LEVEL_ID)).toHaveLength(1);
+    expect(nextLevel(LEVELS.length - 1)).toBeNull();
   });
 });
 
@@ -303,7 +313,7 @@ describe('the finale goal', () => {
     expect(scene.status.state).toBe('running');
   });
 
-  it('runs the colour ending on its own clock before handing over', () => {
+  it('runs the colour ending on its own clock before handing over to the credits', () => {
     const { h, scene } = finale();
     step(h, scene, HOLD_FRAMES + 2);
     expect(scene.status.state).toBe('won');
@@ -323,7 +333,9 @@ describe('the finale goal', () => {
       step(h, scene);
     }
     expect(h.scenes).toHaveLength(1);
-    expect(h.scenes[0]).toBeInstanceOf(ResultsScene);
+    // The credits, NOT the results screen every other level ends on: the last
+    // level hands to the roll, and the roll hands to the results after it.
+    expect(h.scenes[0]).toBeInstanceOf(CreditsScene);
   });
 
   it('starts the hold over after a restart', () => {

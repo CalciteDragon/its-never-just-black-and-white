@@ -60,6 +60,7 @@ import { drawSigns, signsFor } from './signs';
 import type { Sign } from './signs';
 import { ResultsScene } from './results';
 import type { ResultsStats } from './results';
+import { CreditsScene } from './credits';
 import { drawFinaleBloom, drawFinaleGoal, drawFinaleVeil, FINALE_LEVEL_ID } from './finale';
 import { drawGoal, drawPickup, drawTileRuns } from './tiledraw';
 import { TitleScene } from './title';
@@ -493,6 +494,13 @@ export class PlayScene implements Scene {
    * The run is over. A campaign or custom run has a results screen to show; a
    * playtest goes straight back to the editor **instance** it came from, edits
    * intact — GAME-DESIGN §10's requirement stated as an object identity.
+   *
+   * The finale takes one detour on the way: the credits, which come up on the
+   * swirl the ending settled on and hand the same stats along when they are
+   * done. Keyed by `isFinale`, which is the level id — the same key the ending
+   * itself is on, so the two can never disagree about which level ends the
+   * game. A playtest is out before this, because the credits of a game are not
+   * part of the level you are editing.
    */
   private finish(game: Game): void {
     if (this.ctx.kind === 'playtest') {
@@ -509,6 +517,12 @@ export class PlayScene implements Scene {
       previousBestMs: this.previousBestMs,
       isNewBest: this.isNewBest,
     };
+    if (this.isFinale) {
+      // `clock`, so the sweep does not restart: it is the one value the two
+      // scenes share, and handing it over is what makes the change invisible.
+      game.setScene(new CreditsScene(stats, this.clock));
+      return;
+    }
     game.setScene(new ResultsScene(stats));
   }
 

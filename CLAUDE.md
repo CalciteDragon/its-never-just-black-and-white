@@ -21,7 +21,7 @@ The design source of truth is `docs/GAME-DESIGN.md`. Read it before writing code
 - `src/engine/` — platform-level utilities: rng, input, font, palette, renderer, audio, save, particles, levelio, tuning.
 - `src/world/` — tiles, obb (pure geometry), physics (rigid-body solver), level (parse/validate/serialise), camera.
 - `src/entities/player.ts` — the controller. The only entity.
-- `src/scenes/` — title, levelselect, play, results, editor, plus `menu.ts` (one shared vertical menu) and `tiledraw.ts` (the draws play and the editor share).
+- `src/scenes/` — title, levelselect, play, results, credits, editor, plus `menu.ts` (one shared vertical menu) and `tiledraw.ts` (the draws play and the editor share). `finale.ts` is the colour ending and the swirl the credits roll on.
 - `src/editor/` — pure grid model over `readonly string[]`: paint, flood, resize, stroke-scoped undo, warnings.
 - `src/levels/` — hand-authored level JSON, one file per level.
 - `src/game.ts` — fixed-timestep loop + scene management. `src/main.ts` — browser bootstrap. `src/devtuner.ts` — dev-only wind-up tuner, mounted only behind `?tune=1`.

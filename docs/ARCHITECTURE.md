@@ -18,7 +18,7 @@ graph TD
   subgraph scenes["scenes/"]
     PLAY["play"]
     EDIT["editor"]
-    SHELL["title · levelselect · results"]
+    SHELL["title · levelselect · results · credits"]
     SHARED["menu · tiledraw"]
   end
 

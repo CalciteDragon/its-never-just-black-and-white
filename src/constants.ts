@@ -690,3 +690,63 @@ export const FINALE_END_SOFTEN = 26;
 /** rad/s the sweep turns. Barely a degree a second: the last screen should be
  *  alive rather than animated, and the credits have to be readable over it. */
 export const FINALE_END_SWEEP = 0.06;
+
+/* --------------------------------------------------------- end credits -- */
+
+/**
+ * The credits roll, on the sheet the ending leaves behind: the same conical
+ * sweep of every hue, still turning, with the words coming up over it.
+ *
+ * It is a SCROLL rather than a sequence of held cards because the swirl behind
+ * it never cuts — the ending earned a screen with no edits on it, and a card
+ * that blinked to the next card would be the first cut in six seconds.
+ */
+
+/** px/s the roll travels. A reading pace rather than a list to get through —
+ *  the roll is the last thing the game says, and it says all of it. */
+export const CREDITS_SCROLL = 48;
+/** Gap between lines inside one stanza, and between stanzas. The stanza gap is
+ *  wide enough that two stanzas are never mistaken for one block of six lines. */
+export const CREDITS_LINE_GAP = 14;
+export const CREDITS_STANZA_GAP = 66;
+/**
+ * Seconds of empty swirl after the last line has climbed off the top, before
+ * the fade starts. The roll runs all the way OUT rather than parking the
+ * sign-off in the middle of the frame, so what the player is left looking at is
+ * the screen the ending made: nothing on it and every colour in it. This hold
+ * is what gives them a moment of it back before the game closes.
+ */
+export const CREDITS_HOLD = 1.2;
+/**
+ * Seconds the whole screen takes to fade to `paper` and hand over. It fades to
+ * `paper` because that is what the results screen is drawn on — the colour
+ * leaves, the two-colour game comes back, and the seam between the two screens
+ * lands where there is nothing on either of them to see it.
+ */
+export const CREDITS_FADE_OUT = 2.0;
+/**
+ * The band at the top and bottom of the frame over which a line fades. Without
+ * it, a line of text hits the edge of the view and is cut in half mid-glyph —
+ * the one hard edge on a screen that has nothing else hard on it.
+ */
+export const CREDITS_FADE = 110;
+/**
+ * A `paper` wash over the swirl, under the words. The sweep is fully saturated
+ * at mid lightness, and `ink` text over it is legible on some hues and not on
+ * others — the wash costs the colour nothing anyone can name and buys every hue
+ * the same contrast.
+ *
+ * It carries that on its own, since the text has no shadow under it: at 0.45
+ * the worst hue on screen (the yellow-green arc) reads at 3.5:1 against `ink`,
+ * which clears the large-text threshold, and the roll is nothing but large
+ * text. Lowering it puts the yellows back under.
+ */
+export const CREDITS_SCRIM = 0.45;
+/**
+ * Seconds the scrim takes to reach that. It EASES IN from nothing, because the
+ * frame the credits open on has to be the frame the ending closed on — a wash
+ * that was simply there on the first frame would darken the screen by a third
+ * on the scene change, which is the cut the whole ending was built to avoid.
+ * It is done well before the first line has climbed out of the bottom fade.
+ */
+export const CREDITS_SCRIM_FADE = 1.2;

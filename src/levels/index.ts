@@ -15,6 +15,7 @@ import type { Level } from '../world/level';
 import tutorial from './00-tutorial.json';
 import firstSteps from './01-first-steps.json';
 import secondNature from './02-second-nature.json';
+import blackAndWhite from './black-and-white.json';
 
 function load(raw: unknown): Level {
   const res = parseLevel(raw);
@@ -29,8 +30,17 @@ function load(raw: unknown): Level {
  * a middleware that rewrote this file to add an import would be codegen against
  * a source file under version control, so the one-line edit is deliberate and
  * the save's on-screen confirmation names it.
+ *
+ * `black-and-white` is LAST, and has to be: it is the level the colour ending
+ * and the credits are keyed to by id (`scenes/finale.ts`), so a level after it
+ * would be a level the game has already said goodbye at.
  */
-export const LEVELS: readonly Level[] = [load(tutorial), load(firstSteps), load(secondNature)];
+export const LEVELS: readonly Level[] = [
+  load(tutorial),
+  load(firstSteps),
+  load(secondNature),
+  load(blackAndWhite),
+];
 
 /** The level after `index`, or null at the end of the set. */
 export function nextLevel(index: number): Level | null {
