@@ -258,6 +258,13 @@ export class Player {
     // can appear twice. The velocity override is idempotent, but the spin is
     // not: firing twice doubles it, and doubles the sound and the dust with it.
     // Contact order is pinned, so taking the first is deterministic.
+    //
+    // It is at most one pad per step even when the two contacts are DIFFERENT
+    // pads, which side-firing makes reachable — clip an up-pad and a left-pad
+    // in the same step and the first contact wins. That is deliberate: firing
+    // both would override vx and vy from two different tiles and launch the
+    // body along a diagonal neither pad points in, which is exactly the result
+    // an author cannot predict from looking at the grid.
     let padFired = false;
     // The hardest ground contact of the step, for the splash. Phase 5 kept a
     // landing impulse off `PlayerEvents` because nothing would have read it and
@@ -400,7 +407,13 @@ export class Player {
     }
     const rx = c.x - b.x;
     const ry = c.y - b.y;
-    const arm = (rx * c.ny - ry * c.nx) / (PLAYER_SIZE / 2);
+    // `r x facing`, NOT `r x n`. The two agree on a face hit, where n = facing,
+    // and that is the only case that existed while pads fired from their face
+    // alone. On a SIDE hit they are perpendicular, and the normal form then
+    // measures the offset along the launch instead of across it: a dead-centre
+    // walk into the side of an up-pad — the maximum torque an upward impulse
+    // applied 10 px to one side can produce — came out at no spin at all.
+    const arm = (rx * dir.dy - ry * dir.dx) / (PLAYER_SIZE / 2);
     b.angVel += PAD_SPIN_MAX * Math.min(1, Math.max(-1, arm));
     clampSpin(b);
     world.sfx('pad');

@@ -400,7 +400,9 @@ describe('the flip and its charge (GAME-DESIGN §5)', () => {
     }
   });
 
-  it('recharges across a pad/floor seam — it genuinely touched ground', () => {
+  it('recharges across a pad/floor seam', () => {
+    // Both halves would do it on their own now — the seam is asserted at the
+    // physics layer, where `Contact.onSolid` can still tell them apart.
     const map = new TileMap(40, 12);
     map.fillRect(0, 10, 40, 2, Tile.Solid);
     map.set(3, 10, Tile.PadUp);
@@ -530,6 +532,33 @@ describe('jump pads (GAME-DESIGN §5, decision 4)', () => {
       p.update(STEP, NO_INPUTS, w);
       expect(p.body.angVel).toBe(0);
     }
+  });
+
+  it('THE ARM IS ACROSS THE LAUNCH, NOT ACROSS THE NORMAL', () => {
+    // Once the sides fire, `r x n` and `r x facing` stop agreeing: on a side
+    // hit they are perpendicular, so the normal form measured the offset ALONG
+    // the launch instead of across it — a dead-centre walk into the side of an
+    // up-pad, which is the maximum possible torque for an upward impulse
+    // applied 10 px to one side, came out at ~0 spin. The facing form reduces
+    // to the old one on a face hit, where n = facing.
+    const map = new TileMap(40, 14);
+    map.fillRect(0, 12, 40, 2, Tile.Solid);
+    map.set(3, 11, Tile.PadUp);
+    const p = new Player(0, 0);
+    p.spawnAt(5 * TILE, 11 * TILE + TILE / 2);
+    const w = world(map);
+    for (let i = 0; i < 120; i++) {
+      p.update(STEP, inp({ left: true }), w);
+      if (p.body.vy < -100) {
+        break;
+      }
+    }
+    expect(p.body.vy).toBe(-PAD_IMPULSE);
+    // Walking LEFT into the pad's right side, so the contact point is a full
+    // half-width to the LEFT of the body centre: r_x is negative, the launch is
+    // up, r x facing = -r_x is positive, and the left side lifts — the same
+    // sign convention as the face hits below, read at a right angle to them.
+    expect(p.body.angVel).toBeGreaterThan(PAD_SPIN_MAX / 2);
   });
 
   it('PAD SPIN SIGN: contact right of centre on an up-pad sends omega NEGATIVE', () => {
@@ -680,19 +709,45 @@ describe('jump pads (GAME-DESIGN §5, decision 4)', () => {
     expect(p.flipCharged).toBe(true);
   });
 
-  it('a back contact still recharges — the recharge is the tile, not the face', () => {
-    // The back is plain platform, and plain platform recharges. Stated apart
-    // from the launch rule so the two cannot be collapsed back into one test.
+  it('A PAD RECHARGES FROM A CONTACT THAT IS NOT GROUND AT ALL', () => {
+    // The half of the rule that actually changed: a solid needs a ground
+    // normal, a pad needs only to be touched. Walking right into the BACK of a
+    // right-pad is a wall contact — no ground normal, no launch — and it still
+    // hands the flip back.
     const map = new TileMap(40, 14);
     map.fillRect(0, 12, 40, 2, Tile.Solid);
-    map.set(3, 10, Tile.PadDown);
+    map.set(6, 11, Tile.PadRight);
     const p = new Player(0, 0);
-    p.spawnAt(3 * TILE + TILE / 2, 10 * TILE - PLAYER_SIZE / 2 - 60);
+    p.spawnAt(3 * TILE, 11 * TILE + TILE / 2);
     const w = world(map);
     spendCharge(p, w);
-    for (let i = 0; i < 120; i++) {
-      p.update(STEP, NO_INPUTS, w);
+    let launched = false;
+    for (let i = 0; i < 200; i++) {
+      p.update(STEP, inp({ right: true }), w);
+      launched = launched || p.body.vx > PAD_IMPULSE / 2;
     }
+    expect(p.flipCharged).toBe(true);
+    expect(launched).toBe(false); // it was the back: plain wall
+  });
+
+  it('fires and recharges identically with gravity flipped', () => {
+    // Neither `padStruck` nor `firePad` reads the gravity sign, and this is
+    // what says so — the pad rules are about the pad, not about which way down
+    // happens to be.
+    const map = new TileMap(40, 14);
+    map.fillRect(0, 0, 40, 2, Tile.Solid);
+    map.set(3, 2, Tile.PadDown);
+    const p = new Player(0, 0);
+    p.spawnAt(3 * TILE + TILE / 2, 8 * TILE); // well clear, so it falls UP into it
+    const w = world(map);
+    p.update(STEP, inp({ flipPressed: true }), w); // gravity now points up
+    expect(p.flipCharged).toBe(false);
+    let fired = false;
+    for (let i = 0; i < 200 && !fired; i++) {
+      p.update(STEP, NO_INPUTS, w);
+      fired = p.body.vy > PAD_IMPULSE / 2;
+    }
+    expect(fired).toBe(true);
     expect(p.flipCharged).toBe(true);
   });
 });

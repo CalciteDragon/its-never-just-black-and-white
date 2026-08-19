@@ -79,9 +79,13 @@ export interface Contact {
    * The pad tile that produced this contact, or Tile.Empty for none.
    *
    * Pads are collidable geometry (decision 1), so landing on one IS a
-   * ground-normal contact — but GAME-DESIGN §5 says a pad does not recharge the
-   * flip and only ground does. `grounded` and "recharges" are therefore
-   * different predicates, and the difference is which tile you touched.
+   * ground-normal contact — and the flip's rules key off which TILE was
+   * touched, not off the normal alone: a solid recharges only from a
+   * ground-normal contact, a pad recharges from any contact at all, and only a
+   * pad launches. `grounded` cannot answer any of that, so the contact carries
+   * the tile. (The pad recharge was inverted after 0.2 playtesting; the reason
+   * this field exists is unchanged, which is the point of it being a fact about
+   * geometry rather than about the rule of the week.)
    */
   pad: Tile;
   /** Whether any plain Tile.Solid pooled into this contact. */

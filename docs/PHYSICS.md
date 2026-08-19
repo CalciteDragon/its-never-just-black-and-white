@@ -187,6 +187,8 @@ Both are needed rather than one enum, because the two halves are read independen
 
 The launch is the complementary test on the same contact: `n · facing > -PAD_BACK_DOT` — every face **but** the back — and it always fires along the pad's own facing, never along the contact normal.
 
+The spin arm follows the facing with it: **`r × facing`, not `r × n`**. The two agree on a face hit, where `n = facing`, and that was the only case that existed while pads fired from their face alone. On a side hit they are perpendicular, and the normal form measures the offset *along* the launch instead of across it — a dead-centre walk into the side of an up-pad, which is the largest torque an upward impulse applied 10 px to one side can produce, came out at no spin at all.
+
 Pads are blocking geometry to the broadphase in **both** places it asks — the collision test *and* the interior-face mask. Masking only the first rebuilds the tile-seam bug of § Interior faces at every pad in the game: the pad's neighbours would leave their faces toward it exposed, and landing across the seam finds a sideways cheapest-axis. Measured at **8.32 rad/s** with the mask still reading `=== Tile.Solid`, against the 8.07 the same failure produced between two plain tiles.
 
 ## Rotational damping and settling
