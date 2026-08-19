@@ -37,7 +37,7 @@ import {
   SPLASH_SPEED_MAX,
   SPLASH_SPEED_MIN,
 } from '../constants';
-import { palette } from './palette';
+import { INVERT_MASK } from './palette';
 import { Rng } from './rng';
 
 /** Hard cap on simultaneously alive particles. */
@@ -172,14 +172,22 @@ export class ParticleSystem {
   }
 
   render(ctx: CanvasRenderingContext2D, camX: number, camY: number): void {
-    // One fillStyle for the whole pass, read LIVE (phase 6 decision 6). A
-    // colour sampled at spawn time would leave a flip trailing a cloud of the
-    // outgoing phase, and worse: the flip ring is emitted inside
-    // `Player.update`, and `PlayScene` flips the palette only after that
-    // returns — so the flip's own ring, the one thing on screen announcing the
-    // flip, would be the last thing still wearing the old colour. Sparks
-    // inverting in flight is what makes a flip legible from a single spark.
-    ctx.fillStyle = palette.accent;
+    // A spark has no colour of its own: it is a hole punched in the frame that
+    // shows the frame inverted. `difference` against a white operand is
+    // `255 - backdrop` per channel, so a spark over paper draws ink, a spark
+    // over ink draws paper, and a spark straddling an edge does both at once —
+    // which is the one thing a flat fill could never do.
+    //
+    // This keeps what phase 6 decision 6 was protecting, and for free. Sparks
+    // used to read a live palette token so the flip's own ring — emitted inside
+    // `Player.update`, before `PlayScene` flips the palette — would not be
+    // left wearing the outgoing phase. An inverting spark cannot lag a flip at
+    // all: it is defined by the pixels under it on the frame it is drawn into.
+    //
+    // Set rather than save/restore: this is two field writes against a whole
+    // pass, and the pass owns the context between them.
+    ctx.globalCompositeOperation = 'difference';
+    ctx.fillStyle = INVERT_MASK;
     for (const p of this.pool) {
       if (!p.alive) {
         continue;
@@ -191,6 +199,10 @@ export class ParticleSystem {
       // as an event.
       ctx.fillRect(Math.round(p.x - camX), Math.round(p.y - camY), p.size, p.size);
     }
+    // Handed back the way it was found. Everything downstream — the HUD, the
+    // post pass, the fade — assumes plain alpha compositing, and a leaked
+    // `difference` would invert the next thing drawn instead of the sparks.
+    ctx.globalCompositeOperation = 'source-over';
   }
 
   clear(): void {

@@ -246,9 +246,9 @@ export class Player {
       ev.flipped = true;
       world.sfx('flip');
       // The ring is emitted HERE, and `PlayScene` flips the palette only after
-      // this call returns — so a spark that kept its spawn-time colour would
-      // make the flip's own ring the one thing on screen still wearing the
-      // outgoing phase. Particles render in the live accent for exactly this.
+      // this call returns — so a spark that carried a colour at all would make
+      // the flip's own ring the one thing on screen still wearing the outgoing
+      // phase. Particles carry none: they invert the frame beneath them.
       spawnRing(world.particles, b.x, b.y);
     }
     const gs = this.gravitySign;

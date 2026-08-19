@@ -122,8 +122,8 @@ describe('vignetteAlpha', () => {
 
 describe('tintAmount', () => {
   it('is zero across the whole bottom half of the range', () => {
-    // GAME-DESIGN §7: the accent tint fades in over the top half only. Colour
-    // is rationed — it may not bleed into the resting frame.
+    // GAME-DESIGN §7: the ink tint fades in over the top half only. The
+    // effect is rationed — it may not bleed into the resting frame.
     for (const n of SAMPLES.filter((s) => s <= 0.5)) {
       expect(tintAmount(n)).toBe(0);
     }

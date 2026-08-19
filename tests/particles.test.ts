@@ -12,7 +12,7 @@ import {
   SPLASH_LIFE,
   TILE,
 } from '../src/constants';
-import { palette } from '../src/engine/palette';
+import { INVERT_MASK, palette } from '../src/engine/palette';
 import {
   MAX_PARTICLES,
   ParticleSystem,
@@ -34,20 +34,30 @@ interface RectCall {
 interface Recorder {
   /** Every value ever ASSIGNED to fillStyle, in order. */
   styles: string[];
+  /** Every value ever ASSIGNED to globalCompositeOperation, in order. */
+  ops: string[];
   rects: RectCall[];
+  /** The ops and rects interleaved, so ordering is assertable. */
+  log: string[];
   ctx: CanvasRenderingContext2D;
 }
 
 /**
- * Minimal 2d-context stand-in: render only uses fillStyle + fillRect.
+ * Minimal 2d-context stand-in: render only uses fillStyle,
+ * globalCompositeOperation and fillRect.
  *
- * fillStyle is a setter rather than a field because half of phase 6 decision 6
- * is the *count* of assignments — one per pass, not one per particle — and a
- * plain field cannot tell one assignment from N identical ones.
+ * Both style fields are setters rather than plain fields because half of phase
+ * 6 decision 6 is the *count* of assignments — one per pass, not one per
+ * particle — and a plain field cannot tell one assignment from N identical
+ * ones. The composite op has to be counted for the same reason, and ordered
+ * against the rects besides: setting it after the sparks would be no effect at
+ * all, and restoring it before them would invert nothing.
  */
 function recorder(): Recorder {
   const styles: string[] = [];
+  const ops: string[] = [];
   const rects: RectCall[] = [];
+  const log: string[] = [];
   const ctx = {
     set fillStyle(v: string) {
       styles.push(v);
@@ -55,11 +65,19 @@ function recorder(): Recorder {
     get fillStyle(): string {
       return styles[styles.length - 1] ?? '';
     },
+    set globalCompositeOperation(v: string) {
+      ops.push(v);
+      log.push(`op:${v}`);
+    },
+    get globalCompositeOperation(): string {
+      return ops[ops.length - 1] ?? 'source-over';
+    },
     fillRect(x: number, y: number, w: number, h: number): void {
       rects.push({ x, y, w, h });
+      log.push('rect');
     },
   };
-  return { styles, rects, ctx: ctx as unknown as CanvasRenderingContext2D };
+  return { styles, ops, rects, log, ctx: ctx as unknown as CanvasRenderingContext2D };
 }
 
 /** N still, long-lived sparks at the origin — the pool's filler. */
@@ -227,25 +245,38 @@ describe('ParticleSystem physics', () => {
   });
 });
 
-describe('sparks wear the live accent (decision 6)', () => {
+describe('sparks invert the frame beneath them (decision 6)', () => {
   beforeEach(() => palette.reset());
   afterEach(() => palette.reset());
 
-  it('particles spawned before a flip invert in flight', () => {
-    const outgoing = palette.accent;
+  it('draws the mask under difference, and hands the context back', () => {
     const ps = new ParticleSystem();
-    fill(ps, 30);
-    palette.flip();
-    const incoming = palette.accent;
-    expect(incoming).not.toBe(outgoing);
-
+    fill(ps, 3);
     const rec = recorder();
     ps.render(rec.ctx, 0, 0);
-    expect(rec.rects.length).toBe(30);
-    expect(rec.styles.length).toBeGreaterThan(0);
-    expect(rec.styles).not.toContain(outgoing);
-    for (const s of rec.styles) {
-      expect(s).toBe(incoming);
+    expect(rec.styles).toEqual([INVERT_MASK]);
+    // Difference first, sparks, then plain compositing again: the HUD, the
+    // post pass and the death fade all draw into this same context afterwards.
+    expect(rec.log).toEqual(['op:difference', 'rect', 'rect', 'rect', 'op:source-over']);
+  });
+
+  it('carries no palette colour, before or after a flip', () => {
+    const ps = new ParticleSystem();
+    fill(ps, 30);
+    const before = recorder();
+    ps.render(before.ctx, 0, 0);
+    const outgoing = { paper: palette.paper, ink: palette.ink };
+    palette.flip();
+    const after = recorder();
+    ps.render(after.ctx, 0, 0);
+
+    expect(after.rects.length).toBe(30);
+    // Same operand in both phases. A spark's colour is the frame's, so the
+    // flip's own ring — emitted before `PlayScene` flips the palette — cannot
+    // be caught wearing the outgoing phase.
+    expect(after.styles).toEqual(before.styles);
+    for (const c of [outgoing.paper, outgoing.ink, palette.paper, palette.ink]) {
+      expect(after.styles).not.toContain(c);
     }
   });
 
@@ -256,6 +287,8 @@ describe('sparks wear the live accent (decision 6)', () => {
     ps.render(rec.ctx, 0, 0);
     expect(rec.rects.length).toBe(200);
     expect(rec.styles.length).toBe(1);
+    // And the composite op twice: on and off, never per spark.
+    expect(rec.ops).toEqual(['difference', 'source-over']);
   });
 });
 

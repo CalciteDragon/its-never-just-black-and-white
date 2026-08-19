@@ -100,18 +100,20 @@ What delivers that is the **coordinate policy**, not `imageSmoothingEnabled` —
 1. Clear to `paper`.
 2. World geometry in `ink`, camera-translated, through `drawTileRuns` — per-row run merging, so a 40-tile floor is one `fillRect`.
 3. The goal outline, then the player as a rotated rect plus its `paper` core.
-4. Particles (the only accent-coloured pass).
+4. Particles — the only pass that composites rather than paints (`difference`, restored to `source-over` on the way out).
 5. HUD in `ink`, untranslated.
 6. `applyPost(speedNorm)` — vignette always, chromatic aberration only above `CA_THRESHOLD`.
 7. The death fade, and the pause overlay if it is up — **after** the post pass, so a frozen menu is crisp rather than wearing the aberration of whatever speed the frame was carrying.
 
 The two veils are opposite colours on purpose. Death fades to `ink`; the pause dims with `paper` at `PAUSE_DIM`, because it is the background flooding back in and the menu then reads in `ink` like text on every other screen. `ink` there would be exactly backwards — in phase A ink is near-white, so the dim would wash a black frame to grey and leave the white geometry indistinguishable from it.
 
-The particle pass also assigns `fillStyle` exactly **once** per frame and then issues N `fillRect`s, because particles store no colour of their own — they read the live accent. That is why a flip inverts every spark already in the air, including the flip's own ring.
+The particle pass also assigns `fillStyle` exactly **once** per frame and then issues N `fillRect`s, because particles store no colour of their own: they are white under `globalCompositeOperation = 'difference'`, which is `255 − backdrop` per channel, so every spark is the frame beneath it inverted. A spark over `paper` reads as `ink`, one over `ink` reads as `paper`, one crossing an edge does both. That is why a flip inverts every spark already in the air, including the flip's own ring — which is emitted inside `Player.update`, before `PlayScene` moves the palette, and so could never have been caught wearing the outgoing phase. The pass sets the composite op on entry and restores `source-over` on exit; everything drawn after it (HUD, post, fade) assumes plain alpha compositing.
 
 ### Colour
 
-No hex literal appears anywhere except `engine/palette.ts`. Drawing code asks for `paper`, `ink`, or `accent` and the palette resolves it against the current phase. The flip is therefore a single field assignment, and any `if (phase === …)` inside a draw call is a bug — it means a colour has escaped the palette.
+No hex literal appears anywhere except `engine/palette.ts`. Drawing code asks for `paper` or `ink` — there is no third token — and the palette resolves it against the current phase. The flip is therefore a single field assignment, and any `if (phase === …)` inside a draw call is a bug — it means a colour has escaped the palette.
+
+The module also exports a few **compositing operands** (`CHANNEL_RED`/`GREEN`/`BLUE`, `COMPOSITE_BLACK`, `INVERT_MASK`). They are hex, so hard rule 6 says they live here, but nobody ever sees them as a colour: they are the arguments to `multiply`, `lighter` and `difference` in the aberration and particle passes, and they do not move with the phase.
 
 ## Physics
 

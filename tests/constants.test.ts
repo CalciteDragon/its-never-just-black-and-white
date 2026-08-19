@@ -166,7 +166,7 @@ describe('constants', () => {
     // Inner stop leaves the middle of the screen clear.
     expect(VIGNETTE_INNER).toBeGreaterThan(0);
     expect(VIGNETTE_INNER).toBeLessThan(1);
-    // The accent tint is a hint, not a colour wash — colour stays rationed.
+    // The ink tint is a hint, not a wash — the effect stays rationed.
     expect(VIGNETTE_TINT_MAX).toBeLessThan(VIGNETTE_MAX);
   });
 

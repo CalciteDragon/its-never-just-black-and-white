@@ -25,11 +25,11 @@ describe('Palette', () => {
 
   it('flipping twice is the identity', () => {
     const p = new Palette();
-    const a = { paper: p.paper, ink: p.ink, accent: p.accent };
+    const a = { paper: p.paper, ink: p.ink };
     p.flip();
     p.flip();
     expect(p.phase).toBe(0);
-    expect({ paper: p.paper, ink: p.ink, accent: p.accent }).toEqual(a);
+    expect({ paper: p.paper, ink: p.ink }).toEqual(a);
   });
 
   it('the flip swaps paper and ink rather than recolouring them', () => {
@@ -48,15 +48,15 @@ describe('Palette', () => {
     expect(p.paper).not.toBe(p.ink);
   });
 
-  it('the accent is distinct from both tokens and changes with the phase', () => {
+  it('has exactly two tokens — there is no third colour to ask for', () => {
+    // The accent retired with the particles that were its only caller: a spark
+    // is now the frame beneath it, inverted, so the palette holds no saturated
+    // colour at all. Asserted on the instance rather than left implicit,
+    // because re-adding one is exactly the drift GAME-DESIGN §2 forbids.
     const p = new Palette();
-    const accentA = p.accent;
-    expect(accentA).not.toBe(p.paper);
-    expect(accentA).not.toBe(p.ink);
-    p.flip();
-    expect(p.accent).not.toBe(accentA);
-    expect(p.accent).not.toBe(p.paper);
-    expect(p.accent).not.toBe(p.ink);
+    expect('accent' in p).toBe(false);
+    expect('accentRgba' in p).toBe(false);
+    expect(p.paper).not.toBe(p.ink);
   });
 
   it('reset returns to phase A from either phase', () => {
@@ -72,7 +72,7 @@ describe('Palette', () => {
     const p = new Palette();
     for (const phase of [0, 1] as const) {
       p.phase = phase;
-      for (const c of [p.paper, p.ink, p.accent]) {
+      for (const c of [p.paper, p.ink]) {
         expect(c).toMatch(/^#[0-9A-F]{6}$/);
       }
     }
@@ -113,19 +113,11 @@ describe('Palette rgba accessors', () => {
     }
   });
 
-  it('accentRgba tracks the accent, not the paper', () => {
-    const p = new Palette();
-    expect(rgbOf(p.accentRgba(1))).not.toBe(rgbOf(p.paperRgba(1)));
-    const accentA = rgbOf(p.accentRgba(1));
-    p.flip();
-    expect(rgbOf(p.accentRgba(1))).not.toBe(accentA);
-  });
-
   it('never emits a hex literal — a gradient stop is not a fillStyle', () => {
     const p = new Palette();
     for (const phase of [0, 1] as const) {
       p.phase = phase;
-      for (const s of [p.paperRgba(0), p.paperRgba(0.37), p.accentRgba(1)]) {
+      for (const s of [p.paperRgba(0), p.paperRgba(0.37), p.inkRgba(1)]) {
         expect(s).not.toContain('#');
         expect(s).toMatch(/^rgba\(\d+, \d+, \d+, [\d.]+\)$/);
       }
@@ -136,7 +128,7 @@ describe('Palette rgba accessors', () => {
     const p = new Palette();
     expect(alphaOf(p.paperRgba(-1))).toBe(0);
     expect(alphaOf(p.paperRgba(4))).toBe(1);
-    expect(alphaOf(p.accentRgba(Number.NaN))).toBe(0);
+    expect(alphaOf(p.inkRgba(Number.NaN))).toBe(0);
   });
 });
 

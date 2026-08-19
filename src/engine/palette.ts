@@ -1,6 +1,7 @@
 /**
  * The entire colour system (GAME-DESIGN §2). Two tokens — `paper` and `ink` —
- * that swap hex values when the world flips, plus the one sanctioned accent.
+ * that swap hex values when the world flips. There is no third: particles, the
+ * one thing that ever had a colour of its own, now invert the frame instead.
  *
  * This is the ONLY module in the project allowed to contain a hex literal.
  * Draw calls ask for a token and never branch on the phase; an
@@ -11,8 +12,6 @@
 /** Phase A (0) then phase B (1). Index by `phase`. */
 const PAPER = ['#0A0A0A', '#F2F2F2'] as const;
 const INK = ['#F2F2F2', '#0A0A0A'] as const;
-/** Cool in phase A, warm in phase B — the flip is legible from a single spark. */
-const ACCENT = ['#4CC9F0', '#F0A44C'] as const;
 
 export type Phase = 0 | 1;
 
@@ -28,6 +27,13 @@ export const CHANNEL_GREEN = '#00FF00';
 export const CHANNEL_BLUE = '#0000FF';
 /** The additive identity the aberration accumulator starts from. */
 export const COMPOSITE_BLACK = '#000000';
+/**
+ * The particles' operand: white under `difference` is `255 - backdrop`, i.e. a
+ * per-channel inversion of whatever the spark is standing on. Nobody sees it
+ * as white, and a spark is never *a* colour — it is the frame beneath it,
+ * inverted, which is why it does not move with the phase either.
+ */
+export const INVERT_MASK = '#FFFFFF';
 
 /** '#0A0A0A' → [10, 10, 10]. Runs once per constant at module load. */
 function hexToRgb(hex: string): readonly [number, number, number] {
@@ -40,7 +46,6 @@ function hexToRgb(hex: string): readonly [number, number, number] {
 
 const PAPER_RGB = PAPER.map(hexToRgb);
 const INK_RGB = INK.map(hexToRgb);
-const ACCENT_RGB = ACCENT.map(hexToRgb);
 
 function rgba(c: readonly [number, number, number], a: number): string {
   // NaN fails both comparisons and falls through to 0 — an invalid alpha must
@@ -72,11 +77,6 @@ export class Palette {
     return INK[this.phase];
   }
 
-  /** Particles only — the single saturated colour on screen. */
-  get accent(): string {
-    return ACCENT[this.phase];
-  }
-
   /**
    * `paper` at a given alpha, for gradient stops. The vignette's inner stop is
    * transparent paper, which needs the colour in components — so the parsing
@@ -98,11 +98,6 @@ export class Palette {
    */
   inkRgba(a: number, phase: Phase = this.phase): string {
     return rgba(INK_RGB[phase], a);
-  }
-
-  /** `accent` at a given alpha. Particles only; the vignette tints with ink. */
-  accentRgba(a: number): string {
-    return rgba(ACCENT_RGB[this.phase], a);
   }
 }
 

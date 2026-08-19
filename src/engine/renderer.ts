@@ -110,9 +110,9 @@ export function vignetteAlpha(speedNorm: number): number {
  * half of the range — the darkening is rationed, and a tint present at rest
  * would read as decoration instead of as an event.
  *
- * INK, not accent: accent is the particles' colour and nothing else (hard rule
- * 6 keeps colour scarce), so the speed vignette deepens toward the ink the
- * geometry is already drawn in rather than staining the frame.
+ * INK, and nothing more saturated (hard rule 6 keeps colour scarce): the speed
+ * vignette deepens toward the ink the geometry is already drawn in rather than
+ * staining the frame.
  */
 export function tintAmount(speedNorm: number): number {
   const n = clamp01(speedNorm);
