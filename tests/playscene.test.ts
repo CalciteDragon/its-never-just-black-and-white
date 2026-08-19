@@ -12,6 +12,9 @@ import {
   CAMERA_VSLACK,
   DEATH_FADE_IN,
   DEATH_FADE_OUT,
+  FINALE_END_DURATION,
+  FINALE_GOAL_DWELL,
+  FINALE_GOAL_TILES,
   GOAL_HOLD,
   PAD_STREAM_INTERVAL,
   PAD_STREAM_LIFE,
@@ -31,6 +34,7 @@ import { SAVE_KEYS } from '../src/engine/save';
 import type { Scene } from '../src/game';
 import { LEVELS } from '../src/levels/index';
 import { PlayScene, formatTime, windupGate } from '../src/scenes/play';
+import { FINALE_LEVEL_ID } from '../src/scenes/finale';
 import type { PlayContext } from '../src/scenes/play';
 import { ResultsScene } from '../src/scenes/results';
 import { TitleScene } from '../src/scenes/title';
@@ -236,6 +240,100 @@ describe('the goal, the timer and the best time', () => {
     }
     expect(h.scenes).toHaveLength(1);
     expect(h.scenes[0]).toBeInstanceOf(ResultsScene);
+  });
+});
+
+/**
+ * The finale's goal is the one that is not a tile. Its spiral paints over the
+ * outline that used to say where to stand, so the trigger grows to the nine
+ * tiles the player can see and gains a hold — and both halves are keyed by
+ * level id, which means the OTHER levels' behaviour is now a special case of
+ * this path rather than a separate one. These tests exist to prove that path
+ * did not quietly change the other 3 levels' goals: `describe` above still
+ * asserts a one-tile, zero-hold win, and this one asserts nine and a second.
+ */
+describe('the finale goal', () => {
+  /** Spawn inside the spiral, so nothing here depends on locomotion. */
+  const IN_THE_SPIRAL = ['..........', '..SG......', '##########'];
+  const HOLD_FRAMES = Math.ceil(FINALE_GOAL_DWELL / STEP);
+
+  function finale(): { h: Harness; scene: PlayScene } {
+    return start(tinyLevel(IN_THE_SPIRAL, FINALE_LEVEL_ID));
+  }
+
+  it('triggers a tile clear of the goal — the whole 3x3 the spiral covers', () => {
+    const { scene } = finale();
+    // The spawn is one tile LEFT of the goal, which under the one-tile rule
+    // every other level plays by is not the goal at all.
+    expect(FINALE_GOAL_TILES).toBe(3);
+    expect(scene.status.x).toBeLessThan(3 * TILE);
+    expect(scene.status.state).toBe('running');
+  });
+
+  it('holds for a second before it fires, standing still inside it', () => {
+    const { h, scene } = finale();
+    step(h, scene, HOLD_FRAMES - 2);
+    expect(scene.status.state).toBe('running');
+    step(h, scene, 3);
+    expect(scene.status.state).toBe('won');
+  });
+
+  it('resets the hold on leaving, so passing through twice is not standing', () => {
+    const { h, scene } = finale();
+    step(h, scene, HOLD_FRAMES - 10);
+
+    // Out of the region entirely, well short of the second.
+    h.input.onKey('KeyA', true);
+    for (let i = 0; i < 240 && scene.status.x >= 2 * TILE; i++) {
+      step(h, scene);
+    }
+    h.input.onKey('KeyA', false);
+    expect(scene.status.x).toBeLessThan(2 * TILE);
+    expect(scene.status.state).toBe('running');
+
+    // Back in, and it owes the full second again rather than the ten frames it
+    // was short of — an accumulator that never reset would fire immediately.
+    h.input.onKey('KeyD', true);
+    for (let i = 0; i < 240 && scene.status.x < 2 * TILE; i++) {
+      step(h, scene);
+    }
+    h.input.onKey('KeyD', false);
+    expect(scene.status.state).toBe('running');
+    step(h, scene, HOLD_FRAMES - 12);
+    expect(scene.status.state).toBe('running');
+  });
+
+  it('runs the colour ending on its own clock before handing over', () => {
+    const { h, scene } = finale();
+    step(h, scene, HOLD_FRAMES + 2);
+    expect(scene.status.state).toBe('won');
+    // The ordinary punctuation would have been long gone by now — the finale is
+    // deliberately many times that, and must not hand over on the short clock.
+    const short = Math.ceil((GOAL_HOLD + DEATH_FADE_OUT) / STEP);
+    expect(FINALE_END_DURATION).toBeGreaterThan(GOAL_HOLD + DEATH_FADE_OUT);
+    step(h, scene, short + 2);
+    expect(h.scenes).toHaveLength(0);
+
+    // Up to two frames short, then one at a time: the real Game swaps the
+    // scene out on setScene and this harness does not, so a bulk step past the
+    // handover would push a results screen every frame.
+    step(h, scene, Math.ceil(FINALE_END_DURATION / STEP) - short - 4);
+    expect(h.scenes).toHaveLength(0);
+    for (let i = 0; i < 6 && h.scenes.length === 0; i++) {
+      step(h, scene);
+    }
+    expect(h.scenes).toHaveLength(1);
+    expect(h.scenes[0]).toBeInstanceOf(ResultsScene);
+  });
+
+  it('starts the hold over after a restart', () => {
+    const { h, scene } = finale();
+    step(h, scene, HOLD_FRAMES - 4);
+    tap(h, scene, 'KeyR');
+    step(h, scene, HOLD_FRAMES - 4);
+    expect(scene.status.state).toBe('running');
+    step(h, scene, 6);
+    expect(scene.status.state).toBe('won');
   });
 });
 

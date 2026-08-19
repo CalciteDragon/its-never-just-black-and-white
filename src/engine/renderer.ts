@@ -146,10 +146,13 @@ export class Renderer {
   private camY = 0;
 
   /**
-   * Aberration scratch canvases, allocated on the first frame that actually
-   * exceeds CA_THRESHOLD — a player who never gets fast never pays the ~4 MB.
+   * Post-pass scratch canvases, allocated on the first frame that actually
+   * needs one — a player who never gets fast and never finishes the last level
+   * never pays the ~4 MB. Shared by the aberration and by `blurScreen`; they
+   * never run in the same pass, and two more full-size buffers for the second
+   * caller would be 4 MB to avoid a comment.
    */
-  private caBuffers: {
+  private postBuffers: {
     pristine: HTMLCanvasElement;
     pctx: CanvasRenderingContext2D;
     staging: HTMLCanvasElement;
@@ -263,6 +266,103 @@ export class Renderer {
   }
 
   /**
+   * A soft radial bloom: `inner` at the centre, fading to `outer` at `radius`.
+   * The one soft-edged primitive in the renderer, and it exists for one caller
+   * — the finale goal (`scenes/tiledraw.ts`), where the game's two-colour rule
+   * is broken on purpose and a hard-edged rectangle of rainbow would read as a
+   * sticker rather than as light.
+   *
+   * Deliberately **source-over, not `lighter`**. Additive is the obvious choice
+   * for a glow and it is wrong here: it is invisible against phase B's near
+   * white paper, and a bloom that only exists in one phase is a bloom that
+   * disappears the moment the player flips. Alpha blending keeps it chromatic
+   * over both grounds, with no branch on the phase.
+   *
+   * The gradient is built per call, unlike the vignette's two cached ones. It
+   * varies in hue AND radius every frame, so there is nothing to cache, and it
+   * is drawn a couple of dozen times on exactly one screen in the game.
+   */
+  glow(
+    cx: number,
+    cy: number,
+    radius: number,
+    inner: string,
+    outer: string,
+    ui = false,
+  ): void {
+    if (radius <= 0) {
+      return;
+    }
+    const ctx = this.ctx;
+    const dx = ui ? cx : cx - this.camX;
+    const dy = ui ? cy : cy - this.camY;
+    const g = ctx.createRadialGradient(dx, dy, 0, dx, dy, radius);
+    g.addColorStop(0, inner);
+    g.addColorStop(1, outer);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(dx, dy, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  /**
+   * Blur the ENTIRE frame in place, in screen space, after everything else has
+   * been drawn. The finale's ending is the only caller: the game dissolves into
+   * colour, and dissolving means the level, the player and the HUD all go soft
+   * together rather than one of them fading out from under the others.
+   *
+   * Canvas `filter` blurs each draw operation, so blurring the composed frame
+   * means blitting it through the filter — hence the scratch copy. The blit is
+   * OVERDRAWN by twice the radius on every side, because a blur samples past
+   * the edge of its source, finds nothing there, and rings the screen with a
+   * dark border. Overdrawing feeds it real pixels instead; the ~8% zoom that
+   * costs is invisible under the blur that caused it.
+   */
+  blurScreen(px: number): void {
+    if (px <= 0) {
+      return;
+    }
+    const { pristine, pctx } = this.ensurePostBuffers();
+    pctx.filter = 'none';
+    pctx.globalCompositeOperation = 'copy';
+    pctx.drawImage(this.offscreen, 0, 0);
+
+    const grow = px * 2;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.filter = `blur(${px}px)`;
+    ctx.globalCompositeOperation = 'copy';
+    ctx.drawImage(pristine, -grow, -grow, VIEW_W + grow * 2, VIEW_H + grow * 2);
+    ctx.restore();
+  }
+
+  /**
+   * A full-screen conical sweep through `stops` — hue by ANGLE around
+   * (cx, cy) — at `alpha`. The finale's last frame and the only caller: it is
+   * the smooth version of the pixel spiral the player just stood in, and the
+   * screen the credits will come up over.
+   *
+   * Conic rather than radial because a radial sweep has a centre, and a centre
+   * is a thing to look at. This one has no subject at all, which is the point:
+   * the game is over and there is nothing left to read.
+   */
+  conic(cx: number, cy: number, angle: number, stops: readonly string[], alpha: number): void {
+    if (alpha <= 0 || stops.length < 2) {
+      return;
+    }
+    const ctx = this.ctx;
+    const g = ctx.createConicGradient(angle, cx, cy);
+    for (let i = 0; i < stops.length; i++) {
+      g.addColorStop(i / (stops.length - 1), stops[i]);
+    }
+    ctx.save();
+    ctx.globalAlpha = alpha < 1 ? alpha : 1;
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    ctx.restore();
+  }
+
+  /**
    * Bitmap text. UI space by default; pass ui = false for world space.
    * Keeps rounding — the 5×7 font is the one deliberately low-res element
    * (GAME-DESIGN §2) and antialiasing it would throw away the signature.
@@ -308,7 +408,7 @@ export class Renderer {
    * whatever the background.
    */
   private aberrate(off: number): void {
-    const { pristine, pctx, staging, sctx } = this.ensureCaBuffers();
+    const { pristine, pctx, staging, sctx } = this.ensurePostBuffers();
     pctx.globalCompositeOperation = 'copy';
     pctx.drawImage(this.offscreen, 0, 0);
 
@@ -379,9 +479,9 @@ export class Renderer {
     this.gradPhase = palette.phase;
   }
 
-  private ensureCaBuffers(): NonNullable<Renderer['caBuffers']> {
-    if (this.caBuffers) {
-      return this.caBuffers;
+  private ensurePostBuffers(): NonNullable<Renderer['postBuffers']> {
+    if (this.postBuffers) {
+      return this.postBuffers;
     }
     const make = (): [HTMLCanvasElement, CanvasRenderingContext2D] => {
       const c = document.createElement('canvas');
@@ -396,8 +496,8 @@ export class Renderer {
     };
     const [pristine, pctx] = make();
     const [staging, sctx] = make();
-    this.caBuffers = { pristine, pctx, staging, sctx };
-    return this.caBuffers;
+    this.postBuffers = { pristine, pctx, staging, sctx };
+    return this.postBuffers;
   }
 
   /** Blit the offscreen buffer to the visible canvas at integer scale. */

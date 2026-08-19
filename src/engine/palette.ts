@@ -108,3 +108,24 @@ export class Palette {
 
 /** The game's one palette. Everything that draws reads its tokens from here. */
 export const palette = new Palette();
+
+/**
+ * The one colour in the game that is neither `paper` nor `ink`, and the only
+ * thing allowed to be *chromatic*: the finale goal's spectrum (GAME-DESIGN §1 —
+ * "the final level's ending breaks this deliberately"). `hue01` wraps, so a
+ * caller can hand it a raw accumulating clock and never think about the seam.
+ *
+ * It does NOT move with the phase, unlike every token above it. A rainbow that
+ * inverted on a flip would be arguing with itself: the twist is that colour has
+ * arrived, and colour that still obeys the two-phase rule has not arrived at
+ * all. Only its lightness is worth flipping, and even that is left to callers —
+ * the swirl is stacked at low alpha and reads over both grounds.
+ *
+ * Lives here because hard rule 6 is "no hex outside this module", and its
+ * intent is "no colour decided outside this module" — `hsl()` is not a loophole.
+ */
+export function spectrum(hue01: number, alpha = 1, light = 0.55, sat = 0.95): string {
+  const h = ((hue01 % 1) + 1) % 1;
+  const clamped = alpha > 0 ? (alpha < 1 ? alpha : 1) : 0;
+  return `hsla(${(h * 360).toFixed(1)}, ${(sat * 100).toFixed(0)}%, ${(light * 100).toFixed(0)}%, ${clamped})`;
+}

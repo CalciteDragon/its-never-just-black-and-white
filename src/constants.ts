@@ -595,3 +595,98 @@ export const SIGN_LINE_H = 22;
  */
 export const SIGN_ARROW_WIDTH = 4;
 export const SIGN_ARROW_BARB = 14;
+
+/* ----------------------------------------------------------- finale goal -- */
+
+/**
+ * The last level's goal, which is not an `ink` outline but a three-tile pixel
+ * spiral of slowly swirling spectrum (GAME-DESIGN §1, §11). Every number here
+ * is presentation only — the goal still triggers on its one centre tile, so the
+ * level plays identically to the drawing it replaces.
+ *
+ * Three tiles because one tile of rainbow reads as a pickup that changed
+ * colour. At 96 px it is bigger than the player and bigger than any single
+ * piece of geometry, which is what makes it read as an ARRIVAL rather than as
+ * one more object to collect.
+ */
+export const FINALE_GOAL_TILES = 3;
+/**
+ * The spiral is drawn on its own square grid of cells, `FINALE_GOAL_CELLS`
+ * across the whole three-tile span. 12 puts a cell at 8 px — a quarter tile,
+ * and near enough the 5×7 font's pixel that the bloom reads as the same
+ * resolution as the rest of the game rather than as a smooth import.
+ */
+export const FINALE_GOAL_CELLS = 12;
+/**
+ * How far through the spectrum one ring of the spiral travels. The arm falls
+ * out of subtracting the cell's ANGLE from its ring — one full turn steps the
+ * hue by this much, which is what bends the concentric bands into a spiral.
+ */
+export const FINALE_GOAL_HUE_PER_RING = 0.34;
+/** Cycles/s the whole spiral drifts through the spectrum. Slow on purpose: the
+ *  colours should crawl inward, and at a cycle a second this strobes. */
+export const FINALE_GOAL_HUE_RATE = 0.09;
+/** The halo behind the spiral: a soft radial fill, `FINALE_GOAL_HALO_SPREAD`×
+ *  the span across, so the colour bleeds past the pixels into the level. */
+export const FINALE_GOAL_HALO_ALPHA = 0.42;
+export const FINALE_GOAL_HALO_SPREAD = 1.5;
+/**
+ * Seconds the player's centre must stay inside the spiral before the level
+ * ends. The finale's goal is nine tiles rather than one, so it is reached by
+ * arriving rather than by aiming — and a nine-tile trigger that fired the
+ * instant a corner of it was clipped would end the game on a jump that was
+ * only passing through. The hold is what makes the last thing the player does
+ * a decision: stop in the colour.
+ *
+ * It RESETS on leaving, not pauses — see `PlayScene.stepPlay`. Every other
+ * level runs this same path at 0, which fires on the entering frame exactly as
+ * it always has.
+ */
+export const FINALE_GOAL_DWELL = 1.0;
+
+/* -------------------------------------------------------- finale ending -- */
+
+/**
+ * What happens when the player finally stops inside the spiral: the colour
+ * comes off the goal and takes the screen. It grows until the level is behind
+ * it, the whole frame goes soft, and what is left is a smooth conical sweep of
+ * every hue with nothing in front of it — the sheet the credits come up on.
+ *
+ * All of it is a fraction of ONE duration, so the sequence retimes by moving a
+ * single number and the stages keep their relationship. `finaleStage` in
+ * `scenes/finale.ts` turns `p = elapsed / duration` into the three values that
+ * drive it, and is pure so the curve can be tested without a canvas.
+ *
+ * Six seconds is long for a transition and deliberately so — this is the last
+ * thing the game does, and the ordinary goal's 1.2 s punctuation is the length
+ * of "well done", not of an ending.
+ */
+export const FINALE_END_DURATION = 6.0;
+/** How much bigger than its three tiles the spiral gets. 24× is 2304 px across
+ *  — over the 960×540 view's diagonal, so it covers from wherever it started. */
+export const FINALE_END_COVER = 24;
+/** Fraction of the duration the growth takes; it is done well before the end,
+ *  so the last stretch is the frame settling rather than anything moving. */
+export const FINALE_END_GROW_AT = 0.55;
+/** Peak screen blur in px, and the fraction of the duration it takes to reach
+ *  it. Ramped on a square, so the picture stays legible while it is still worth
+ *  looking at and goes soft only once it is just colour. */
+export const FINALE_END_BLUR = 44;
+export const FINALE_END_BLUR_AT = 0.8;
+/** When the smooth conical sweep starts and finishes fading in over the blurred
+ *  frame. It lands at 0.85, leaving the last 15% as a still, clean hold. */
+export const FINALE_END_SETTLE_AT = 0.35;
+export const FINALE_END_SETTLE_END = 0.85;
+/** Hue stops around the sweep. 13 is 12 arcs of 30°, which is smooth enough
+ *  that the interpolation between stops is invisible. */
+export const FINALE_END_STOPS = 13;
+/**
+ * A last, gentler blur over the FINISHED sweep. A conical gradient converges on
+ * a mathematical point, and a point is a thing to look at — the one detail on a
+ * screen that is meant to have none. Softening it costs one more full-screen
+ * blit, on the one screen in the game that can afford it.
+ */
+export const FINALE_END_SOFTEN = 26;
+/** rad/s the sweep turns. Barely a degree a second: the last screen should be
+ *  alive rather than animated, and the credits have to be readable over it. */
+export const FINALE_END_SWEEP = 0.06;

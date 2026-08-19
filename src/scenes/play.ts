@@ -22,6 +22,9 @@
 import {
   DEATH_FADE_IN,
   DEATH_FADE_OUT,
+  FINALE_END_DURATION,
+  FINALE_GOAL_DWELL,
+  FINALE_GOAL_TILES,
   GOAL_HOLD,
   GOAL_PULSE_AMP,
   GOAL_PULSE_FREQ,
@@ -57,6 +60,7 @@ import { drawSigns, signsFor } from './signs';
 import type { Sign } from './signs';
 import { ResultsScene } from './results';
 import type { ResultsStats } from './results';
+import { drawFinaleBloom, drawFinaleGoal, drawFinaleVeil, FINALE_LEVEL_ID } from './finale';
 import { drawGoal, drawPickup, drawTileRuns } from './tiledraw';
 import { TitleScene } from './title';
 
@@ -179,6 +183,14 @@ export class PlayScene implements Scene {
   private readonly camera = new Camera();
   /** This level's in-world captions; empty for every level but the tutorial. */
   private readonly signs: readonly Sign[];
+  /**
+   * Whether this is the last level, which is the only level that ends in
+   * colour. Read once at construction rather than compared per frame in three
+   * different places — the id is the key to the whole special case (the nine
+   * tile trigger, the hold, the spiral, the ending), and one field is what
+   * keeps those four from drifting apart.
+   */
+  private readonly isFinale: boolean;
   private readonly particles = new ParticleSystem();
   private readonly rng = new Rng(0xfeed);
 
@@ -210,6 +222,12 @@ export class PlayScene implements Scene {
    * respawn timer is.
    */
   private readonly pickupTimers: number[] = [];
+  /**
+   * Seconds the player's centre has been inside the goal region, without
+   * leaving it. Fixed steps only, so it is as deterministic as the trajectory
+   * that feeds it. Every level but the finale wins at 0 and never reads it.
+   */
+  private goalHold = 0;
   /** 0 = clear, 1 = fully covered by `ink`. */
   private fade = 0;
   /** The phase the fade colour was sampled in, held across the palette reset. */
@@ -224,6 +242,7 @@ export class PlayScene implements Scene {
     this.level = level;
     this.ctx = ctx;
     this.signs = signsFor(level.id);
+    this.isFinale = level.id === FINALE_LEVEL_ID;
   }
 
   /**
@@ -304,6 +323,7 @@ export class PlayScene implements Scene {
     this.timeSec = 0;
     this.state = 'running';
     this.stateT = 0;
+    this.goalHold = 0;
     this.fade = 0;
     this.streamT = 0;
     this.camera.snapTo(this.player.centerX, this.player.centerY);
@@ -386,8 +406,19 @@ export class PlayScene implements Scene {
         }
         break;
       case 'won':
-        // Frozen: hold the earned frame, then fade out and hand it over.
+        // Frozen: hold the earned frame, then fade out and hand it over. The
+        // finale hands over on its own clock and never touches `fade` — its
+        // ending is the colour taking the screen, and an `ink` wash over the top
+        // of that would be the game's two colours having the last word after
+        // the whole point was that they no longer do.
         this.stateT += dt;
+        if (this.isFinale) {
+          if (this.stateT >= FINALE_END_DURATION) {
+            this.finish(game);
+            return;
+          }
+          break;
+        }
         this.fade = Math.min(1, Math.max(0, (this.stateT - GOAL_HOLD) / DEATH_FADE_OUT));
         if (this.stateT >= GOAL_HOLD + DEATH_FADE_OUT) {
           this.finish(game);
@@ -567,24 +598,64 @@ export class PlayScene implements Scene {
     if (this.state !== 'running') {
       return;
     }
+    // Charged BEFORE the win check and reset the moment the player leaves, so
+    // the hold is a hold and not a total: crossing the spiral three times must
+    // not add up to standing in it.
+    const inside = this.atGoal();
+    this.goalHold = inside ? this.goalHold + dt : 0;
     if (ev.died) {
       this.die(game);
-    } else if (this.atGoal()) {
+    } else if (inside && this.goalHold >= this.goalDwell()) {
       this.win(game);
     }
   }
 
   /**
-   * The goal fires on the body's CENTRE being inside the goal tile. Rotation
+   * The goal fires on the body's CENTRE being inside the goal region. Rotation
    * independent, one condition, and it means the goal reads as "get *in* the
    * square" rather than "graze it with a corner".
+   *
+   * The region is one tile everywhere except the finale, where it is the whole
+   * `FINALE_GOAL_TILES` square the spiral is drawn on — the outline that used
+   * to say where to stand is painted over, so what the player can see IS the
+   * trigger. Odd sizes only: the region is centred on the goal tile, which only
+   * lands on the grid if there are as many tiles left of it as right.
    */
   private atGoal(): boolean {
     const { goal } = this.level;
     const b = this.player.body;
-    const gx = goal.tx * TILE;
-    const gy = goal.ty * TILE;
-    return b.x >= gx && b.x < gx + TILE && b.y >= gy && b.y < gy + TILE;
+    const span = this.isFinale ? FINALE_GOAL_TILES : 1;
+    const gx = (goal.tx - (span - 1) / 2) * TILE;
+    const gy = (goal.ty - (span - 1) / 2) * TILE;
+    return b.x >= gx && b.x < gx + span * TILE && b.y >= gy && b.y < gy + span * TILE;
+  }
+
+  /**
+   * How long `atGoal` must hold before the level ends. Zero everywhere but the
+   * finale, which is the pre-existing behaviour stated as a number: the win
+   * lands on the frame the centre crosses in.
+   */
+  /**
+   * The goal's centre in SCREEN space. The camera rounds its origin to whole
+   * pixels and the ending is drawn in view space, so this has to round the same
+   * way — an unrounded subtraction leaves the bloom a sub-pixel off the goal it
+   * is supposed to be growing out of, which is a visible slip on frame one.
+   */
+  private goalOnScreen(vx: number, vy: number): [number, number] {
+    const { goal } = this.level;
+    return [
+      goal.tx * TILE + TILE / 2 - Math.round(vx),
+      goal.ty * TILE + TILE / 2 - Math.round(vy),
+    ];
+  }
+
+  /** The ending's progress, 0 to 1. Only meaningful while `won` on the finale. */
+  private finaleProgress(): number {
+    return this.stateT / FINALE_END_DURATION;
+  }
+
+  private goalDwell(): number {
+    return this.isFinale ? FINALE_GOAL_DWELL : 0;
   }
 
   private die(game: Game): void {
@@ -626,6 +697,13 @@ export class PlayScene implements Scene {
     const vy = this.camera.viewY;
     r.setCamera(vx, vy);
     r.clear(palette.paper);
+    if (this.isFinale && this.state === 'won') {
+      // UNDER the level, on purpose: the last thing the player sees of the game
+      // is their own square and the ground they are standing on, in silhouette
+      // against the colour coming up behind them. `drawFinaleVeil`, at the far
+      // end of this method, is the half that goes over the top.
+      drawFinaleBloom(r, ...this.goalOnScreen(vx, vy), this.clock, this.finaleProgress());
+    }
     drawTileRuns(r, this.level.map, vx, vy);
     // Under everything that moves: a sign is painted on the level, and the
     // player passing over its text is the reading order that implies.
@@ -638,6 +716,11 @@ export class PlayScene implements Scene {
 
     // Screen-space, over everything including the UI.
     r.applyPost(this.speedNorm);
+    if (this.isFinale && this.state === 'won') {
+      // The veil goes over the post pass, because it is not part of the frame
+      // the aberration is describing — it is what replaces that frame.
+      drawFinaleVeil(r, this.clock, this.finaleProgress());
+    }
     if (this.fade > 0) {
       r.rect(0, 0, VIEW_W, VIEW_H, palette.inkRgba(this.fade, this.fadePhase), true);
     }
@@ -671,11 +754,31 @@ export class PlayScene implements Scene {
     }
   }
 
-  /** An `ink` outline that pulses in scale (GAME-DESIGN §2). */
+  /**
+   * An `ink` outline that pulses in scale (GAME-DESIGN §2) — except on the last
+   * level, where it is the colour ending: the same outline inside a three-tile
+   * swirl of spectrum (`drawFinaleGoal`). Keyed by level id like `signs.ts`,
+   * and presentation only — `checkGoal` still fires on the one centre tile, so
+   * the finale plays exactly as it did with the outline alone.
+   */
   private renderGoal(r: Renderer): void {
     const { goal } = this.level;
+    const cx = goal.tx * TILE + TILE / 2;
+    const cy = goal.ty * TILE + TILE / 2;
+    if (this.isFinale) {
+      // Once the ending starts, the bloom IS this draw — it opens at exactly
+      // this size, position and hue and grows from there, so drawing both would
+      // leave the original sitting on top of its own expansion, sharp, in the
+      // one layer the ending is supposed to be behind. Handing over on the
+      // frame the win lands is seamless because the two agree at p = 0, which
+      // `tests/finalegoal.test.ts` asserts draw for draw.
+      if (this.state !== 'won') {
+        drawFinaleGoal(r, cx, cy, this.clock);
+      }
+      return;
+    }
     const size = TILE * (1 + Math.sin(this.clock * GOAL_PULSE_FREQ) * GOAL_PULSE_AMP);
-    drawGoal(r, goal.tx * TILE + TILE / 2, goal.ty * TILE + TILE / 2, size);
+    drawGoal(r, cx, cy, size);
   }
 
   private renderHud(r: Renderer, game: Game): void {

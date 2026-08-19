@@ -513,7 +513,11 @@ Editor state (grid, undo stack, validation) is a pure module so it unit-tests in
 
 Moving platforms, breakable tiles, one-way platforms, slopes, wall jumps, checkpoints, gamepads, mobile/touch, leaderboards, colour-gated geometry (the tile format has no colour field — adding one later is a format change, and that's accepted).
 
-**The colour ending** for the final level is designed but deliberately unbuilt. It lands after the level set is finished, so the reveal can be tuned against the real final approach rather than a placeholder.
+**The colour ending** for the final level is BUILT: `black-and-white`'s goal is a three-tile pixel spiral of spectrum with a soft halo behind it, keyed by level id in `PlayScene` the way `signs.ts` is keyed (`drawFinaleGoal` in `scenes/tiledraw.ts`, `spectrum` in `engine/palette.ts`, `Renderer.glow`). The spiral covers the outline that used to mark the finish, so the trigger moves with it: `atGoal` grows to the same nine tiles and takes `FINALE_GOAL_DWELL` (1 s) of standing in them, reset on leaving. What the player can see is exactly what fires — and a nine-tile trigger has to ask for a decision, or it would end the game on a jump that was only passing through. The spiral is computed rather than sampled from an image: hard rule 1 admits no binary assets, and generating it costs no bytes, breathes with the goal's pulse and never loops.
+
+When the hold completes, the colour comes off the goal and takes the screen, in two layers at either end of `PlayScene.render`. `drawFinaleBloom` is the spiral growing past the edges of the view and drifting to the middle, drawn UNDER the level — the last thing the player sees of the game is their own square and the ground they are standing on, in silhouette against the colour coming up behind them. `drawFinaleVeil` is the whole frame going soft — level, player, HUD and bloom at once — with a smooth conical sweep of every hue fading in over the top of it. Behind the colour, then in it, then gone. Six seconds, all of it fractions of one duration, ending on a still screen with nothing on it and every colour in it. `finaleStage(p)` is the pure curve behind it and is unit-tested; `PlayScene` hands over at the end of it through the ordinary `finish`, which is where the end credits will go.
+
+What is still unbuilt is the level it ends, and the credits it hands to.
 
 ## 12. Module contracts
 
