@@ -12,6 +12,7 @@
 
 import { parseLevel } from '../world/level';
 import type { Level } from '../world/level';
+import tutorial from './00-tutorial.json';
 import firstSteps from './01-first-steps.json';
 import secondNature from './02-second-nature.json';
 
@@ -29,7 +30,7 @@ function load(raw: unknown): Level {
  * a source file under version control, so the one-line edit is deliberate and
  * the save's on-screen confirmation names it.
  */
-export const LEVELS: readonly Level[] = [load(firstSteps), load(secondNature)];
+export const LEVELS: readonly Level[] = [load(tutorial), load(firstSteps), load(secondNature)];
 
 /** The level after `index`, or null at the end of the set. */
 export function nextLevel(index: number): Level | null {

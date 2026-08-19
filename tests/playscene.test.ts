@@ -497,6 +497,16 @@ describe('THE SCRIPTED PLAYTHROUGH', () => {
    * one held direction and four presses, each triggered by a position rather
    * than a frame count — which is where all its slack comes from.
    */
+  /**
+   * The script encodes ONE level's geometry, so it names that level rather than
+   * taking whichever one is first: the tutorial was registered ahead of it and
+   * `LEVELS[0]` quietly became a different stage under the same four presses.
+   */
+  const STAGE = LEVELS.find((l) => l.id === '01-first-steps');
+  if (!STAGE) {
+    throw new Error('the scripted playthrough needs 01-first-steps in LEVELS');
+  }
+
   interface Beat {
     /** Fire once the body's centre passes this world x. */
     atX: number;
@@ -516,7 +526,7 @@ describe('THE SCRIPTED PLAYTHROUGH', () => {
   const MAX_STEPS = 3600; // one minute of simulation
 
   it('completes the example stage', () => {
-    const { h, scene } = start(LEVELS[0]);
+    const { h, scene } = start(STAGE);
     h.input.onKey('KeyD', true); // hold right throughout
 
     let beat = 0;
@@ -553,7 +563,7 @@ describe('THE SCRIPTED PLAYTHROUGH', () => {
     expect(
       s.state,
       `stopped after ${steps} steps at x=${s.x.toFixed(0)} y=${s.y.toFixed(0)} ` +
-        `(furthest x=${furthest.toFixed(0)} of ${LEVELS[0].map.widthPx}), ` +
+        `(furthest x=${furthest.toFixed(0)} of ${STAGE.map.widthPx}), ` +
         `last beat: ${reached}, beats fired ${beat}/${SCRIPT.length}, ` +
         `gravity ${s.gravitySign > 0 ? 'down' : 'up'}, ` +
         `flip ${s.flipCharged ? 'charged' : 'spent'}`,

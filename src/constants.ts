@@ -573,3 +573,25 @@ export const EDITOR_MAX_H = 60;
  * cannot put a 400-character title on a menu row.
  */
 export const EDITOR_NAME_MAX = 40;
+
+/* ------------------------------------------------------------------ signs -- */
+
+/**
+ * In-world tutorial signs (`scenes/signs.ts`): text painted into the level's
+ * empty space, in `ink`, at the place the thing it teaches happens.
+ *
+ * Scale 2 is the HUD's size, which is the point — a sign is the game talking,
+ * so it reads at the weight the level name and the timer do rather than as
+ * scenery. `SIGN_LINE_H` is the 7 px glyph at that scale (14) plus 8 px of
+ * leading, the smallest gap at which two stacked lines still read as two.
+ */
+export const SIGN_TEXT_SCALE = 2;
+export const SIGN_LINE_H = 22;
+/**
+ * A sign's optional arrow: shaft thickness and the length of each barb, which
+ * sweeps ±135° off the shaft exactly as a pad chevron's arms do. Sized against
+ * the scale-2 glyph rather than against `TILE` — it is punctuation on a line of
+ * text, not a tile-sized object in the level.
+ */
+export const SIGN_ARROW_WIDTH = 4;
+export const SIGN_ARROW_BARB = 14;

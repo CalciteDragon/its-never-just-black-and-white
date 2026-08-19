@@ -53,6 +53,8 @@ import { Camera } from '../world/camera';
 import type { Level } from '../world/level';
 import { padDirection } from '../world/tiles';
 import { updateMenu } from './menu';
+import { drawSigns, signsFor } from './signs';
+import type { Sign } from './signs';
 import { ResultsScene } from './results';
 import type { ResultsStats } from './results';
 import { drawGoal, drawPickup, drawTileRuns } from './tiledraw';
@@ -175,6 +177,8 @@ export class PlayScene implements Scene {
   private readonly ctx: PlayContext;
   private readonly player = new Player(0, 0);
   private readonly camera = new Camera();
+  /** This level's in-world captions; empty for every level but the tutorial. */
+  private readonly signs: readonly Sign[];
   private readonly particles = new ParticleSystem();
   private readonly rng = new Rng(0xfeed);
 
@@ -219,6 +223,7 @@ export class PlayScene implements Scene {
   constructor(level: Level, ctx: PlayContext) {
     this.level = level;
     this.ctx = ctx;
+    this.signs = signsFor(level.id);
   }
 
   /**
@@ -622,6 +627,9 @@ export class PlayScene implements Scene {
     r.setCamera(vx, vy);
     r.clear(palette.paper);
     drawTileRuns(r, this.level.map, vx, vy);
+    // Under everything that moves: a sign is painted on the level, and the
+    // player passing over its text is the reading order that implies.
+    drawSigns(r, this.signs);
     this.renderPickups(r);
     this.renderGoal(r);
     this.player.render(r);
