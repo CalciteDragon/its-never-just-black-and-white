@@ -33,6 +33,7 @@ import {
   MAX_ANG_SPEED,
   MAX_FALL_SPEED,
   PAD_BACK_DOT,
+  PAD_DEBOUNCE,
   PAD_IMPULSE,
   PAD_SPIN_MAX,
   PLAYER_CORE_INSET,
@@ -67,6 +68,14 @@ import type { EntityWorld } from './context';
 function padStruck(c: Contact): boolean {
   const dir = padDirection(c.pad);
   return dir !== null && c.nx * dir.dx + c.ny * dir.dy > -PAD_BACK_DOT;
+}
+
+/**
+ * A pad's identity as one number: the tile index the `TileMap` itself uses, so
+ * two pads are the same pad exactly when they are the same cell.
+ */
+function padKey(c: Contact, mapW: number): number {
+  return c.padTy * mapW + c.padTx;
 }
 
 /**
@@ -135,6 +144,22 @@ export class Player {
    * when a footfall happened.
    */
   private stepDist = 0;
+  /**
+   * Seconds left on each pad's debounce, keyed by tile index — **one entry per
+   * pad, not one timer for the player** (GAME-DESIGN §5).
+   *
+   * Since every face but the back launches, a pad can hold a body against a
+   * launching face indefinitely, and it then fired on every step: a buzz, a
+   * pinned body, and sixty doses of spin a second. A player-wide cooldown would
+   * have fixed that by breaking a pad chain, which is two pads a tenth of a
+   * second apart and the most interesting line in the game.
+   *
+   * A Map rather than an array because the pads are the level's, not the
+   * player's, and this must not need the level to exist. Entries are deleted as
+   * they expire, so it holds only pads touched in the last PAD_DEBOUNCE — never
+   * more than a handful — and insertion order keeps iteration deterministic.
+   */
+  private readonly padCooldowns = new Map<number, number>();
   private readonly events: PlayerEvents = { flipped: false, died: false };
 
   constructor(cx: number, cy: number) {
@@ -198,6 +223,7 @@ export class Player {
     this.buffer = 0;
     this.jumpCutDone = true;
     this.stepDist = 0;
+    this.padCooldowns.clear();
   }
 
   update(dt: number, inp: PlayerInputs, world: EntityWorld): PlayerEvents {
@@ -205,6 +231,7 @@ export class Player {
     ev.flipped = false;
     ev.died = false;
     const b = this.body;
+    this.tickPadCooldowns(dt);
 
     // --- The flip, spent BEFORE the step and recharged from its result, which
     // is decision 6: there is no flip buffer. "Flip as soon as I can" means the
@@ -307,8 +334,12 @@ export class Player {
       if (isGroundNormal && (!splash || c.impulse > splash.impulse)) {
         splash = c;
       }
-      if (!padFired && launches) {
+      // A pad still inside its own window is passed OVER, not passed out on:
+      // the loop goes on to the next contact, so a second pad struck in the
+      // same step still fires.
+      if (!padFired && launches && !this.padCooldowns.has(padKey(c, world.map.w))) {
         this.firePad(c, world);
+        this.padCooldowns.set(padKey(c, world.map.w), PAD_DEBOUNCE);
         padFired = true;
       }
     }
@@ -352,6 +383,28 @@ export class Player {
     const half = PLAYER_SIZE / 2;
     ev.died = b.y + half < 0 || b.y - half > world.map.heightPx;
     return ev;
+  }
+
+  /**
+   * Age every pad's window, dropping the ones that have run out.
+   *
+   * Run at the TOP of the step, before the solver, so a window opened on step
+   * n has expired by the step whose elapsed time reaches PAD_DEBOUNCE rather
+   * than one later. Deleting rather than keeping zeros is what stops a long
+   * level's worth of pads accumulating in the map.
+   */
+  private tickPadCooldowns(dt: number): void {
+    if (this.padCooldowns.size === 0) {
+      return;
+    }
+    for (const [key, left] of this.padCooldowns) {
+      const next = left - dt;
+      if (next <= 0) {
+        this.padCooldowns.delete(key);
+      } else {
+        this.padCooldowns.set(key, next);
+      }
+    }
   }
 
   /**

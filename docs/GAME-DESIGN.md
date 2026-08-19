@@ -151,11 +151,16 @@ A tile that applies a fixed impulse in its facing direction (`up`, `down`, `left
 - Emit a continuous animated particle chevron in their direction (the pad's idle state), plus a burst on trigger.
 - **Recharge the flip on contact** *(revised after 0.2 playtesting; phase 5 shipped the opposite)*. Spending a whole pad chain with the flip unavailable took the game's other verb away from its most interesting line — and "a pad chain is a commitment" turned out to mean "a pad chain is a corridor". Touching a pad hands the flip straight back, so a chain is a chain of choices.
 - Impart angular velocity proportional to how off-centre the contact was — hitting a pad with a corner sends you spinning.
+- **Debounce, per pad, for `PAD_DEBOUNCE` = 0.25 s** *(added after 0.2, with the side-firing above)*. Once every face but the back launches, a pad can hold a body against a launching face indefinitely: stand on a right-facing pad with a wall one tile away and its own launch drives you into the wall and straight back onto it. Measured at **38 firings per second** — a buzz, a pinned body, and 38 doses of spin — against **4** with the window.
 
 > *(Amended in phase 5.)* **A pad is a tile, not a trigger volume.** The off-centre torque above needs a real contact *point*, and §2 draws a pad as an `ink` slab, so the solver collides with pads exactly as it does with solid. Two consequences:
 >
 > - *(Revised twice after 0.2 playtesting.)* **Every face but the back launches.** "Fires on any contact" was kept in phase 5 on the grounds that a pad set into geometry has its buried faces masked as interior, so the case mostly cannot arise — but where it does, on a free-standing slab, it reads as the pad having no collision at all: a body landing on the back of a down-pad was fired straight down through the slab that had just caught it. The first revision excluded the sides along with the back, and that was an over-correction in the other direction — walking into the edge of a free-standing pad and simply *stopping* reads as a pad that is broken. So the test is on the back alone (`PAD_BACK_DOT`): the back is plain platform, and the face and both sides fire. **A side hit fires along the pad's own facing, not along the contact normal** — a pad has one direction, and that is the thing an author placed.
 > - Because landing on a pad is a ground-*normal* contact, the recharge rule cannot be expressed through `grounded` in either of its versions. Contacts carry tile identity instead; see [PHYSICS.md](PHYSICS.md) § Grounded. The rules now read off different halves of that: a **solid** recharges only from a ground-normal contact, a **pad** from any contact at all — so the two bits the solver reports are still both needed.
+>
+> **The debounce is per PAD, not per player**, and that is the whole of it. A player-wide cooldown is one field and fixes the buzz just as well — and it breaks a pad chain, which is two pads a sixth of a second apart and the most interesting line in the game. So the window belongs to the tile: two different pads a step apart both fire, and the same pad twice in a step does not. `Contact` therefore carries `padTx` / `padTy` beside `pad`, because the kind cannot tell two up-pads apart; they come off the same manifold and cost two stores, since the broadphase has the coordinates in hand when it pools the tile.
+>
+> 0.25 s is fifteen steps: an order of magnitude above the 0.0167 s of a scrape, and well under the shortest genuine return to the same pad, which is that pad's own airtime — 0.667 s for an up-pad at `PAD_IMPULSE`. No line an author can draw is shortened by it.
 >
 > The spin needs its own scale (`PAD_SPIN_MAX`) because the physical impulse form saturates at five times `MAX_ANG_SPEED`, and the arm is `r × facing` measured from the **body's** centre — the facing, not the contact normal, since the two only agree on a face hit — see PHYSICS.md § Game feel for both, and for why the controller's horizontal clamp had to become one-sided before sideways pads could exist at all.
 
@@ -254,6 +259,7 @@ Added in phase 4. These are not feel knobs — each one is the answer to a speci
 | `PICKUP_CORE_FRACTION` | 0.5 | its `paper` core, the player's own fraction: (`PLAYER_SIZE` − 2·`PLAYER_CORE_INSET`) / `PLAYER_SIZE` |
 | `PICKUP_OUTLINE_WIDTH` | 2 px | stroke of the afterimage |
 | `PICKUP_SPENT_ALPHA` | 0.25 | the afterimage left where a spent one will return |
+| `PAD_DEBOUNCE` | 0.25 s | how long ONE pad waits before it may fire again; per pad, so a chain is untouched |
 | `PAD_SPIN_MAX` | 8.0 rad/s | spin at a full-corner pad contact, scaled by the arm and clamped (added in phase 5; the physical impulse form saturates — see PHYSICS.md § Game feel) |
 
 ### Presentation

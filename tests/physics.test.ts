@@ -803,3 +803,38 @@ describe('contacts carry tile identity (phase 5, decision 2)', () => {
     });
   });
 });
+
+describe('which pad a contact came from', () => {
+  it('carries the pad TILE COORDINATES, not just the kind', () => {
+    // The player debounces per pad, and `pad: Tile` cannot tell two up-pads
+    // apart. The coordinates come off the same manifold the kind does.
+    const map = mapFrom(['....', '....', '.^##']);
+    const b = body(1 * TILE + TILE / 2, TILE / 2);
+    let found = null as { padTx: number; padTy: number } | null;
+    for (let i = 0; i < 90 && found === null; i++) {
+      const res = stepBody(b, map, STEP, DOWN);
+      for (let c = 0; c < res.contactCount; c++) {
+        if (res.contacts[c].pad === Tile.PadUp) {
+          found = { padTx: res.contacts[c].padTx, padTy: res.contacts[c].padTy };
+        }
+      }
+    }
+    expect(found).toEqual({ padTx: 1, padTy: 2 });
+  });
+
+  it('reports -1, -1 when no pad produced the contact', () => {
+    const map = mapFrom(['....', '....', '####']);
+    const b = body(TILE + TILE / 2, TILE / 2);
+    let seen = false;
+    for (let i = 0; i < 90 && !seen; i++) {
+      const res = stepBody(b, map, STEP, DOWN);
+      for (let c = 0; c < res.contactCount; c++) {
+        seen = true;
+        expect(res.contacts[c].pad).toBe(Tile.Empty);
+        expect(res.contacts[c].padTx).toBe(-1);
+        expect(res.contacts[c].padTy).toBe(-1);
+      }
+    }
+    expect(seen).toBe(true);
+  });
+});

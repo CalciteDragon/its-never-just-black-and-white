@@ -310,6 +310,28 @@ export const PICKUP_OUTLINE_WIDTH = 2;
  */
 export const PICKUP_RADIUS = 20;
 
+/**
+ * How long one pad waits before it may fire again (s), counted per PAD rather
+ * than per player.
+ *
+ * Now that every face but the back launches, a pad can hold a body in contact
+ * with a launching face indefinitely — stand on a right-facing pad with a wall
+ * one tile away and the launch drives you into the wall and straight back onto
+ * the pad. Measured at 38 firings per second before this existed: a buzz, a
+ * pinned body, and 38 doses of spin.
+ *
+ * Per pad, not per player, because a chain is several pads and a player-wide
+ * cooldown would make the second pad of one deaf for a quarter of a second —
+ * the feature eating the game it was added to protect. Two pads a step apart
+ * both fire; the same pad twice in a step does not.
+ *
+ * 0.25 s is fifteen steps, which is an order of magnitude above the 0.0167 s of
+ * a scrape and well under the shortest genuine return to the same pad: being
+ * launched by one and falling back onto it is its own airtime, 0.667 s for an
+ * up-pad at PAD_IMPULSE. So no line an author can draw is shortened by it.
+ */
+export const PAD_DEBOUNCE = 0.25;
+
 /** Death fade out, then back in after the respawn (s). */
 export const DEATH_FADE_OUT = 0.35;
 export const DEATH_FADE_IN = 0.25;

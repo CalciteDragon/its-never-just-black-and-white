@@ -88,6 +88,16 @@ export interface Contact {
    * geometry rather than about the rule of the week.)
    */
   pad: Tile;
+  /**
+   * Where that pad is, in tile coordinates, or -1, -1 when there is none.
+   *
+   * The kind alone cannot tell two up-pads apart, and the controller debounces
+   * per PAD (GAME-DESIGN §5) — so the identity has to travel with the contact.
+   * It comes off the same manifold `pad` does and costs two stores, because the
+   * broadphase already has the coordinates in hand when it pools the tile.
+   */
+  padTx: number;
+  padTy: number;
   /** Whether any plain Tile.Solid pooled into this contact. */
   onSolid: boolean;
 }
@@ -158,8 +168,10 @@ interface Manifold {
   depth: number;
   candCount: number;
   cand: number[];
-  /** First pad tile pooled in, Tile.Empty for none. */
+  /** First pad tile pooled in, Tile.Empty for none, and where it is. */
   pad: Tile;
+  padTx: number;
+  padTy: number;
   /** Whether any plain solid pooled in. Both bits are needed: a body straddling
    * a pad and the floor beside it must launch AND recharge. */
   onSolid: boolean;
@@ -174,13 +186,25 @@ for (let i = 0; i < MAX_MANIFOLDS; i++) {
     candCount: 0,
     cand: new Array<number>(CAND_STRIDE).fill(0),
     pad: Tile.Empty,
+    padTx: -1,
+    padTy: -1,
     onSolid: false,
   });
 }
 const order: number[] = new Array<number>(MAX_MANIFOLDS).fill(0);
 const contactPool: Contact[] = [];
 for (let i = 0; i < MAX_CONTACTS; i++) {
-  contactPool.push({ x: 0, y: 0, nx: 0, ny: 0, impulse: 0, pad: Tile.Empty, onSolid: false });
+  contactPool.push({
+    x: 0,
+    y: 0,
+    nx: 0,
+    ny: 0,
+    impulse: 0,
+    pad: Tile.Empty,
+    padTx: -1,
+    padTy: -1,
+    onSolid: false,
+  });
 }
 
 const result: StepResult = {
@@ -379,13 +403,13 @@ function collectManifolds(body: RigidBody, map: TileMap): void {
       if (count === 0) {
         continue;
       }
-      addToManifold(count, tile);
+      addToManifold(count, tile, tx, ty);
     }
   }
 }
 
 /** Pool this tile's candidates into the manifold sharing its normal, or a new one. */
-function addToManifold(count: number, tile: Tile): void {
+function addToManifold(count: number, tile: Tile, tx: number, ty: number): void {
   let m: Manifold | null = null;
   for (let i = 0; i < manifoldCount; i++) {
     const cand = manifolds[i];
@@ -404,6 +428,8 @@ function addToManifold(count: number, tile: Tile): void {
     m.depth = 0;
     m.candCount = 0;
     m.pad = Tile.Empty;
+    m.padTx = -1;
+    m.padTy = -1;
     m.onSolid = false;
   }
   // Tile identity travels with the manifold, because the merge is where a pad
@@ -412,6 +438,10 @@ function addToManifold(count: number, tile: Tile): void {
     m.onSolid = true;
   } else if (m.pad === Tile.Empty) {
     m.pad = tile;
+    // The position travels with the kind, set in the same branch, so the two
+    // can never describe different tiles.
+    m.padTx = tx;
+    m.padTy = ty;
   }
   if (sat.depth > m.depth) {
     m.depth = sat.depth;
@@ -539,6 +569,8 @@ function recordContact(x: number, y: number, m: Manifold, impulse: number): void
       }
       if (c.pad === Tile.Empty) {
         c.pad = m.pad;
+        c.padTx = m.padTx;
+        c.padTy = m.padTy;
       }
       if (m.onSolid) {
         c.onSolid = true;
@@ -556,6 +588,8 @@ function recordContact(x: number, y: number, m: Manifold, impulse: number): void
   c.ny = m.ny;
   c.impulse = impulse;
   c.pad = m.pad;
+  c.padTx = m.padTx;
+  c.padTy = m.padTy;
   c.onSolid = m.onSolid;
 }
 

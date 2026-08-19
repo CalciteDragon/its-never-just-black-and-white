@@ -179,13 +179,14 @@ Because `up` is derived from `gravitySign`, landing on what was the ceiling is g
 | Field | Meaning |
 | --- | --- |
 | `pad: Tile` | the pad tile that produced this contact, `Tile.Empty` for none |
+| `padTx` / `padTy` | where that pad is, or `-1, -1` for none — the controller debounces per pad, and the kind cannot tell two up-pads apart |
 | `onSolid: boolean` | whether any plain `Tile.Solid` pooled into it |
 
 Both are needed rather than one enum, because the two halves are read independently and a body can be on both at once — straddling a pad and the floor beside it launches (the pad fired) *and* recharges. They are set on the manifold as tiles pool into it — `pad` from the first pad seen, `onSolid` from any plain solid — and accumulate across sub-steps in `recordContact`, since one normal can be re-resolved against a different tile each pass.
 
 *(Amended after 0.2 playtesting: pads now recharge — see GAME-DESIGN §5.)* The recharge is `(onSolid && n · up > GROUND_NORMAL_DOT) || pad !== Tile.Empty`. A solid keeps the ground test at the same threshold as `grounded`, so balancing on a corner still recharges you; a pad recharges from any contact, including its back, because the rule an author can see is the tile.
 
-The launch is the complementary test on the same contact: `n · facing > -PAD_BACK_DOT` — every face **but** the back — and it always fires along the pad's own facing, never along the contact normal.
+The launch is gated by a per-pad debounce as well (`PAD_DEBOUNCE`, keyed on `padTy · map.w + padTx` in the controller), because a launching face can hold a body in contact indefinitely. The launch itself is the complementary test on the same contact: `n · facing > -PAD_BACK_DOT` — every face **but** the back — and it always fires along the pad's own facing, never along the contact normal.
 
 The spin arm follows the facing with it: **`r × facing`, not `r × n`**. The two agree on a face hit, where `n = facing`, and that was the only case that existed while pads fired from their face alone. On a side hit they are perpendicular, and the normal form measures the offset *along* the launch instead of across it — a dead-centre walk into the side of an up-pad, which is the largest torque an upward impulse applied 10 px to one side can produce, came out at no spin at all.
 

@@ -20,6 +20,7 @@ import {
   JUMP_VELOCITY,
   MAX_ANG_SPEED,
   MAX_FALL_SPEED,
+  PAD_DEBOUNCE,
   PAD_IMPULSE,
   PAD_SPIN_MAX,
   PLAYER_SIZE,
@@ -584,6 +585,130 @@ describe('jump pads (GAME-DESIGN §5, decision 4)', () => {
     expect(clip(3 * TILE + 4)).toBeLessThan(0);
     // Body right of the slab: only its left corner is.
     expect(clip(4 * TILE - 4)).toBeGreaterThan(0);
+  });
+
+  /** A world that counts `pad` sound effects, which is one per firing. */
+  function counting(map: TileMap): { w: EntityWorld; fires: () => number } {
+    let n = 0;
+    const w: EntityWorld = {
+      map,
+      particles: new ParticleSystem(),
+      rng: new Rng(1),
+      sfx: (name) => {
+        if (name === 'pad') {
+          n++;
+        }
+      },
+    };
+    return { w, fires: () => n };
+  }
+
+  /**
+   * A pad the body cannot get off: a right-facing pad standing on the floor
+   * with a wall one tile to its right. Stand on top of it — a SIDE, so it fires
+   * — and the launch drives the body into the wall and straight back into
+   * contact. Before the debounce this fired every single step.
+   */
+  function pinned(): TileMap {
+    const m = new TileMap(40, 14);
+    m.fillRect(0, 12, 40, 2, Tile.Solid);
+    m.set(3, 11, Tile.PadRight);
+    m.fillRect(4, 9, 1, 3, Tile.Solid);
+    return m;
+  }
+
+  it('A PINNED PAD DOES NOT RAPID-FIRE: at most one launch per PAD_DEBOUNCE', () => {
+    const map = pinned();
+    const { w, fires } = counting(map);
+    const p = new Player(0, 0);
+    p.spawnAt(3 * TILE + TILE / 2, 11 * TILE - PLAYER_SIZE / 2 - 2);
+    const seconds = 1;
+    const steps = Math.round(seconds / STEP);
+    for (let i = 0; i < steps; i++) {
+      p.update(STEP, inp({ right: true }), w);
+    }
+    expect(fires()).toBeGreaterThan(0); // it really is in contact with the pad
+    // One per debounce window, plus the one that opened the first window.
+    expect(fires()).toBeLessThanOrEqual(Math.ceil(seconds / PAD_DEBOUNCE) + 1);
+  });
+
+  it('the window is the debounce, not a fixed cooldown on the player', () => {
+    // Measured between two firings of the SAME pad rather than counted, so the
+    // claim is about the interval and not about the total.
+    const map = pinned();
+    const { w, fires } = counting(map);
+    const p = new Player(0, 0);
+    p.spawnAt(3 * TILE + TILE / 2, 11 * TILE - PLAYER_SIZE / 2 - 2);
+    const at: number[] = [];
+    let seen = 0;
+    for (let i = 0; i < 200; i++) {
+      p.update(STEP, inp({ right: true }), w);
+      if (fires() > seen) {
+        seen = fires();
+        at.push(i);
+      }
+    }
+    expect(at.length).toBeGreaterThan(1);
+    for (let i = 1; i < at.length; i++) {
+      expect((at[i] - at[i - 1]) * STEP).toBeGreaterThanOrEqual(PAD_DEBOUNCE - STEP);
+    }
+  });
+
+  it('IS PER PAD: a second pad fires inside the first one\'s window', () => {
+    // The whole of "tied to each jump pad". A body that has just fired one pad
+    // must not be deaf to the next one — a pad chain is two pads, and half a
+    // second of silence in the middle of it is the feature eating the game.
+    const map = new TileMap(40, 16);
+    map.fillRect(0, 14, 40, 2, Tile.Solid);
+    map.set(3, 13, Tile.PadUp); // fires the body up...
+    map.set(3, 9, Tile.PadDown); // ...into this one, well inside the window
+    const { w, fires } = counting(map);
+    const p = new Player(0, 0);
+    p.spawnAt(3 * TILE + TILE / 2, 13 * TILE - PLAYER_SIZE / 2 - 2);
+    let gap = -1;
+    let first = -1;
+    for (let i = 0; i < 60 && gap < 0; i++) {
+      p.update(STEP, NO_INPUTS, w);
+      if (fires() === 1 && first < 0) {
+        first = i;
+      }
+      if (fires() === 2) {
+        gap = (i - first) * STEP;
+      }
+    }
+    expect(gap).toBeGreaterThan(0);
+    expect(gap).toBeLessThan(PAD_DEBOUNCE); // the second pad was not debounced
+  });
+
+  it('a genuine return to the same pad still fires: the chain is untouched', () => {
+    // The shortest way back to a pad you were launched by is its own airtime,
+    // which is an order of magnitude longer than the window.
+    const map = padFloor();
+    const { w, fires } = counting(map);
+    const p = new Player(0, 0);
+    p.spawnAt(3 * TILE + TILE / 2, 10 * TILE - PLAYER_SIZE / 2 - 40);
+    for (let i = 0; i < Math.round(3 / STEP); i++) {
+      p.update(STEP, NO_INPUTS, w);
+    }
+    expect(fires()).toBeGreaterThanOrEqual(3); // it bounced, repeatedly
+  });
+
+  it('a respawn clears the windows, like every other field', () => {
+    const map = padFloor();
+    const { w, fires } = counting(map);
+    const p = new Player(0, 0);
+    p.spawnAt(3 * TILE + TILE / 2, 10 * TILE - PLAYER_SIZE / 2 - 2);
+    for (let i = 0; i < 4; i++) {
+      p.update(STEP, NO_INPUTS, w);
+    }
+    expect(fires()).toBe(1);
+    // Straight back onto the same pad. A window that survived the respawn would
+    // make the second attempt play differently from the first.
+    p.spawnAt(3 * TILE + TILE / 2, 10 * TILE - PLAYER_SIZE / 2 - 2);
+    for (let i = 0; i < 4; i++) {
+      p.update(STEP, NO_INPUTS, w);
+    }
+    expect(fires()).toBe(2);
   });
 
   it('a full-corner clip is exactly PAD_SPIN_MAX, and nothing exceeds it', () => {
