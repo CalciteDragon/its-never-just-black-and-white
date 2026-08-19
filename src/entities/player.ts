@@ -32,6 +32,7 @@ import {
   JUMP_VELOCITY,
   MAX_ANG_SPEED,
   MAX_FALL_SPEED,
+  PAD_FACE_DOT,
   PAD_IMPULSE,
   PAD_SPIN_MAX,
   PLAYER_CORE_INSET,
@@ -48,6 +49,20 @@ import { createBody, stepBody } from '../world/physics';
 import type { Contact, RigidBody } from '../world/physics';
 import { Tile, padDirection } from '../world/tiles';
 import type { EntityWorld } from './context';
+
+/**
+ * Did this contact strike the launching face of a pad?
+ *
+ * The normal runs tile → box and a pad's facing is the direction it throws
+ * you, so on the face the two point the same way and on the back they oppose.
+ * Anything within PAD_FACE_DOT of the facing fires; everything else — the
+ * back, both sides, and a glancing corner clip — is left as the ordinary solid
+ * collision the solver has already resolved.
+ */
+function padFaceStruck(c: Contact): boolean {
+  const dir = padDirection(c.pad);
+  return dir !== null && c.nx * dir.dx + c.ny * dir.dy > PAD_FACE_DOT;
+}
 
 /**
  * How big a landing splash is, from the impulse the solver reports. Pure and
@@ -250,13 +265,16 @@ export class Player {
       // predicate the solver does — but only a PLAIN SOLID recharges. A pad is
       // a ground-normal contact too, and §5 says a pad chain is a commitment.
       const isGroundNormal = -c.ny * gs > GROUND_NORMAL_DOT;
-      if (c.onSolid && isGroundNormal) {
+      // Only the face a pad points out of launches; its back and its sides are
+      // plain platform, so a contact there recharges exactly like a solid.
+      const launches = padFaceStruck(c);
+      if (isGroundNormal && (c.onSolid || (c.pad !== Tile.Empty && !launches))) {
         this.charged = true;
       }
       if (isGroundNormal && (!splash || c.impulse > splash.impulse)) {
         splash = c;
       }
-      if (!padFired && c.pad !== Tile.Empty) {
+      if (!padFired && launches) {
         this.firePad(c, world);
         padFired = true;
       }

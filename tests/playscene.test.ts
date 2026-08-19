@@ -16,6 +16,9 @@ import {
   PAD_STREAM_INTERVAL,
   PAD_STREAM_LIFE,
   SPEED_REF,
+  SPEED_WINDUP_DELAY,
+  SPEED_WINDUP_MIN,
+  SPEED_WINDUP_RAMP,
   STEP,
   TILE,
   VIEW_H,
@@ -26,7 +29,7 @@ import { MAX_PARTICLES } from '../src/engine/particles';
 import { SAVE_KEYS } from '../src/engine/save';
 import type { Scene } from '../src/game';
 import { LEVELS } from '../src/levels/index';
-import { PlayScene, formatTime } from '../src/scenes/play';
+import { PlayScene, formatTime, windupGate } from '../src/scenes/play';
 import type { PlayContext } from '../src/scenes/play';
 import { ResultsScene } from '../src/scenes/results';
 import { TitleScene } from '../src/scenes/title';
@@ -371,7 +374,9 @@ describe('pause', () => {
     h.input.onKey('KeyD', true);
     step(h, scene, 20);
     h.input.onKey('KeyD', false);
-    expect(scene.status.speedNorm).toBeGreaterThan(0.3); // it really was moving
+    // The body, not `speedNorm`: twenty frames is far short of the wind-up, so
+    // the effect number is legitimately still 0 while the square is at a run.
+    expect(Math.abs(scene.status.vx)).toBeGreaterThan(100); // it really was moving
     tap(h, scene, 'Escape');
     const from = h.audio.intensities.length;
     step(h, scene, 10);
@@ -571,6 +576,12 @@ describe('THE SCRIPTED PLAYTHROUGH', () => {
 
 describe('the bed, and the one number that drives it', () => {
   const WALK = ['..........', '..S.....G.', '####..####'];
+  /** Sixty-four tiles of floor: room to hold a run for the whole wind-up. */
+  const RUNWAY = [
+    '.'.repeat(64),
+    `..S${'.'.repeat(59)}G.`,
+    '#'.repeat(64),
+  ];
 
   it('is scene-scoped: enter starts it, exit stops it', () => {
     // `Scene.exit` has existed since phase 2 with no user; this is it. The
@@ -593,7 +604,43 @@ describe('the bed, and the one number that drives it', () => {
     h.input.onKey('KeyD', false);
     const last = h.audio.intensities[h.audio.intensities.length - 1];
     expect(last).toBeCloseTo(scene.status.speedNorm, 12);
-    expect(last).toBeGreaterThan(0.3); // it is running, so the bed should know
+  });
+
+  it('winds the bed up over seconds of running, not over one fast frame', () => {
+    // The escalation is a function of how long you have been fast, not of how
+    // fast you are this frame: SPEED_WINDUP_DELAY of silence, then a ramp. A
+    // corridor long enough to hold a run is the only fixture that can see it.
+    const { h, scene } = start(tinyLevel(RUNWAY));
+    h.input.onKey('KeyD', true);
+    const secs = (n: number): number => Math.round(n / STEP);
+
+    step(h, scene, secs(SPEED_WINDUP_DELAY - 0.2));
+    expect(Math.abs(scene.status.vx)).toBeGreaterThan(SPEED_WINDUP_MIN * SPEED_REF);
+    expect(scene.status.speedNorm).toBe(0); // fast, and still silent
+
+    step(h, scene, secs(SPEED_WINDUP_RAMP / 2));
+    const half = scene.status.speedNorm;
+    expect(half).toBeGreaterThan(0);
+
+    step(h, scene, secs(SPEED_WINDUP_RAMP));
+    const full = scene.status.speedNorm;
+    expect(full).toBeGreaterThan(half); // it kept climbing
+    expect(full).toBeGreaterThan(0.3);
+    expect(h.audio.intensities[h.audio.intensities.length - 1]).toBeCloseTo(full, 12);
+
+    // And it unwinds: standing still drains the bank it took to earn.
+    h.input.onKey('KeyD', false);
+    step(h, scene, secs(SPEED_WINDUP_DELAY + SPEED_WINDUP_RAMP + 1));
+    expect(scene.status.speedNorm).toBeLessThan(0.01);
+  });
+
+  it('windupGate is flat zero through the delay, then linear to 1', () => {
+    expect(windupGate(0)).toBe(0);
+    expect(windupGate(SPEED_WINDUP_DELAY)).toBe(0);
+    expect(windupGate(SPEED_WINDUP_DELAY + SPEED_WINDUP_RAMP / 2)).toBeCloseTo(0.5, 10);
+    expect(windupGate(SPEED_WINDUP_DELAY + SPEED_WINDUP_RAMP)).toBe(1);
+    expect(windupGate(1e6)).toBe(1); // clamped, never extrapolated
+    expect(windupGate(-1)).toBe(0);
   });
 
   it('DUCKS TO ZERO while dying, sampled during the fade and not after it', () => {

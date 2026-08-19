@@ -39,7 +39,7 @@ Sanctioned exceptions:
 | Exception | Colour | Rule |
 | --- | --- | --- |
 | Particles | `#4CC9F0` phase A / `#F0A44C` phase B | The only saturated colour on screen. Cool in phase A, warm in phase B — the flip is legible even from a single spark. |
-| Vignette | `paper`-toned, gaining a faint accent tint as speed rises | Alpha is a function of speed (§7). |
+| Vignette | `paper`-toned, deepening toward `ink` as speed rises | Alpha is a function of speed (§7). |
 | Chromatic aberration | R/B channel split | Sub-pixel below the threshold, up to `CA_MAX_OFFSET` px at top speed (§7). |
 
 ### Reading the player against the world
@@ -142,7 +142,7 @@ A tile that applies a fixed impulse in its facing direction (`up`, `down`, `left
 
 > *(Amended in phase 5.)* **A pad is a tile, not a trigger volume.** The off-centre torque above needs a real contact *point*, and §2 draws a pad as an `ink` slab, so the solver collides with pads exactly as it does with solid. Two consequences:
 >
-> - "Fires on contact, not on contact with its facing side" survives, because a pad set into geometry has its buried faces masked as interior and the case mostly cannot arise. Where it can — a free-standing slab — the simple rule is the readable one.
+> - *(Revised after 0.2 playtesting.)* **Only the face a pad points out of launches.** "Fires on any contact" was kept in phase 5 on the grounds that a pad set into geometry has its buried faces masked as interior, so the case mostly cannot arise — but where it does, on a free-standing slab, the rule reads as the pad having no collision at all: a body landing on the back of a down-pad was fired straight down through the slab that had just caught it. A contact within `PAD_FACE_DOT` of the facing launches; the back and the two sides are plain platform, and being plain platform they recharge the flip like any other solid.
 > - Because landing on a pad is a ground-*normal* contact, "does not recharge" cannot be expressed through `grounded`. Contacts carry tile identity instead; see [PHYSICS.md](PHYSICS.md) § Grounded. A body straddling a pad and the floor beside it both launches and recharges, which is the case that forces two bits rather than one.
 >
 > The spin needs its own scale (`PAD_SPIN_MAX`) because the physical impulse form saturates at five times `MAX_ANG_SPEED`, and the arm is measured from the **body's** centre — see PHYSICS.md § Game feel for both, and for why the controller's horizontal clamp had to become one-sided before sideways pads could exist at all.
@@ -224,7 +224,14 @@ Added in phase 4. These are not feel knobs — each one is the answer to a speci
 | `CA_MAX_OFFSET` | 3.0 px | channel split at normalised speed 1 |
 | `VIGNETTE_MIN` / `VIGNETTE_MAX` | 0.15 / 0.55 | alpha at rest / at full speed |
 | `VIGNETTE_INNER` | 0.45 | fraction of the radius left fully clear at the centre |
-| `VIGNETTE_TINT_MAX` | 0.22 | peak alpha of the accent tint over the vignette |
+| `VIGNETTE_TINT_MAX` | 0.22 | peak alpha of the ink tint over the vignette |
+| `SPEED_WINDUP_MIN` | 0.5 | normalised speed at or above which the wind-up bank fills |
+| `SPEED_WINDUP_DELAY` | 2.0 s | banked speed before any effect is non-zero |
+| `SPEED_WINDUP_RAMP` | 3.0 s | from the gate opening to full strength |
+| `SPEED_WINDUP_FILL_BIAS` | 1.0 × | fill rate at full speed; 1× at the threshold, linear between |
+| `SPEED_WINDUP_DRAIN_DELAY` | 0.0 s | grace below the threshold before the bank drains at all |
+| `SPEED_WINDUP_DRAIN_RATE` | 1.0 × | drain rate once that grace is spent |
+| `PAD_FACE_DOT` | 0.7 | how square-on a contact must be to count as a pad's launching face |
 | `BOUNCE_AMP` | 2.5 px | screen bounce amplitude at full speed |
 | `BOUNCE_FREQ` | 9.0 rad/s | bounce frequency at full speed |
 | `PAD_IMPULSE` | 820 px/s | jump pad launch velocity |
@@ -314,11 +321,17 @@ Added in phase 6. Every emitter is gravity-relative or normal-relative; nothing 
 
 ## 7. Speed-driven effects
 
-One number drives all of them. `speedNorm = clamp(|v| / SPEED_REF, 0, 1)`, smoothed with a short exponential lag so a single frame of contact doesn't flicker the whole screen.
+One number drives all of them. `speedNorm = clamp(|v| / SPEED_REF, 0, 1) · windupGate`, smoothed with a short exponential lag so a single frame of contact doesn't flicker the whole screen.
+
+*(Revised after 0.2 playtesting.)* **The effects are earned over time, not bought by one fast frame.** The scene banks seconds spent at or above `SPEED_WINDUP_MIN`; `windupGate` is exactly 0 until `SPEED_WINDUP_DELAY` of that bank and climbs linearly to 1 over the following `SPEED_WINDUP_RAMP`.
+
+Filling and draining are shaped separately, because they answer separate questions. **Filling** is scaled by how far over the threshold you are: 1× at the threshold itself, `SPEED_WINDUP_FILL_BIAS` at full speed, linear between — so above 1 a flat-out run is worth more than a jog over the line, and below 1 it is worth less. **Draining** first has to outlast `SPEED_WINDUP_DRAIN_DELAY`, the grace that makes a landing, a wall bump or a moment of air cost nothing at all, and then runs at `SPEED_WINDUP_DRAIN_RATE` (0 banks permanently for the attempt). All three ship neutral, reproducing the flat symmetric bank exactly. Speed is cheap here — every pad chain buys a second of it — so gating on *duration* is what separates a fast moment, which stays clean, from a sustained run, which is the thing worth escalating for.
+
+The three numbers are authored by feel, in the browser: `?tune=1` mounts the wind-up tuner (ARCHITECTURE.md § Dev tooling), which drives `engine/tuning.ts` live and emits the `constants.ts` lines to make a session permanent.
 
 | Effect | Response |
 | --- | --- |
-| Vignette | alpha lerps `VIGNETTE_MIN → VIGNETTE_MAX`; accent tint fades in over the top half of the range, peaking at `VIGNETTE_TINT_MAX` |
+| Vignette | alpha lerps `VIGNETTE_MIN → VIGNETTE_MAX`; an `ink` tint fades in over the top half of the range, peaking at `VIGNETTE_TINT_MAX`. Ink, not accent: accent is the particles' colour alone (§2), so speed deepens the frame rather than staining it |
 | Chromatic aberration | zero below `CA_THRESHOLD`, then ramps to `CA_MAX_OFFSET` px |
 | Screen bounce | vertical camera offset `sin(phase) · BOUNCE_AMP · speedNorm`, where `phase += BOUNCE_FREQ · speedNorm · dt` |
 | Music | layer gates at `MUSIC_GATE_HATS` / `_BASS` / `_ARP`; master gain ramps `MUSIC_GAIN_MIN → MUSIC_GAIN_MAX` across the range |

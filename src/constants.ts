@@ -183,6 +183,42 @@ export const CAMERA_VSLACK = 64;
 export const SPEED_REF = 320;
 /** Exponential lag on speedNorm (1/s) — one frame of wall contact can't strobe. */
 export const SPEED_SMOOTH_RATE = 6;
+/*
+ * The effect WIND-UP (GAME-DESIGN §7). Speed alone no longer buys the effects:
+ * the scene banks seconds spent at or above SPEED_WINDUP_MIN, and the whole
+ * effect stack — vignette, tint, aberration, screen bounce, music bed — is
+ * scaled by a gate that is exactly 0 until SPEED_WINDUP_DELAY of that bank and
+ * only reaches 1 SPEED_WINDUP_RAMP later. A burst of speed between two ledges
+ * is therefore invisible; a sustained run is what escalates.
+ *
+ * Filling and draining are separately shaped, because they are separate
+ * questions. Filling is scaled by how far over the threshold you are
+ * (SPEED_WINDUP_FILL_BIAS). Draining waits SPEED_WINDUP_DRAIN_DELAY before it
+ * starts — the grace that stops a landing or a wall bump costing anything at
+ * all — and then runs at SPEED_WINDUP_DRAIN_RATE. All three ship neutral: the
+ * defaults reproduce the flat symmetric bank exactly.
+ */
+/** speedNorm at or above which the wind-up bank fills rather than drains. */
+export const SPEED_WINDUP_MIN = 0.5;
+/** Seconds banked before any speed effect is non-zero. */
+export const SPEED_WINDUP_DELAY = 2.0;
+/** Seconds from the gate opening to full strength — deliberately slow. */
+export const SPEED_WINDUP_RAMP = 3.0;
+/**
+ * How fast the bank fills at FULL speed, as a multiple of real time. The rate
+ * lerps from 1× at exactly `SPEED_WINDUP_MIN` to this at speedNorm 1, so above
+ * 1 a flat-out run is worth more than a jog-just-over-the-line and below 1 it
+ * is worth less. Exactly 1 is a flat bank that only asks *whether* you were
+ * fast, which is where the wind-up started.
+ */
+export const SPEED_WINDUP_FILL_BIAS = 1.0;
+/** Seconds below the threshold before the bank starts draining at all. */
+export const SPEED_WINDUP_DRAIN_DELAY = 0.0;
+/**
+ * How fast the bank drains once that grace is spent, as a multiple of real
+ * time. 1 is symmetric with a 1× fill; 0 banks permanently for the attempt.
+ */
+export const SPEED_WINDUP_DRAIN_RATE = 1.0;
 /** speedNorm below which chromatic aberration is exactly zero. */
 export const CA_THRESHOLD = 0.45;
 /** Channel split at speedNorm 1 (px). */
@@ -192,7 +228,7 @@ export const VIGNETTE_MIN = 0.15;
 export const VIGNETTE_MAX = 0.55;
 /** Fraction of the radius that stays fully clear at the gradient's centre. */
 export const VIGNETTE_INNER = 0.45;
-/** Peak alpha of the accent tint layered over the vignette at speedNorm 1. */
+/** Peak alpha of the ink tint layered over the vignette at speedNorm 1. */
 export const VIGNETTE_TINT_MAX = 0.22;
 /** Screen bounce amplitude at full speed (px). */
 export const BOUNCE_AMP = 2.5;
@@ -220,6 +256,18 @@ export const PAD_IMPULSE = 820;
  * then a real distinction rather than a constant tumble.
  */
 export const PAD_SPIN_MAX = 8.0;
+/**
+ * How square-on a contact must be to count as hitting a pad's FACE.
+ *
+ * A pad launches along its facing, and only the face it points out of does
+ * that: its back and its two sides are plain platform. Without this test a
+ * body landing on the back of an up-pad was launched up *through* the slab it
+ * had just landed on, which reads as the pad having no collision at all.
+ * Shares GROUND_NORMAL_DOT's value and its reasoning — a box balanced on one
+ * of its own corners contacts up to 45° off the face normal, and that contact
+ * is still on the face.
+ */
+export const PAD_FACE_DOT = 0.7;
 /** Death fade out, then back in after the respawn (s). */
 export const DEATH_FADE_OUT = 0.35;
 export const DEATH_FADE_IN = 0.25;

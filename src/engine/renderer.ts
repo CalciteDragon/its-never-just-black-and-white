@@ -94,7 +94,7 @@ function clamp01(n: number): number {
 }
 
 /**
- * Fraction of the range the accent tint stays fully off for. Not a tuning knob,
+ * Fraction of the range the ink tint stays fully off for. Not a tuning knob,
  * so it isn't in constants.ts: GAME-DESIGN §7 defines the tint as arriving "over
  * the top half of the range", and the half is the spec.
  */
@@ -106,9 +106,13 @@ export function vignetteAlpha(speedNorm: number): number {
 }
 
 /**
- * Alpha of the accent tint layered over the vignette. Zero across the bottom
- * half of the range — colour is rationed, and a tint present at rest would read
- * as decoration instead of as an event.
+ * Alpha of the ink tint layered over the vignette. Zero across the bottom
+ * half of the range — the darkening is rationed, and a tint present at rest
+ * would read as decoration instead of as an event.
+ *
+ * INK, not accent: accent is the particles' colour and nothing else (hard rule
+ * 6 keeps colour scarce), so the speed vignette deepens toward the ink the
+ * geometry is already drawn in rather than staining the frame.
  */
 export function tintAmount(speedNorm: number): number {
   const n = clamp01(speedNorm);
@@ -161,7 +165,7 @@ export class Renderer {
    * thing that can invalidate them, and the renderer notices that itself.
    */
   private gradPaper: CanvasGradient | null = null;
-  private gradAccent: CanvasGradient | null = null;
+  private gradInk: CanvasGradient | null = null;
   private gradPhase = -1;
 
   constructor(visibleCanvas: HTMLCanvasElement) {
@@ -338,7 +342,7 @@ export class Renderer {
     ctx.restore();
   }
 
-  /** Radial paper darkening, plus the accent tint over the top half of the range. */
+  /** Radial paper darkening, plus the ink tint over the top half of the range. */
   private vignette(speedNorm: number): void {
     this.ensureGradients();
     const ctx = this.ctx;
@@ -350,14 +354,14 @@ export class Renderer {
     const tint = tintAmount(speedNorm);
     if (tint > 0) {
       ctx.globalAlpha = tint;
-      ctx.fillStyle = this.gradAccent as CanvasGradient;
+      ctx.fillStyle = this.gradInk as CanvasGradient;
       ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     }
     ctx.restore();
   }
 
   private ensureGradients(): void {
-    if (this.gradPhase === palette.phase && this.gradPaper && this.gradAccent) {
+    if (this.gradPhase === palette.phase && this.gradPaper && this.gradInk) {
       return;
     }
     const cx = VIEW_W / 2;
@@ -367,11 +371,11 @@ export class Renderer {
     const paper = this.ctx.createRadialGradient(cx, cy, inner, cx, cy, r);
     paper.addColorStop(0, palette.paperRgba(0));
     paper.addColorStop(1, palette.paperRgba(1));
-    const accent = this.ctx.createRadialGradient(cx, cy, inner, cx, cy, r);
-    accent.addColorStop(0, palette.accentRgba(0));
-    accent.addColorStop(1, palette.accentRgba(1));
+    const ink = this.ctx.createRadialGradient(cx, cy, inner, cx, cy, r);
+    ink.addColorStop(0, palette.inkRgba(0));
+    ink.addColorStop(1, palette.inkRgba(1));
     this.gradPaper = paper;
-    this.gradAccent = accent;
+    this.gradInk = ink;
     this.gradPhase = palette.phase;
   }
 

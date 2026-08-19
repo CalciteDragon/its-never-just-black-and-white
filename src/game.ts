@@ -76,6 +76,15 @@ export class Game {
     this.save.setFlag(SAVE_KEYS.muted, this.audio.muted);
   }
 
+  /**
+   * The scene on screen, for the dev tuner's readout — which has to ask a live
+   * `PlayScene` what its wind-up bank is up to. Read-only and outside the loop:
+   * scenes are still swapped through `setScene` alone.
+   */
+  get activeScene(): Scene | null {
+    return this.scene;
+  }
+
   setScene(s: Scene): void {
     if (this.scene?.exit) {
       this.scene.exit(this);

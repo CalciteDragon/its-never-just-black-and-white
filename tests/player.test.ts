@@ -623,10 +623,11 @@ describe('jump pads (GAME-DESIGN §5, decision 4)', () => {
     expect(p.body.y).toBeLessThan(10 * TILE - PLAYER_SIZE);
   });
 
-  it('fires on contact with any face, since a pad is a tile and not a trigger', () => {
-    // §5 fires a pad on contact, not on contact with its facing side. A pad set
-    // into geometry has its sides masked as interior faces so the case mostly
-    // cannot arise; on a free-standing slab it can, and the simple rule reads.
+  it('LAUNCHES OFF ITS FACE ONLY: a side hit is plain platform', () => {
+    // A pad set into geometry has its sides masked as interior faces, so this
+    // only arises on a free-standing slab — where firing on the side threw the
+    // body up out of a contact it should simply have been stopped by. Walking
+    // left into the side of an up-pad is a wall, and nothing else.
     const map = new TileMap(40, 14);
     map.fillRect(0, 12, 40, 2, Tile.Solid);
     map.set(3, 11, Tile.PadUp);
@@ -638,7 +639,34 @@ describe('jump pads (GAME-DESIGN §5, decision 4)', () => {
       p.update(STEP, inp({ left: true }), w);
       launched = p.body.vy < -100;
     }
-    expect(launched).toBe(true);
+    expect(launched).toBe(false);
+    // ...and it really did reach the pad and stop against it, rather than
+    // wandering off and never touching the thing.
+    expect(p.body.x).toBeGreaterThan(4 * TILE);
+    expect(p.body.x).toBeLessThan(5 * TILE);
+  });
+
+  it('ITS BACK IS A PLATFORM: it blocks, it recharges, and it never launches', () => {
+    // Landing on the back of a down-pad used to fire the launch — straight
+    // down, through the slab that had just caught the body. It is a floor.
+    const map = new TileMap(40, 14);
+    map.fillRect(0, 12, 40, 2, Tile.Solid);
+    map.set(3, 10, Tile.PadDown);
+    const p = new Player(0, 0);
+    p.spawnAt(3 * TILE + TILE / 2, 10 * TILE - PLAYER_SIZE / 2 - 60);
+    const w = world(map);
+    spendCharge(p, w);
+    expect(p.flipCharged).toBe(false);
+    let fired = false;
+    for (let i = 0; i < 120; i++) {
+      p.update(STEP, NO_INPUTS, w);
+      fired = fired || p.body.vy > 700; // a launch is PAD_IMPULSE (820), not a fall
+    }
+    expect(fired).toBe(false);
+    // It came to rest ON TOP of the pad — not through it, not on the floor two
+    // rows below — and the landing recharged the flip like any other solid.
+    expect(p.body.y).toBeCloseTo(10 * TILE - PLAYER_SIZE / 2, 0);
+    expect(p.flipCharged).toBe(true);
   });
 });
 

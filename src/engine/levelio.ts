@@ -140,7 +140,7 @@ function detectStorage(): StorageLike | null {
  * lose a level. Null whenever the API is missing (node, http on a LAN address,
  * a browser that gates it behind a permission that was refused).
  */
-function detectClipboard(): ((text: string) => Promise<void>) | null {
+export function detectClipboard(): ((text: string) => Promise<void>) | null {
   try {
     const nav = (globalThis as { navigator?: { clipboard?: { writeText?: unknown } } }).navigator;
     const write = nav?.clipboard?.writeText;
@@ -177,7 +177,7 @@ function writeDraft(storage: StorageLike | null, text: string): boolean {
  * exists but the API is disabled). Awaited rather than fired and forgotten, so
  * the outcome can say honestly whether the JSON is actually on the clipboard.
  */
-async function copyToClipboard(
+export async function copyToClipboard(
   clipboard: ((text: string) => Promise<void>) | null,
   text: string,
 ): Promise<boolean> {

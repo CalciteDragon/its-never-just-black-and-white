@@ -100,7 +100,7 @@ export class Palette {
     return rgba(INK_RGB[phase], a);
   }
 
-  /** `accent` at a given alpha — the vignette's speed tint. */
+  /** `accent` at a given alpha. Particles only; the vignette tints with ink. */
   accentRgba(a: number): string {
     return rgba(ACCENT_RGB[this.phase], a);
   }

@@ -41,6 +41,7 @@ import { ParticleSystem, spawnStream } from '../engine/particles';
 import type { Renderer } from '../engine/renderer';
 import { Rng } from '../engine/rng';
 import { SAVE_KEYS } from '../engine/save';
+import { windup } from '../engine/tuning';
 import type { EntityWorld } from '../entities/context';
 import { NO_INPUTS, Player } from '../entities/player';
 import type { PlayerInputs } from '../entities/player';
@@ -81,6 +82,81 @@ export type PlayContext =
 /** The pause overlay, in order. `Esc` opens it; the sim is frozen behind it. */
 const PAUSE_ITEMS: readonly string[] = ['RESUME', 'RESTART', 'QUIT'];
 
+/**
+ * The wind-up gate: how much of the speed effect stack `bankedSec` has earned.
+ *
+ * Flat zero for the delay, then a linear climb to 1 over the ramp. Speed on its
+ * own is cheap in this game — every pad chain buys a second of it — so a gate
+ * on the *duration* of speed is what separates a fast moment from a fast run,
+ * and only the run is worth escalating for.
+ *
+ * Reads `windup`, not the constants: these numbers are authored by feel through
+ * the dev tuner (`src/devtuner.ts`), and the tuner has to be able to move them
+ * mid-run. The record's defaults ARE the constants, so nothing about the
+ * shipped game changes. Pure in the sense that matters — same tuning and same
+ * argument, same answer — and exported so the ramp is testable.
+ */
+export function windupGate(bankedSec: number): number {
+  const t = (bankedSec - windup.delay) / windup.ramp;
+  return t > 0 ? (t < 1 ? t : 1) : 0;
+}
+
+/**
+ * How fast the bank fills at this speed, as a multiple of real time.
+ *
+ * 1× exactly at the threshold, `fillBias` at full speed, linear between — and
+ * flat 0 below the threshold, which is what makes this the *only* thing the
+ * caller has to ask about filling. Measuring the lerp from `min` rather than
+ * from zero is the point: the interesting range is the part of the speedometer
+ * that banks at all, so moving the threshold reshapes the curve with it instead
+ * of leaving a bias calibrated against a speed that no longer counts.
+ */
+export function windupFillRate(raw: number): number {
+  if (raw < windup.min) {
+    return 0;
+  }
+  const span = 1 - windup.min;
+  // A threshold at 1.0 leaves no range to lerp across; only the top speed
+  // banks, and it banks at the bias.
+  const u = span > 0 ? Math.min(1, (raw - windup.min) / span) : 1;
+  return 1 + (windup.fillBias - 1) * u;
+}
+
+/** The wind-up's whole state: seconds banked, and seconds spent slow. */
+export interface WindupState {
+  /** Seconds of credit, which `windupGate` spends. */
+  bank: number;
+  /** Consecutive seconds below the threshold. Resets the moment you are fast. */
+  idle: number;
+}
+
+/**
+ * Advance the bank by one step. Mutates, like the solver's manifolds — this
+ * runs every frame and returning a fresh pair would allocate for nothing.
+ *
+ * The asymmetry between the two halves is deliberate and is the tuning surface:
+ * filling is scaled by how far over the threshold you are, while draining first
+ * has to outlast `drainDelay`. That grace is what buys a landing, a wall bump
+ * or a moment of air for free — the events that punctuate a run without ending
+ * it — where a symmetric bank charges for every one of them.
+ */
+export function stepWindup(w: WindupState, raw: number, dt: number): void {
+  const ceiling = windup.delay + windup.ramp;
+  if (raw >= windup.min) {
+    w.idle = 0;
+    w.bank = Math.min(ceiling, w.bank + windupFillRate(raw) * dt);
+    return;
+  }
+  w.idle += dt;
+  // The grace is spent from THIS step's dt, so crossing the boundary mid-step
+  // drains the remainder rather than a whole step: the bank must not depend on
+  // where the fixed steps happen to land relative to the delay.
+  const draining = Math.min(dt, w.idle - windup.drainDelay);
+  if (draining > 0) {
+    w.bank = Math.max(0, w.bank - windup.drainRate * draining);
+  }
+}
+
 export class PlayScene implements Scene {
   private readonly level: Level;
   private readonly ctx: PlayContext;
@@ -91,6 +167,12 @@ export class PlayScene implements Scene {
 
   /** The one number every effect reads (GAME-DESIGN §7). */
   private speedNorm = 0;
+  /**
+   * The wind-up bank, and how long it has been slow. Kept apart from
+   * `speedNorm` because it must NOT be smoothed: the smoother is an anti-strobe
+   * filter on the current frame, and this is a memory of the whole run.
+   */
+  private readonly windupState: WindupState = { bank: 0, idle: 0 };
   private state: PlayState = 'running';
   /** Seconds inside the current state. */
   private stateT = 0;
@@ -151,6 +233,8 @@ export class PlayScene implements Scene {
     gravitySign: 1 | -1;
     flipCharged: boolean;
     speedNorm: number;
+    windupSec: number;
+    windupIdleSec: number;
     particles: number;
   } {
     const b = this.player.body;
@@ -165,6 +249,8 @@ export class PlayScene implements Scene {
       gravitySign: this.player.gravitySign,
       flipCharged: this.player.flipCharged,
       speedNorm: this.speedNorm,
+      windupSec: this.windupState.bank,
+      windupIdleSec: this.windupState.idle,
       particles: this.particles.aliveCount,
     };
   }
@@ -182,6 +268,8 @@ export class PlayScene implements Scene {
     palette.reset(); // the other half of gravitySign = +1
     this.particles.clear();
     this.speedNorm = 0;
+    this.windupState.bank = 0;
+    this.windupState.idle = 0;
     this.timeSec = 0;
     this.state = 'running';
     this.stateT = 0;
@@ -280,7 +368,13 @@ export class PlayScene implements Scene {
     // Exponential lag, so a single frame of wall contact can't strobe the whole
     // screen from a full vignette down to nothing and back.
     const b = this.player.body;
-    const target = Math.min(1, Math.hypot(b.vx, b.vy) / SPEED_REF);
+    const raw = Math.min(1, Math.hypot(b.vx, b.vy) / SPEED_REF);
+    // The bank fills while genuinely moving, at a rate scaled by how fast, and
+    // drains once a stretch of slow has outlasted its grace. Clamped at both
+    // ends inside `stepWindup`, so a long run can't bank an hour of credit that
+    // survives a stop.
+    stepWindup(this.windupState, raw, dt);
+    const target = raw * windupGate(this.windupState.bank);
     this.speedNorm += (target - this.speedNorm) * Math.min(1, SPEED_SMOOTH_RATE * dt);
 
     this.camera.update(this.player.centerX, this.player.centerY, b.vx, this.speedNorm, dt);
