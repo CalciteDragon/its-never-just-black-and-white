@@ -437,6 +437,119 @@ export class EditorGrid {
   }
 
   /**
+   * Fill the rectangle spanned by two corners, **both inclusive**, with one
+   * character. Returns whether anything changed.
+   *
+   * The corners arrive in whatever order the drag made them and the rectangle
+   * is normalised here rather than in the scene, because "which corner is the
+   * anchor" is a question the model can answer once for the two tools that ask
+   * it. Off-grid corners CLIP rather than refuse: a drag that overshoots the
+   * edge is an author filling to the edge, not a mistake.
+   *
+   * It is `paint` in a loop under one `atomic`, which is the whole design — the
+   * marker rules, the undo commit and the changed-anything answer are then the
+   * same ones a brush stroke gets, rather than a second set that agrees with
+   * them today. Filling **with** a marker places exactly one, at the ANCHOR
+   * corner: the singleton rule outranks the rectangle, the way it outranks a
+   * flood, and the anchor is the cell the author actually pointed at.
+   */
+  fillRect(x0: number, y0: number, x1: number, y1: number, ch: string): boolean {
+    if (!isGridChar(ch) || this.grid.length === 0) {
+      return false;
+    }
+    if (isMarker(ch)) {
+      let moved = false;
+      this.atomic(() => {
+        moved = this.paint(Math.floor(x0), Math.floor(y0), ch);
+      });
+      return moved;
+    }
+    const r = this.clipRect(x0, y0, x1, y1);
+    if (r === null) {
+      return false;
+    }
+    let changed = false;
+    this.atomic(() => {
+      for (let ty = r.y0; ty <= r.y1; ty++) {
+        for (let tx = r.x0; tx <= r.x1; tx++) {
+          changed = this.paint(tx, ty, ch) || changed;
+        }
+      }
+    });
+    return changed;
+  }
+
+  /**
+   * Lift the rectangle spanned by two corners and stamp it (dx, dy) cells away,
+   * leaving empty behind. Returns whether anything changed.
+   *
+   * **It lifts the WHOLE rectangle before stamping any of it**, which is what
+   * makes an overlapping move a move rather than a smear — the classic bug of
+   * a per-cell implementation, where a block dragged one cell right copies its
+   * own left column across itself. The empty cells travel too: a selection is
+   * opaque, so dragging a block over other geometry replaces it rather than
+   * merging into it, which is the only version an author can predict.
+   *
+   * Two rules follow from reusing `paint` for the stamp, and both are the ones
+   * that keep the format valid: a marker inside the region travels with it (it
+   * was lifted, so the singleton it re-stamps is the only one), and a marker
+   * OUTSIDE the region survives being stamped on, exactly as it survives a
+   * brush. Anything that lands off the grid is dropped, not wrapped.
+   */
+  moveRect(x0: number, y0: number, x1: number, y1: number, dx: number, dy: number): boolean {
+    const r = this.clipRect(x0, y0, x1, y1);
+    const ox = Math.trunc(dx);
+    const oy = Math.trunc(dy);
+    if (r === null || (ox === 0 && oy === 0)) {
+      return false;
+    }
+    const before = this.grid.slice();
+    // The lift reads through `charAt` and writes through `writeChar`, NOT
+    // through `paint`: paint refuses to erase a marker, and a marker inside the
+    // selection is precisely the thing that has to move.
+    const lifted: string[] = [];
+    for (let ty = r.y0; ty <= r.y1; ty++) {
+      for (let tx = r.x0; tx <= r.x1; tx++) {
+        lifted.push(this.charAt(tx, ty));
+      }
+    }
+    this.atomic(() => {
+      for (let ty = r.y0; ty <= r.y1; ty++) {
+        for (let tx = r.x0; tx <= r.x1; tx++) {
+          this.writeChar(tx, ty, EMPTY_CHAR);
+        }
+      }
+      let i = 0;
+      for (let ty = r.y0; ty <= r.y1; ty++) {
+        for (let tx = r.x0; tx <= r.x1; tx++) {
+          this.paint(tx + ox, ty + oy, lifted[i++]);
+        }
+      }
+    });
+    return !sameRows(before, this.grid);
+  }
+
+  /**
+   * Two corners in any order → an inclusive rectangle clipped to the grid, or
+   * null if it misses the grid entirely. Shared by the two rectangle tools so
+   * they cannot disagree about whether a corner is inside.
+   */
+  private clipRect(
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+  ): { x0: number; y0: number; x1: number; y1: number } | null {
+    const lo = (a: number, b: number): number => Math.floor(Math.min(a, b));
+    const hi = (a: number, b: number): number => Math.floor(Math.max(a, b));
+    const rx0 = Math.max(0, lo(x0, x1));
+    const ry0 = Math.max(0, lo(y0, y1));
+    const rx1 = Math.min(this.w - 1, hi(x0, x1));
+    const ry1 = Math.min(this.h - 1, hi(y0, y1));
+    return rx0 > rx1 || ry0 > ry1 ? null : { x0: rx0, y0: ry0, x1: rx1, y1: ry1 };
+  }
+
+  /**
    * Grow (positive delta) or crop (negative) from one edge, clamped to
    * [1, EDITOR_MAX_*]. A resize from the left or the top shifts the spawn and
    * the goal along with everything else, because they are characters in the

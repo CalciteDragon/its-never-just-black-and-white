@@ -793,3 +793,197 @@ describe('the size field', () => {
     expect(JSON.parse(draft as string).rows[0]).toHaveLength(12);
   });
 });
+
+/**
+ * A stage tall enough that every cell a tool test touches is CLEAR OF THE
+ * HEADER PLATE. The header is an opaque overlay spanning the top ~48 px, and a
+ * press on any overlay is a press on the overlay — so a drag anchored at row 1
+ * of a five-row stage never reaches the grid at all, which is a test that
+ * passes for the wrong reason at best.
+ */
+const TALL: readonly string[] = [
+  '..........',
+  '..........',
+  '..........',
+  '...S...G..',
+  '..........',
+  '..........',
+  '..........',
+  '##########',
+];
+
+describe('the rectangle tool', () => {
+  it('X picks it, and B goes back to the brush', () => {
+    const { h, scene } = open(TALL);
+    expect(scene.state.tool).toBe('brush');
+    tap(h, scene, 'KeyX');
+    expect(scene.state.tool).toBe('rect');
+    tap(h, scene, 'KeyB');
+    expect(scene.state.tool).toBe('brush');
+  });
+
+  it('fills the dragged rectangle, ONCE, on release', () => {
+    const { h, scene } = open(TALL);
+    tap(h, scene, 'Digit2'); // '#'
+    tap(h, scene, 'KeyX');
+    drag(h, scene, [
+      [3, 3],
+      [4, 3],
+      [4, 4],
+    ]);
+    expect(scene.state.rows[3]).toBe('...S#..G..'); // the S at (3,3) is spared
+    expect(scene.state.rows[4]).toBe('...##.....');
+    expect(scene.state.rows[5]).toBe('..........'); // the drag never went there
+    expect(scene.state.undoDepth).toBe(1);
+  });
+
+  it('paints NOTHING until the button comes up, so the drag is a preview', () => {
+    const { h, scene } = open(TALL);
+    tap(h, scene, 'Digit2');
+    tap(h, scene, 'KeyX');
+    const before = scene.state.rows;
+    const [ax, ay] = cellCentre(scene, 2, 4);
+    h.input.onPointerDown(ax, ay, 0);
+    step(h, scene);
+    const [bx, by] = cellCentre(scene, 6, 5);
+    h.input.onPointerMove(bx, by);
+    step(h, scene);
+    expect(scene.state.rows).toEqual(before);
+    h.input.onPointerUp(bx, by, 0);
+    step(h, scene);
+    expect(scene.state.rows[4]).toBe('..#####...');
+    expect(scene.state.rows[5]).toBe('..#####...');
+  });
+
+  it('fills the same rectangle whichever corner the drag started from', () => {
+    const { h, scene } = open(TALL);
+    tap(h, scene, 'Digit2');
+    tap(h, scene, 'KeyX');
+    drag(h, scene, [
+      [6, 5],
+      [4, 4],
+    ]);
+    expect(scene.state.rows[4]).toBe('....###...');
+    expect(scene.state.rows[5]).toBe('....###...');
+  });
+
+  it('right-drag erases a rectangle', () => {
+    const { h, scene } = open(TALL);
+    tap(h, scene, 'KeyX');
+    drag(
+      h,
+      scene,
+      [
+        [0, 7],
+        [2, 7],
+      ],
+      MOUSE_RIGHT,
+    );
+    expect(scene.state.rows[7]).toBe('...#######');
+  });
+});
+
+describe('the select tool', () => {
+  /** TALL with a 2x2 block to pick up, clear of both markers. */
+  const BLOCKS: readonly string[] = [
+    '..........',
+    '..........',
+    '..........',
+    '...S...G..',
+    '....##....',
+    '....##....',
+    '..........',
+    '##########',
+  ];
+
+  function selected(): { h: Harness; scene: EditorScene } {
+    const { h, scene } = open(BLOCKS);
+    tap(h, scene, 'KeyV');
+    drag(h, scene, [
+      [4, 4],
+      [5, 5],
+    ]);
+    return { h, scene };
+  }
+
+  it('V picks it, and a drag marks out a selection without editing anything', () => {
+    const { scene } = selected();
+    expect(scene.state.tool).toBe('select');
+    expect(scene.state.selection).toEqual({ x0: 4, y0: 4, x1: 5, y1: 5 });
+    expect(scene.state.rows).toEqual(BLOCKS);
+    expect(scene.state.undoDepth).toBe(0);
+  });
+
+  it('DRAGGING FROM INSIDE THE SELECTION MOVES THE BLOCK, in one undo step', () => {
+    const { h, scene } = selected();
+    drag(h, scene, [
+      [4, 4],
+      [5, 4],
+      [6, 4],
+    ]); // two cells right
+    expect(scene.state.rows[4]).toBe('......##..');
+    expect(scene.state.rows[5]).toBe('......##..');
+    expect(scene.state.undoDepth).toBe(1);
+    // The selection travels with what it moved, so the block can be dragged on.
+    expect(scene.state.selection).toEqual({ x0: 6, y0: 4, x1: 7, y1: 5 });
+  });
+
+  it('a drag that starts OUTSIDE the selection marks out a new one instead', () => {
+    const { h, scene } = selected();
+    drag(h, scene, [
+      [0, 6],
+      [1, 6],
+    ]);
+    expect(scene.state.selection).toEqual({ x0: 0, y0: 6, x1: 1, y1: 6 });
+    expect(scene.state.rows).toEqual(BLOCKS);
+  });
+
+  it('a moved block carries the spawn with it', () => {
+    const { h, scene } = open(BLOCKS);
+    tap(h, scene, 'KeyV');
+    drag(h, scene, [
+      [3, 3],
+      [3, 3],
+    ]);
+    drag(h, scene, [
+      [3, 3],
+      [3, 4],
+    ]);
+    expect(scene.state.rows[3]).toBe('.......G..');
+    expect(scene.state.rows[4]).toBe('...S##....');
+    expect(validateLevel(scene.state.rows)).toEqual([]);
+  });
+
+  it('ESCAPE CLEARS THE SELECTION rather than leaving the editor', () => {
+    // The first Escape is the selection's; only the second one quits. A modal
+    // key that skips its innermost mode is how an author loses a level.
+    const { h, scene } = selected();
+    tap(h, scene, 'Escape');
+    expect(scene.state.selection).toBeNull();
+    expect(h.scenes).toHaveLength(0);
+    tap(h, scene, 'Escape');
+    expect(h.scenes[0]).toBeInstanceOf(TitleScene);
+  });
+
+  it('switching tools drops the selection, so no outline outlives its tool', () => {
+    const { h, scene } = selected();
+    tap(h, scene, 'KeyB');
+    expect(scene.state.selection).toBeNull();
+  });
+
+  it('never paints, whichever button is used', () => {
+    const { h, scene } = selected();
+    const before = scene.state.rows;
+    drag(
+      h,
+      scene,
+      [
+        [1, 6],
+        [3, 6],
+      ],
+      MOUSE_RIGHT,
+    );
+    expect(scene.state.rows).toEqual(before);
+    expect(scene.state.selection).toBeNull(); // right-click drops it
+  });
+});

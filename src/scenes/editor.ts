@@ -25,6 +25,8 @@ import {
   EDITOR_DEFAULT_H,
   EDITOR_DEFAULT_W,
   EDITOR_GRID_ALPHA,
+  EDITOR_MARQUEE_ALPHA,
+  EDITOR_MARQUEE_WIDTH,
   EDITOR_PAN_SPEED,
   EDITOR_ZOOM_STEPS,
   PAD_CHEVRON_LEN,
@@ -34,6 +36,7 @@ import {
   VIEW_W,
 } from '../constants';
 import {
+  EMPTY_CHAR,
   EditorGrid,
   GRID_CHARS,
   blankRows,
@@ -70,6 +73,38 @@ export interface EditorInit {
  * why they are visible on screen while active.
  */
 type Mode = 'paint' | 'id' | 'name' | 'size';
+
+/**
+ * The three drawing tools. `mode` is *modal state* — a field open, a pan under
+ * way — while this is what the left button MEANS in paint mode, which is why
+ * they are separate fields rather than five values of one enum: a rectangle
+ * drag is not a mode, and a name field is not a tool.
+ */
+export type Tool = 'brush' | 'rect' | 'select';
+
+/** An inclusive rectangle of cells, in grid coordinates. */
+export interface CellRect {
+  readonly x0: number;
+  readonly y0: number;
+  readonly x1: number;
+  readonly y1: number;
+}
+
+/**
+ * A pointer drag in progress. ONE field for all four kinds, because the bugs
+ * in a drag are the ones where two of them are half-live at once — a rectangle
+ * anchored while a selection is also being resized. The anchor is the cell the
+ * button went down on and `cx`/`cy` track the pointer; only `brush` edits as it
+ * goes, the other three commit on release.
+ */
+interface DragState {
+  readonly kind: 'brush' | 'rect' | 'select' | 'move';
+  readonly button: number;
+  readonly ax: number;
+  readonly ay: number;
+  cx: number;
+  cy: number;
+}
 
 /** How far past the grid's edges the view may be panned (px). */
 const PAN_MARGIN = 64;
@@ -115,7 +150,10 @@ export class EditorScene implements Scene {
   private panX = 0;
   private panY = 0;
 
-  private strokeButton: number | null = null;
+  private tool: Tool = 'brush';
+  /** The select tool's marked-out region, or null. Survives until it is replaced. */
+  private selection: CellRect | null = null;
+  private drag: DragState | null = null;
   /** Which button began the current pan, or null. */
   private panButton: number | null = null;
   private lastPointerX = 0;
@@ -123,7 +161,7 @@ export class EditorScene implements Scene {
 
   private errors: string[] = [];
   private warnings: string[] = [];
-  private status = 'N NAMES IT  ·  R RESIZES  ·  ENTER PLAYTESTS  ·  CTRL+S SAVES';
+  private status = 'B X V TOOLS  ·  N NAMES  ·  R RESIZES  ·  ENTER PLAYTESTS  ·  CTRL+S SAVES';
 
   constructor(init?: EditorInit) {
     this.id = init?.id ?? 'untitled';
@@ -150,6 +188,8 @@ export class EditorScene implements Scene {
     buffer: string;
     rows: readonly string[];
     sel: string;
+    tool: Tool;
+    selection: CellRect | null;
     zoom: number;
     undoDepth: number;
     panning: boolean;
@@ -164,6 +204,8 @@ export class EditorScene implements Scene {
       buffer: this.buffer,
       rows: this.grid.rows,
       sel: GRID_CHARS[this.sel],
+      tool: this.tool,
+      selection: this.selection,
       zoom: EDITOR_ZOOM_STEPS[this.zoom],
       undoDepth: this.grid.undoDepth,
       panning: this.panButton !== null,
@@ -187,6 +229,18 @@ export class EditorScene implements Scene {
       game.toggleMute();
     }
     if (input.pressed('back')) {
+      // Innermost first: a drag, then a selection, then the editor. A modal key
+      // that skips its innermost mode is how an author loses a level.
+      if (this.drag !== null) {
+        this.cancelDrag();
+        this.status = 'CANCELLED';
+        return;
+      }
+      if (this.selection !== null) {
+        this.selection = null;
+        this.status = 'SELECTION CLEARED';
+        return;
+      }
       game.setScene(new TitleScene());
       return;
     }
@@ -228,6 +282,14 @@ export class EditorScene implements Scene {
     }
     if (input.codePressed('KeyZ')) {
       this.toggleZoom();
+    }
+    // B, X, V - brush, box, and the move tool that every other editor also
+    // calls V. They sit with the palette digits rather than on the Ctrl side,
+    // because picking a tool is the same kind of act as picking a character.
+    for (const [code, tool] of TOOL_KEYS) {
+      if (input.codePressed(code)) {
+        this.setTool(tool);
+      }
     }
     // Finding 5: entering a text field ENDS the frame. Without the return, the
     // rest of this method and then `updatePointer` keep running in paint mode
@@ -412,18 +474,24 @@ export class EditorScene implements Scene {
         // A press on a panel is a press on the panel, and nothing else.
       } else if (input.codeDown('Space')) {
         this.beginPan(MOUSE_LEFT, input.pointerX, input.pointerY);
-      } else if (input.shiftDown) {
+      } else if (input.shiftDown && this.tool === 'brush') {
         const [tx, ty] = this.cellUnderPointer(game);
         this.grid.flood(tx, ty, GRID_CHARS[this.sel]);
         this.afterEdit(game, 'FILL');
       } else {
-        this.grid.beginStroke();
-        this.strokeButton = MOUSE_LEFT;
+        this.beginDrag(MOUSE_LEFT, game);
       }
     }
     if (input.pointerPressed(MOUSE_RIGHT) && !overUi) {
-      this.grid.beginStroke();
-      this.strokeButton = MOUSE_RIGHT;
+      // Right is erase for the two painting tools, and "drop it" for the one
+      // that has something to drop. A right-drag that re-selected would leave
+      // the select tool no way at all to let go.
+      if (this.tool === 'select') {
+        this.selection = null;
+        this.status = 'SELECTION CLEARED';
+      } else {
+        this.beginDrag(MOUSE_RIGHT, game);
+      }
     }
     if (input.pointerPressed(MOUSE_MIDDLE) && !overUi) {
       this.beginPan(MOUSE_MIDDLE, input.pointerX, input.pointerY);
@@ -433,15 +501,19 @@ export class EditorScene implements Scene {
       this.panX -= input.pointerX - this.lastPointerX;
       this.panY -= input.pointerY - this.lastPointerY;
       this.clampPan();
-    } else if (this.strokeButton !== null && input.pointerIn && !overUi) {
+    } else if (this.drag !== null && input.pointerIn) {
       const [tx, ty] = this.cellUnderPointer(game);
-      this.grid.paint(tx, ty, this.strokeButton === MOUSE_RIGHT ? '.' : GRID_CHARS[this.sel]);
+      this.drag.cx = tx;
+      this.drag.cy = ty;
+      // Only the brush edits as it goes. The other three are previews until the
+      // button comes up, which is what lets a rectangle be re-aimed.
+      if (this.drag.kind === 'brush' && !overUi) {
+        this.grid.paint(tx, ty, this.drag.button === MOUSE_RIGHT ? '.' : GRID_CHARS[this.sel]);
+      }
     }
 
-    if (this.strokeButton !== null && input.pointerReleased(this.strokeButton)) {
-      this.grid.endStroke();
-      this.strokeButton = null;
-      this.afterEdit(game, this.status);
+    if (this.drag !== null && input.pointerReleased(this.drag.button)) {
+      this.endDrag(game);
     }
     // The button that STARTED the pan is the one that ends it. Tearing down on
     // a release of either would let a left-button tap mid middle-drag strand
@@ -452,6 +524,88 @@ export class EditorScene implements Scene {
 
     this.lastPointerX = input.pointerX;
     this.lastPointerY = input.pointerY;
+  }
+
+  /**
+   * Pick a tool, and DROP THE SELECTION with it. An outline that outlived the
+   * tool able to act on it is a promise the next click will not keep.
+   */
+  private setTool(tool: Tool): void {
+    if (this.tool === tool) {
+      return;
+    }
+    this.cancelDrag();
+    this.tool = tool;
+    this.selection = null;
+    this.status = `${tool.toUpperCase()} TOOL`;
+  }
+
+  /** Open a drag of whichever kind the current tool means by this button. */
+  private beginDrag(button: number, game: Game): void {
+    const [tx, ty] = this.cellUnderPointer(game);
+    if (this.tool === 'brush') {
+      // The stroke opens on the grid too, because the brush is the one tool
+      // that edits per frame and so needs its undo snapshot taken up front.
+      this.grid.beginStroke();
+      this.drag = { kind: 'brush', button, ax: tx, ay: ty, cx: tx, cy: ty };
+      return;
+    }
+    if (this.tool === 'rect') {
+      this.drag = { kind: 'rect', button, ax: tx, ay: ty, cx: tx, cy: ty };
+      return;
+    }
+    // Select: a press INSIDE the selection picks it up, and anywhere else marks
+    // out a new one. Same button, and the difference is where you pressed -
+    // which is the one convention every editor with a marquee already shares.
+    const inside = this.selection !== null && containsCell(this.selection, tx, ty);
+    this.drag = { kind: inside ? 'move' : 'select', button, ax: tx, ay: ty, cx: tx, cy: ty };
+  }
+
+  /** Tear down a drag without committing it. Esc, and a tool change mid-drag. */
+  private cancelDrag(): void {
+    if (this.drag !== null && this.drag.kind === 'brush') {
+      this.grid.endStroke();
+    }
+    this.drag = null;
+  }
+
+  /** The release. Every tool's actual edit happens here except the brush's. */
+  private endDrag(game: Game): void {
+    const d = this.drag;
+    if (d === null) {
+      return;
+    }
+    this.drag = null;
+    if (d.kind === 'brush') {
+      this.grid.endStroke();
+      this.afterEdit(game, this.status);
+      return;
+    }
+    if (d.kind === 'rect') {
+      const ch = d.button === MOUSE_RIGHT ? EMPTY_CHAR : GRID_CHARS[this.sel];
+      const changed = this.grid.fillRect(d.ax, d.ay, d.cx, d.cy, ch);
+      this.afterEdit(game, changed ? `RECT ${spanOf(d)}` : 'RECT CHANGED NOTHING');
+      return;
+    }
+    if (d.kind === 'select') {
+      this.selection = clipRect(d.ax, d.ay, d.cx, d.cy, this.grid.w, this.grid.h);
+      this.status = this.selection === null ? 'NOTHING SELECTED' : `SELECTED ${spanOf(d)}`;
+      return;
+    }
+    const sel = this.selection;
+    if (sel === null) {
+      return;
+    }
+    const dx = d.cx - d.ax;
+    const dy = d.cy - d.ay;
+    if (!this.grid.moveRect(sel.x0, sel.y0, sel.x1, sel.y1, dx, dy)) {
+      this.status = 'MOVED NOTHING';
+      return;
+    }
+    // The selection travels with what it moved, so a block can be dragged twice
+    // running without being marked out again.
+    this.selection = { x0: sel.x0 + dx, y0: sel.y0 + dy, x1: sel.x1 + dx, y1: sel.y1 + dy };
+    this.afterEdit(game, `MOVED ${dx} ${dy}`);
   }
 
   /**
@@ -506,7 +660,7 @@ export class EditorScene implements Scene {
     // tiles instead of characters. The bar's thick border IS the readout.
     return (
       `${this.grid.w} X ${this.grid.h}   ZOOM ${this.zoom === 0 ? '1X' : 'HALF'}   ` +
-      `UNDO ${this.grid.undoDepth}`
+      `UNDO ${this.grid.undoDepth}   ${this.tool.toUpperCase()}`
     );
   }
 
@@ -621,6 +775,7 @@ export class EditorScene implements Scene {
     this.renderGridLines(r);
     this.renderBounds(r);
     this.renderCursor(r, game);
+    this.renderTools(r);
     this.renderHeader(r, game);
     this.renderPanel(r);
     this.renderBar(r);
@@ -697,7 +852,63 @@ export class EditorScene implements Scene {
     r.rectRotatedOutline(w / 2, h / 2, w, h, 0, palette.ink, 2);
   }
 
+  /**
+   * The selection and whatever the current drag is about to do. Drawn over the
+   * grid and under every panel, because it is a statement about cells.
+   *
+   * A pending rectangle gets both a tint and an outline: the tint is the only
+   * cue that survives over `paper` cells at a glance, and the outline is the
+   * only one that survives over `ink` ones. The resting selection gets the
+   * outline alone — it is not about to change anything, and a permanent wash
+   * over the region would misreport the colours of the level underneath it.
+   */
+  private renderTools(r: Renderer): void {
+    const d = this.drag;
+    if (this.selection !== null && (d === null || d.kind !== 'move')) {
+      this.outlineRect(r, this.selection, false);
+    }
+    if (d === null) {
+      return;
+    }
+    if (d.kind === 'rect' || d.kind === 'select') {
+      const rc = clipRect(d.ax, d.ay, d.cx, d.cy, this.grid.w, this.grid.h);
+      if (rc !== null) {
+        this.outlineRect(r, rc, d.kind === 'rect');
+      }
+      return;
+    }
+    if (d.kind === 'move' && this.selection !== null) {
+      const sel = this.selection;
+      const dx = d.cx - d.ax;
+      const dy = d.cy - d.ay;
+      // Where it came from, and where it is going. Without the first, a drag
+      // over a busy grid loses track of what is actually being carried.
+      this.outlineRect(r, sel, false);
+      this.outlineRect(
+        r,
+        { x0: sel.x0 + dx, y0: sel.y0 + dy, x1: sel.x1 + dx, y1: sel.y1 + dy },
+        true,
+      );
+    }
+  }
+
+  private outlineRect(r: Renderer, rc: CellRect, tint: boolean): void {
+    const cell = this.cell;
+    const x = rc.x0 * cell;
+    const y = rc.y0 * cell;
+    const w = (rc.x1 - rc.x0 + 1) * cell;
+    const h = (rc.y1 - rc.y0 + 1) * cell;
+    if (tint) {
+      r.rect(x, y, w, h, palette.inkRgba(EDITOR_MARQUEE_ALPHA));
+    }
+    r.rectRotatedOutline(x + w / 2, y + h / 2, w, h, 0, palette.ink, EDITOR_MARQUEE_WIDTH);
+  }
+
   private renderCursor(r: Renderer, game: Game): void {
+    // A drag draws its own region, and a one-cell cursor inside it is noise.
+    if (this.drag !== null && this.drag.kind !== 'brush') {
+      return;
+    }
     const { pointerX, pointerY } = game.input;
     // Hidden under every overlay, for the same reason the click is blocked
     // there: a hover cue over a panel promises an edit that will not happen.
@@ -813,6 +1024,43 @@ export class EditorScene implements Scene {
       r.text(String(i + 1), x + 2, BAR_Y - 20, palette.ink, 1, true);
     }
   }
+}
+
+/** The tool keys, as a table so a fourth tool cannot be bound in two places. */
+const TOOL_KEYS: readonly (readonly [string, Tool])[] = [
+  ['KeyB', 'brush'],
+  ['KeyX', 'rect'],
+  ['KeyV', 'select'],
+];
+
+function containsCell(r: CellRect, tx: number, ty: number): boolean {
+  return tx >= r.x0 && tx <= r.x1 && ty >= r.y0 && ty <= r.y1;
+}
+
+/**
+ * Two corners in any order to an inclusive rectangle clipped to the grid, or
+ * null if it misses the grid entirely. The scene's own copy of the rule
+ * `EditorGrid` applies to a fill, because a selection is a rectangle the scene
+ * keeps and draws rather than one the model ever sees.
+ */
+function clipRect(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  w: number,
+  h: number,
+): CellRect | null {
+  const rx0 = Math.max(0, Math.min(x0, x1));
+  const ry0 = Math.max(0, Math.min(y0, y1));
+  const rx1 = Math.min(w - 1, Math.max(x0, x1));
+  const ry1 = Math.min(h - 1, Math.max(y0, y1));
+  return rx0 > rx1 || ry0 > ry1 ? null : { x0: rx0, y0: ry0, x1: rx1, y1: ry1 };
+}
+
+/** `"4 X 2"` for a drag, counting cells inclusively at both ends. */
+function spanOf(d: DragState): string {
+  return `${Math.abs(d.cx - d.ax) + 1} X ${Math.abs(d.cy - d.ay) + 1}`;
 }
 
 /**

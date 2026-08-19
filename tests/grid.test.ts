@@ -643,3 +643,141 @@ describe('parsing a typed size', () => {
     }
   });
 });
+
+describe('rectangle fill', () => {
+  const ROOM: readonly string[] = ['#####', '#S..#', '#...#', '#..G#', '#####'];
+
+  it('fills the whole rectangle, both corners INCLUSIVE', () => {
+    const grid = new EditorGrid(ROOM);
+    expect(grid.fillRect(1, 1, 2, 2, '^')).toBe(true);
+    expect(grid.rows[1]).toBe('#S^.#'); // the S is untouched; (2,1) filled
+    expect(grid.rows[2]).toBe('#^^.#');
+    expect(grid.rows[3]).toBe('#..G#'); // row 3 is outside the rectangle
+  });
+
+  it('normalises a drag made in any direction', () => {
+    // The anchor is wherever the pointer went down, so three of the four drags
+    // an author can make arrive with a corner reversed.
+    const rows = ['.....', '.....', '.....'];
+    const filled = ['.....', '.###.', '.###.'];
+    for (const [x0, y0, x1, y1] of [
+      [1, 1, 3, 2],
+      [3, 2, 1, 1],
+      [1, 2, 3, 1],
+      [3, 1, 1, 2],
+    ] as const) {
+      const grid = new EditorGrid(rows);
+      grid.fillRect(x0, y0, x1, y1, '#');
+      expect(grid.rows).toEqual(filled);
+    }
+  });
+
+  it('clips to the grid rather than refusing, so a drag off the edge still fills', () => {
+    const grid = new EditorGrid(['...', '...']);
+    expect(grid.fillRect(-4, -4, 1, 0, '#')).toBe(true);
+    expect(grid.rows).toEqual(['##.', '...']);
+    expect(() => grid.fillRect(50, 50, 99, 99, '#')).not.toThrow();
+  });
+
+  it('is ONE undo step for the whole rectangle', () => {
+    const grid = new EditorGrid(ROOM);
+    const before = grid.rows;
+    grid.fillRect(1, 1, 3, 3, '#');
+    expect(grid.undoDepth).toBe(1);
+    grid.undo();
+    expect(grid.rows).toEqual(before);
+  });
+
+  it('a rectangle that changes nothing pushes nothing', () => {
+    const grid = new EditorGrid(ROOM);
+    expect(grid.fillRect(0, 0, 4, 0, '#')).toBe(false); // the top wall, already #
+    expect(grid.undoDepth).toBe(0);
+  });
+
+  it('paints AROUND the markers, and never over them', () => {
+    const grid = new EditorGrid(ROOM);
+    grid.fillRect(0, 0, 4, 4, '#');
+    expect(grid.charAt(1, 1)).toBe('S');
+    expect(grid.charAt(3, 3)).toBe('G');
+    expect(validateLevel(grid.rows)).toEqual([]);
+  });
+
+  it('filling WITH S or G places exactly one, at the anchor corner', () => {
+    // The singleton rule outranks the rectangle, exactly as it outranks a flood.
+    const grid = new EditorGrid(ROOM);
+    grid.fillRect(3, 2, 1, 2, 'S');
+    expect(grid.rows.join('').split('S')).toHaveLength(2);
+    expect(grid.charAt(3, 2)).toBe('S'); // the anchor, not the normalised corner
+    expect(grid.charAt(1, 1)).toBe('.'); // the old spawn, moved rather than copied
+    expect(validateLevel(grid.rows)).toEqual([]);
+  });
+
+  it('erases a rectangle when the character is the empty one', () => {
+    const grid = new EditorGrid(ROOM);
+    grid.fillRect(0, 4, 4, 4, '.');
+    expect(grid.rows[4]).toBe('.....');
+  });
+
+  it('refuses a character that is not in the palette', () => {
+    const grid = new EditorGrid(ROOM);
+    expect(grid.fillRect(1, 1, 2, 2, 'x')).toBe(false);
+    expect(grid.rows).toEqual(ROOM);
+  });
+});
+
+describe('moving a region', () => {
+  const ROOM: readonly string[] = ['.....', '.##..', '.##..', '.....', '#####'];
+
+  it('lifts the region and stamps it at the offset, leaving empty behind', () => {
+    const grid = new EditorGrid(ROOM);
+    expect(grid.moveRect(1, 1, 2, 2, 2, 1)).toBe(true);
+    expect(grid.rows).toEqual(['.....', '.....', '...##', '...##', '#####']);
+  });
+
+  it('lifts BEFORE it stamps, so an overlapping move does not copy itself', () => {
+    const grid = new EditorGrid(ROOM);
+    grid.moveRect(1, 1, 2, 2, 1, 0);
+    expect(grid.rows).toEqual(['.....', '..##.', '..##.', '.....', '#####']);
+  });
+
+  it('is one undo step, and a zero offset changes nothing', () => {
+    const grid = new EditorGrid(ROOM);
+    const before = grid.rows;
+    grid.moveRect(1, 1, 2, 2, 2, 1);
+    expect(grid.undoDepth).toBe(1);
+    grid.undo();
+    expect(grid.rows).toEqual(before);
+
+    expect(grid.moveRect(1, 1, 2, 2, 0, 0)).toBe(false);
+    expect(grid.undoDepth).toBe(0);
+  });
+
+  it('CARRIES THE MARKERS: a region holding the spawn moves it', () => {
+    const grid = new EditorGrid(['....G', '.S#..', '.....', '#####']);
+    grid.moveRect(1, 1, 2, 1, 2, 1);
+    expect(grid.rows).toEqual(['....G', '.....', '...S#', '#####']);
+    expect(validateLevel(grid.rows)).toEqual([]);
+  });
+
+  it('drops whatever lands off the grid rather than wrapping it', () => {
+    const grid = new EditorGrid(['.....', '.##..', '.....']);
+    grid.moveRect(1, 1, 2, 1, -2, 0);
+    expect(grid.rows).toEqual(['.....', '#....', '.....']);
+  });
+
+  it('does not stamp over a marker that stayed put', () => {
+    // The moved block is lifted first, so the only markers left to protect are
+    // the ones outside it — and those outrank the stamp, like every other paint.
+    const grid = new EditorGrid(['.....', '.##S.', 'G....', '#####']);
+    grid.moveRect(1, 1, 2, 1, 1, 0);
+    expect(grid.charAt(3, 1)).toBe('S');
+    expect(grid.rows[1]).toBe('..#S.');
+    expect(validateLevel(grid.rows)).toEqual([]);
+  });
+
+  it('normalises the rectangle and clips it, like a fill does', () => {
+    const grid = new EditorGrid(ROOM);
+    grid.moveRect(2, 2, 1, 1, 0, 1); // corners reversed
+    expect(grid.rows).toEqual(['.....', '.....', '.##..', '.##..', '#####']);
+  });
+});

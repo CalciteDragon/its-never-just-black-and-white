@@ -476,6 +476,20 @@ export const EDITOR_GRID_ALPHA = 0.15;
  * having a cap at all is that an unbounded stack is a leak nobody measures.
  */
 export const EDITOR_UNDO_MAX = 64;
+
+/**
+ * The rectangle and select tools' preview overlay: how strongly a pending
+ * rectangle tints the cells it is about to fill, and how thick its outline is.
+ *
+ * The tint is what makes a rectangle drag readable over a grid that is already
+ * `ink` on `paper` — an outline alone vanishes the moment the drag crosses a
+ * filled region, which is most of the times an author draws one. It is drawn in
+ * `ink` at this alpha over `paper` cells and reads as a wash; over `ink` cells
+ * it is invisible, which is why the outline exists as well. Two cues, because
+ * neither one covers both grounds.
+ */
+export const EDITOR_MARQUEE_ALPHA = 0.3;
+export const EDITOR_MARQUEE_WIDTH = 2;
 /** A blank grid: small enough to see whole at half zoom while learning the tool. */
 export const EDITOR_DEFAULT_W = 40;
 export const EDITOR_DEFAULT_H = 20;
