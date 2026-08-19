@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { parseLevel, serializeLevel, validateLevel } from '../src/world/level';
+import { TILE } from '../src/constants';
+import { levelRows, parseLevel, serializeLevel, validateLevel } from '../src/world/level';
 import type { Level } from '../src/world/level';
 import { Tile } from '../src/world/tiles';
 
@@ -313,5 +314,116 @@ describe('serializeLevel', () => {
     expect(again).toEqual(level);
     expect(again.map.bytes()).toEqual(level.map.bytes());
     expect(serializeLevel(again)).toBe(serializeLevel(level));
+  });
+});
+
+describe('levels of arbitrary size', () => {
+  /**
+   * Nothing in the format carries a width or a height — both are derived from
+   * `rows` — so the only thing standing between a 3x3 and a 200x60 is that
+   * every loop in here is written against `list.length` and `list[0].length`.
+   * These pin that at both extremes, through the full parse → serialise →
+   * parse cycle the editor's save/open round-trip actually performs.
+   */
+
+  /** One character replaced, so markers can be painted over a pattern. */
+  function withCharAt(row: string, tx: number, ch: string): string {
+    return row.slice(0, tx) + ch + row.slice(tx + 1);
+  }
+
+  /**
+   * A deterministic grid of the requested size: solids and pads on two coprime
+   * strides so neither degenerates into stripes, then S and G painted on top —
+   * on top, because a marker sharing a cell with a solid is not a thing the
+   * format can express and the round-trip would not survive it.
+   */
+  function gridOf(w: number, h: number): string[] {
+    const rows: string[] = [];
+    for (let ty = 0; ty < h; ty++) {
+      const row: string[] = [];
+      for (let tx = 0; tx < w; tx++) {
+        if ((tx + ty) % 7 === 0) {
+          row.push('#');
+        } else if ((tx + 2 * ty) % 13 === 0) {
+          row.push('^');
+        } else {
+          row.push('.');
+        }
+      }
+      rows.push(row.join(''));
+    }
+    rows[0] = withCharAt(rows[0], 0, 'S');
+    rows[h - 1] = withCharAt(rows[h - 1], w - 1, 'G');
+    return rows;
+  }
+
+  /** parse → levelRows → parse → serialise, asserted at every hop. */
+  function roundTrip(id: string, rows: readonly string[]): void {
+    const level = parseOrFail({ id, name: 'ARBITRARY', rows: [...rows] });
+    expect(level.map.h).toBe(rows.length);
+    expect(level.map.w).toBe(rows[0].length);
+    expect(level.map.widthPx).toBe(rows[0].length * TILE);
+    expect(level.map.heightPx).toBe(rows.length * TILE);
+
+    // The grid characters come back exactly as written, S and G included.
+    expect(levelRows(level)).toEqual([...rows]);
+
+    const again = parseOrFail(JSON.parse(serializeLevel(level)));
+    expect(again).toEqual(level);
+    expect(again.spawn).toEqual(level.spawn);
+    expect(again.goal).toEqual(level.goal);
+    expect(again.pads).toEqual(level.pads);
+    expect(levelRows(again)).toEqual([...rows]);
+  }
+
+  it('parses and round-trips a 3x3 level', () => {
+    const rows = ['S.G', '.^.', '###'];
+    const level = parseOrFail({ id: 'tiny', name: 'TINY', rows: [...rows] });
+    expect(level.map.w).toBe(3);
+    expect(level.map.h).toBe(3);
+    expect(level.spawn).toEqual({ tx: 0, ty: 0 });
+    expect(level.goal).toEqual({ tx: 2, ty: 0 });
+    expect(level.pads).toEqual([{ tx: 1, ty: 1, tile: Tile.PadUp }]);
+    expect(level.map.get(0, 0)).toBe(Tile.Empty); // S is metadata
+    expect(level.map.get(2, 0)).toBe(Tile.Empty); // and so is G
+    roundTrip('tiny', rows);
+  });
+
+  it('parses and round-trips a 1x1 level — the smallest grid there is', () => {
+    // One row, one character: it cannot hold both markers, so it cannot be a
+    // level. What matters is that it fails on the marker count and not on the
+    // size, i.e. nothing in here has a minimum-dimensions assumption.
+    const errors = errorsOf({ id: 'dot', name: 'DOT', rows: ['S'] });
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('found 0 goal markers');
+
+    // Two cells across is enough for a whole level, and it parses.
+    roundTrip('two', ['SG']);
+  });
+
+  it('parses and round-trips a 200x60 level', () => {
+    const rows = gridOf(200, 60);
+    const level = parseOrFail({ id: 'huge', name: 'HUGE', rows: [...rows] });
+    expect(level.map.w).toBe(200);
+    expect(level.map.h).toBe(60);
+    expect(level.spawn).toEqual({ tx: 0, ty: 0 });
+    expect(level.goal).toEqual({ tx: 199, ty: 59 });
+    expect(level.map.widthPx).toBe(200 * TILE);
+    expect(level.map.heightPx).toBe(60 * TILE);
+    // Enough pads that a row-major ordering claim is worth making at scale.
+    expect(level.pads.length).toBeGreaterThan(100);
+    for (let i = 1; i < level.pads.length; i++) {
+      const prev = level.pads[i - 1];
+      const cur = level.pads[i];
+      expect(cur.ty > prev.ty || (cur.ty === prev.ty && cur.tx > prev.tx)).toBe(true);
+    }
+    roundTrip('huge', rows);
+  });
+
+  it('parses and round-trips lopsided grids in both directions', () => {
+    // 200 x 3 and 3 x 200: width and height are read from different places, so
+    // a swapped index survives a square grid and dies on these.
+    roundTrip('wide', gridOf(200, 3));
+    roundTrip('tall', gridOf(3, 200));
   });
 });

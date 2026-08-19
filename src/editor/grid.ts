@@ -63,6 +63,36 @@ function isMarker(ch: string): boolean {
   return ch === SPAWN_CHAR || ch === GOAL_CHAR;
 }
 
+/** A typed or nudged dimension to a legal one: whole, at least 1, at most the cap. */
+function clampSize(v: number, max: number): number {
+  return Math.max(1, Math.min(max, Math.floor(v)));
+}
+
+/**
+ * `"60X20"` → `{ w: 60, h: 20 }`, and `null` for anything that is not two whole
+ * numbers. Pure and here rather than in the scene, so the editor's size field
+ * owns no parsing of its own — and so the separators an author actually reaches
+ * for (`x`, `X`, `*`, a comma, a space) are settled in one testable place.
+ *
+ * Clamping is `setSize`'s job, not this one's: `"999X999"` parses fine and then
+ * lands on the caps, which is friendlier than rejecting the whole entry.
+ */
+export function parseSizeInput(text: string): { w: number; h: number } | null {
+  const parts = text
+    .trim()
+    .split(/[xX*,\s]+/)
+    .filter((p) => p.length > 0);
+  if (parts.length !== 2) {
+    return null;
+  }
+  const w = Number(parts[0]);
+  const h = Number(parts[1]);
+  if (!Number.isInteger(w) || !Number.isInteger(h) || w < 0 || h < 0) {
+    return null;
+  }
+  return { w, h };
+}
+
 /** Row-by-row equality. A grid is small enough that this beats hashing it. */
 function sameRows(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) {
@@ -428,24 +458,71 @@ export class EditorGrid {
     }
 
     this.atomic(() => {
-      if (horizontal) {
-        this.grid = this.grid.map((row) => {
-          if (change > 0) {
-            const pad = EMPTY_CHAR.repeat(change);
-            return edge === 'left' ? pad + row : row + pad;
-          }
-          return edge === 'left' ? row.slice(-change) : row.slice(0, next);
-        });
-        return;
+      this.moveEdge(edge, change, next);
+    });
+  }
+
+  /**
+   * The same edit stated as a DESTINATION rather than as a nudge. Returns
+   * whether anything changed, so the scene can report a no-op instead of
+   * announcing a resize that did not happen.
+   *
+   * It is `resize` twice under one `atomic`, and that is the whole design: two
+   * separate delta resizes would cost two undo steps for one command, and a
+   * second implementation of "grow right, crop bottom" would be a second answer
+   * to where the content anchors. Growing anchors top-left and cropping takes
+   * from the right and the bottom — the delta form's `right`/`bottom` edges —
+   * because those are the edges an author is not currently looking at.
+   *
+   * Fractional sizes floor; non-finite ones are refused outright rather than
+   * clamped, because `NaN` is a typo in a text field and 1×1 is not what the
+   * author meant by it.
+   */
+  setSize(w: number, h: number): boolean {
+    if (!Number.isFinite(w) || !Number.isFinite(h) || this.grid.length === 0) {
+      return false;
+    }
+    const nextW = clampSize(w, EDITOR_MAX_W);
+    const nextH = clampSize(h, EDITOR_MAX_H);
+    const dw = nextW - this.w;
+    const dh = nextH - this.h;
+    if (dw === 0 && dh === 0) {
+      return false;
+    }
+    this.atomic(() => {
+      if (dw !== 0) {
+        this.moveEdge('right', dw, nextW);
       }
-      if (change > 0) {
-        const blank = EMPTY_CHAR.repeat(this.w);
-        const added = Array.from({ length: change }, () => blank);
-        this.grid = edge === 'top' ? added.concat(this.grid) : this.grid.concat(added);
-      } else {
-        this.grid = edge === 'top' ? this.grid.slice(-change) : this.grid.slice(0, next);
+      if (dh !== 0) {
+        this.moveEdge('bottom', dh, nextH);
       }
     });
+    return true;
+  }
+
+  /**
+   * One edge, by a change already clamped to a legal `next`. The only place
+   * rows are grown or cropped, so the delta and the absolute forms cannot
+   * disagree about which end the characters come off.
+   */
+  private moveEdge(edge: Edge, change: number, next: number): void {
+    if (edge === 'left' || edge === 'right') {
+      this.grid = this.grid.map((row) => {
+        if (change > 0) {
+          const pad = EMPTY_CHAR.repeat(change);
+          return edge === 'left' ? pad + row : row + pad;
+        }
+        return edge === 'left' ? row.slice(-change) : row.slice(0, next);
+      });
+      return;
+    }
+    if (change > 0) {
+      const blank = EMPTY_CHAR.repeat(this.w);
+      const added = Array.from({ length: change }, () => blank);
+      this.grid = edge === 'top' ? added.concat(this.grid) : this.grid.concat(added);
+    } else {
+      this.grid = edge === 'top' ? this.grid.slice(-change) : this.grid.slice(0, next);
+    }
   }
 
   /** Replace the whole grid in one undoable step (load, clear, revert). */

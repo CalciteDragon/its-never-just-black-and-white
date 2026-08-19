@@ -9,6 +9,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  CAMERA_VSLACK,
   DEATH_FADE_IN,
   DEATH_FADE_OUT,
   GOAL_HOLD,
@@ -17,6 +18,8 @@ import {
   SPEED_REF,
   STEP,
   TILE,
+  VIEW_H,
+  VIEW_W,
 } from '../src/constants';
 import { palette } from '../src/engine/palette';
 import { MAX_PARTICLES } from '../src/engine/particles';
@@ -657,5 +660,136 @@ describe('the bed, and the one number that drives it', () => {
     const r2 = start(far);
     step(r2.h, r2.scene, settle);
     expect(r2.scene.status.particles).toBe(0);
+  });
+});
+
+describe('PLAY ON A LEVEL OF ANY SIZE', () => {
+  /**
+   * `PlayScene` never reads a size constant: it takes the map's `widthPx` and
+   * `heightPx` and hands them to the camera's two clamps. So the thing worth
+   * pinning is that a level far smaller than the view and a level far larger
+   * than it both run for a while without throwing, and that the camera lands
+   * inside the bound its own map implies — including the sign-flipped one, a
+   * map smaller than the view sits at a NEGATIVE origin, which is the case an
+   * accidental `Math.max(0, …)` anywhere downstream would quietly destroy.
+   *
+   * `camera` is private to the scene and stays that way: exposing it for a
+   * test would put a second consumer on a field the renderer reads once a
+   * frame. Reading it through a cast keeps the assertion honest and the
+   * surface unchanged.
+   */
+  function cameraOf(scene: PlayScene): { x: number; y: number } {
+    return (scene as unknown as { camera: { x: number; y: number } }).camera;
+  }
+
+  /** Exactly `Camera.clampX`'s contract, restated where a test can see it. */
+  function expectClamped(scene: PlayScene, level: Level): void {
+    const { x, y } = cameraOf(scene);
+    const w = level.map.widthPx;
+    const h = level.map.heightPx;
+    if (w <= VIEW_W) {
+      expect(x).toBe((w - VIEW_W) / 2);
+    } else {
+      expect(x).toBeGreaterThanOrEqual(0);
+      expect(x).toBeLessThanOrEqual(w - VIEW_W);
+    }
+    if (h <= VIEW_H) {
+      expect(y).toBe((h - VIEW_H) / 2);
+    } else {
+      expect(y).toBeGreaterThanOrEqual(-CAMERA_VSLACK);
+      expect(y).toBeLessThanOrEqual(h - VIEW_H + CAMERA_VSLACK);
+    }
+  }
+
+  /** 200 x 24: both dimensions comfortably past the view. */
+  function wideRows(): string[] {
+    const w = 200;
+    const rows: string[] = [];
+    for (let ty = 0; ty < 22; ty++) {
+      rows.push('.'.repeat(w));
+    }
+    rows.push(`..S${'.'.repeat(w - 6)}G..`);
+    rows.push('#'.repeat(w));
+    return rows;
+  }
+
+  it('runs a 5x5 level, with the camera centred on both axes throughout', () => {
+    const level = tinyLevel(['.....', '.S.G.', '.....', '#####', '#####'], 'five');
+    expect(level.map.widthPx).toBeLessThan(VIEW_W);
+    expect(level.map.heightPx).toBeLessThan(VIEW_H);
+
+    const { h, scene } = start(level);
+    expectClamped(scene, level); // enter() snaps and clamps before any step
+    h.input.onKey('KeyD', true);
+    for (let i = 0; i < 240; i++) {
+      step(h, scene);
+      expectClamped(scene, level);
+    }
+    h.input.onKey('KeyD', false);
+
+    // A map smaller than the view is pinned dead centre and cannot move, so
+    // the assertion above would also hold if the scene had frozen. The body
+    // has to have actually gone somewhere.
+    expect(cameraOf(scene).x).toBeLessThan(0);
+    expect(cameraOf(scene).y).toBeLessThan(0);
+    expect(scene.status.timeSec).toBeGreaterThan(0);
+  });
+
+  it('runs a 200x24 level, with the camera inside the clamp throughout', () => {
+    const level = tinyLevel(wideRows(), 'wide');
+    expect(level.map.widthPx).toBeGreaterThan(VIEW_W);
+    expect(level.map.heightPx).toBeGreaterThan(VIEW_H);
+
+    const { h, scene } = start(level);
+    expectClamped(scene, level);
+    h.input.onKey('KeyD', true);
+    let moved = 0;
+    for (let i = 0; i < 600; i++) {
+      step(h, scene);
+      expectClamped(scene, level);
+      moved = Math.max(moved, cameraOf(scene).x);
+    }
+    h.input.onKey('KeyD', false);
+
+    // The spawn is at the left edge, so the camera starts pinned at 0 and has
+    // to have come off it — otherwise "inside the clamp" is vacuous.
+    expect(moved).toBeGreaterThan(0);
+    expect(scene.status.x).toBeGreaterThan(TILE * 4);
+  });
+
+  it('respawns and restarts on an odd-sized level without leaving the clamp', () => {
+    // The reset path re-snaps the camera and re-clamps it, and `snapTo` writes
+    // an unclamped centre first — so a reset is the one moment the camera is
+    // legitimately out of bounds, and `reset` clamping afterwards is what this
+    // catches if it is ever dropped.
+    const level = tinyLevel(wideRows(), 'wide-reset');
+    const { h, scene } = start(level);
+    h.input.onKey('KeyD', true);
+    step(h, scene, 200);
+    h.input.onKey('KeyD', false);
+    expectClamped(scene, level);
+
+    tap(h, scene, 'KeyR');
+    expectClamped(scene, level);
+    expect(scene.status.timeSec).toBeLessThan(0.1);
+    step(h, scene, 60);
+    expectClamped(scene, level);
+  });
+
+  it('is deterministic at any size: the same steps give a bit-identical body', () => {
+    const rows = wideRows();
+    const runOnce = (): { x: number; y: number; vx: number; vy: number } => {
+      const level = tinyLevel(rows, 'wide-determinism');
+      const { h, scene } = start(level);
+      h.input.onKey('KeyD', true);
+      step(h, scene, 90);
+      h.input.onKey('KeyW', true);
+      step(h, scene, 20);
+      h.input.onKey('KeyW', false);
+      step(h, scene, 120);
+      const s = scene.status;
+      return { x: s.x, y: s.y, vx: s.vx, vy: s.vy };
+    };
+    expect(runOnce()).toEqual(runOnce());
   });
 });

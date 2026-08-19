@@ -39,6 +39,7 @@ import {
   blankRows,
   forEachCharRun,
   gridWarnings,
+  parseSizeInput,
 } from '../editor/grid';
 import { measureText } from '../engine/font';
 import { MOUSE_LEFT, MOUSE_MIDDLE, MOUSE_RIGHT } from '../engine/input';
@@ -68,7 +69,7 @@ export interface EditorInit {
  * `id` and `name` are text entry; they swallow every key, which is precisely
  * why they are visible on screen while active.
  */
-type Mode = 'paint' | 'id' | 'name';
+type Mode = 'paint' | 'id' | 'name' | 'size';
 
 /** How far past the grid's edges the view may be panned (px). */
 const PAN_MARGIN = 64;
@@ -122,7 +123,7 @@ export class EditorScene implements Scene {
 
   private errors: string[] = [];
   private warnings: string[] = [];
-  private status = 'N NAMES IT  ·  ENTER PLAYTESTS  ·  CTRL+S SAVES';
+  private status = 'N NAMES IT  ·  R RESIZES  ·  ENTER PLAYTESTS  ·  CTRL+S SAVES';
 
   constructor(init?: EditorInit) {
     this.id = init?.id ?? 'untitled';
@@ -146,6 +147,7 @@ export class EditorScene implements Scene {
     mode: Mode;
     id: string;
     name: string;
+    buffer: string;
     rows: readonly string[];
     sel: string;
     zoom: number;
@@ -159,6 +161,7 @@ export class EditorScene implements Scene {
       mode: this.mode,
       id: this.id,
       name: this.name,
+      buffer: this.buffer,
       rows: this.grid.rows,
       sel: GRID_CHARS[this.sel],
       zoom: EDITOR_ZOOM_STEPS[this.zoom],
@@ -234,6 +237,13 @@ export class EditorScene implements Scene {
       this.beginTextEntry('id');
       return;
     }
+    // R is the DESTINATION form of the bracket keys below. Both exist because
+    // they are different jobs: nudging an edge while looking at it, and saying
+    // outright how big the level is. 190 taps of `]` is not the second one.
+    if (input.codePressed('KeyR')) {
+      this.beginTextEntry('size');
+      return;
+    }
     if (input.codePressed('Enter')) {
       this.playtest(game);
       return;
@@ -279,10 +289,19 @@ export class EditorScene implements Scene {
   // have different jobs: one becomes a filename and a save key, the other is
   // drawn by a font with no lowercase glyphs. ---
 
-  private beginTextEntry(mode: 'id' | 'name'): void {
+  private beginTextEntry(mode: 'id' | 'name' | 'size'): void {
     this.mode = mode;
-    this.buffer = mode === 'id' ? this.id : this.name;
-    this.status = mode === 'id' ? 'TYPE AN ID: A-Z 0-9 -' : 'TYPE A NAME: A-Z 0-9 SPACE';
+    // The size field opens on the CURRENT size rather than empty, so the
+    // common edit — one dimension, the other left alone — is a backspace or
+    // two rather than retyping both.
+    this.buffer =
+      mode === 'id' ? this.id : mode === 'name' ? this.name : `${this.grid.w}X${this.grid.h}`;
+    this.status =
+      mode === 'id'
+        ? 'TYPE AN ID: A-Z 0-9 -'
+        : mode === 'name'
+          ? 'TYPE A NAME: A-Z 0-9 SPACE'
+          : 'TYPE A SIZE: W X H';
   }
 
   private updateTextEntry(game: Game): void {
@@ -309,8 +328,15 @@ export class EditorScene implements Scene {
 
   private charForCode(code: string): string | null {
     const idMode = this.mode === 'id';
+    const sizeMode = this.mode === 'size';
     if (code.startsWith('Key')) {
       const letter = code.slice(3);
+      // The size field takes digits and the one letter that separates them.
+      // Letting the rest through would build a buffer only the parser could
+      // reject, on a field whose whole content is two numbers.
+      if (sizeMode) {
+        return letter === 'X' ? 'X' : null;
+      }
       return idMode ? letter.toLowerCase() : letter;
     }
     if (code.startsWith('Digit')) {
@@ -326,6 +352,22 @@ export class EditorScene implements Scene {
   }
 
   private commitTextEntry(game: Game): void {
+    if (this.mode === 'size') {
+      const size = parseSizeInput(this.buffer);
+      if (size === null) {
+        // Stays open, like a bad id does: the fix is one backspace away, and
+        // closing the field would throw away what was typed to say so.
+        this.status = 'BAD SIZE: TYPE W X H, LIKE 60 X 20';
+        return;
+      }
+      const changed = this.grid.setSize(size.w, size.h);
+      this.mode = 'paint';
+      // `afterEdit` either way: an unchanged size still owes the author a
+      // status line saying what the size actually is.
+      this.afterEdit(game, changed ? `${this.grid.w} X ${this.grid.h}` : 'SIZE UNCHANGED');
+      this.clampPan();
+      return;
+    }
     if (this.mode === 'id') {
       // Enforced here as well as in `saveLevel` and in the vite sink: the id is
       // a filename, and the first place to say so is the field you type it in.

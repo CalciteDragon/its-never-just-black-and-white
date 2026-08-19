@@ -6,7 +6,15 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { EDITOR_DEFAULT_H, EDITOR_DEFAULT_W, TILE, VIEW_H, VIEW_W } from '../src/constants';
+import {
+  EDITOR_DEFAULT_H,
+  EDITOR_DEFAULT_W,
+  EDITOR_MAX_H,
+  EDITOR_MAX_W,
+  TILE,
+  VIEW_H,
+  VIEW_W,
+} from '../src/constants';
 import { GRID_CHARS } from '../src/editor/grid';
 import { MOUSE_MIDDLE, MOUSE_RIGHT } from '../src/engine/input';
 import { SAVE_KEYS } from '../src/engine/save';
@@ -43,6 +51,17 @@ function open(rows: readonly string[] = STAGE): { h: Harness; scene: EditorScene
 function cellCentre(scene: EditorScene, tx: number, ty: number): [number, number] {
   const cell = TILE * scene.state.zoom;
   return [tx * cell + cell / 2, ty * cell + cell / 2];
+}
+
+/** Clear the size field and type a fresh `W X H` into it, then commit. */
+function typeSize(h: Harness, scene: EditorScene, text: string): void {
+  for (let i = 0; i < 12; i++) {
+    tap(h, scene, 'Backspace');
+  }
+  for (const ch of text) {
+    tap(h, scene, ch === 'X' || ch === 'x' ? 'KeyX' : `Digit${ch}`);
+  }
+  tap(h, scene, 'Enter');
 }
 
 /** A drag across a row of cells, one frame per cell, as a real one arrives. */
@@ -671,5 +690,106 @@ describe('regressions from the review', () => {
     step(h, scene);
     expect(scene.state.mode).toBe('id');
     expect(scene.state.rows[0]).toHaveLength(w);
+  });
+});
+
+describe('the size field', () => {
+  // The delta resize is a nudge; this is a destination. Both are needed, and
+  // this is the one that makes a 200-wide level authorable — the same edit as
+  // 190 taps of `]`, in one command and one undo step.
+
+  it('R opens it prefilled with the current size, and Enter applies it', () => {
+    const { h, scene } = open();
+    tap(h, scene, 'KeyR');
+    expect(scene.state.mode).toBe('size');
+    expect(scene.state.buffer).toBe('10X5');
+
+    for (const code of ['Backspace', 'Backspace', 'Backspace', 'Backspace']) {
+      tap(h, scene, code);
+    }
+    for (const code of ['Digit2', 'Digit4', 'KeyX', 'Digit8']) {
+      tap(h, scene, code);
+    }
+    tap(h, scene, 'Enter');
+    expect(scene.state.mode).toBe('paint');
+    expect(scene.state.rows[0]).toHaveLength(24);
+    expect(scene.state.rows).toHaveLength(8);
+    // Grown from the right and the bottom, so the markers did not move.
+    expect(scene.state.rows[1][2]).toBe('S');
+    expect(validateLevel(scene.state.rows)).toEqual([]);
+  });
+
+  it('IS ONE UNDO STEP, however many axes it moved', () => {
+    const { h, scene } = open();
+    const before = scene.state.rows;
+    tap(h, scene, 'KeyR');
+    typeSize(h, scene, '30X12');
+    expect(scene.state.rows[0]).toHaveLength(30);
+
+    h.input.onKey('ControlLeft', true);
+    tap(h, scene, 'KeyZ');
+    h.input.onKey('ControlLeft', false);
+    expect(scene.state.rows).toEqual(before);
+  });
+
+  it('swallows every key while open, exactly like the name field', () => {
+    const { h, scene } = open();
+    const before = scene.state.rows;
+    const sel = scene.state.sel;
+    tap(h, scene, 'KeyR');
+    for (const code of ['Digit2', 'KeyZ', 'BracketRight', 'KeyS']) {
+      tap(h, scene, code);
+    }
+    expect(scene.state.rows).toEqual(before);
+    expect(scene.state.sel).toBe(sel);
+    expect(scene.state.mode).toBe('size');
+  });
+
+  it('Esc cancels without resizing and without leaving the editor', () => {
+    const { h, scene } = open();
+    const before = scene.state.rows;
+    tap(h, scene, 'KeyR');
+    tap(h, scene, 'Escape');
+    expect(scene.state.mode).toBe('paint');
+    expect(scene.state.rows).toEqual(before);
+    expect(h.scenes).toHaveLength(0);
+  });
+
+  it('says so and stays open when the entry is not two numbers', () => {
+    const { h, scene } = open();
+    const before = scene.state.rows;
+    tap(h, scene, 'KeyR');
+    for (let i = 0; i < 8; i++) {
+      tap(h, scene, 'Backspace');
+    }
+    tap(h, scene, 'Digit9');
+    tap(h, scene, 'Enter');
+    expect(scene.state.mode).toBe('size');
+    expect(scene.state.rows).toEqual(before);
+    expect(scene.state.status).toContain('SIZE');
+  });
+
+  it('clamps to the caps rather than refusing the entry', () => {
+    const { h, scene } = open();
+    tap(h, scene, 'KeyR');
+    typeSize(h, scene, '999X999');
+    expect(scene.state.rows[0]).toHaveLength(EDITOR_MAX_W);
+    expect(scene.state.rows).toHaveLength(EDITOR_MAX_H);
+  });
+
+  it('A CROP THAT LOSES THE GOAL REACHES THE PANEL, like every other resize', () => {
+    const { h, scene } = open();
+    tap(h, scene, 'KeyR');
+    typeSize(h, scene, '4X5');
+    expect(scene.state.errors.some((e) => e.includes('found 0 goal markers'))).toBe(true);
+  });
+
+  it('writes the draft, so a resize survives a reload', () => {
+    const { h, scene } = open();
+    tap(h, scene, 'KeyR');
+    typeSize(h, scene, '12X6');
+    const draft = h.game.save.getText(SAVE_KEYS.editorDraft);
+    expect(draft).not.toBeNull();
+    expect(JSON.parse(draft as string).rows[0]).toHaveLength(12);
   });
 });

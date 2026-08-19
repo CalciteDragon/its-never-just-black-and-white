@@ -19,6 +19,7 @@ import {
   forEachCharRun,
   gridWarnings,
   isGridChar,
+  parseSizeInput,
 } from '../src/editor/grid';
 import { parseLevel, validateLevel } from '../src/world/level';
 
@@ -537,5 +538,108 @@ describe('forEachCharRun', () => {
     let calls = 0;
     forEachCharRun(rows, 0, 0, 59, 33, () => calls++);
     expect(calls).toBe(34);
+  });
+});
+
+describe('setting an absolute size', () => {
+  // The delta resize is the right verb for nudging an edge and the wrong one
+  // for authoring: reaching EDITOR_MAX_W from the default is 160 keypresses.
+  // `setSize` is the same edit expressed as a destination, and it has to agree
+  // with `resize` cell for cell or the editor has two different resizes.
+
+  it('grows right and down, leaving the existing content where it was', () => {
+    const grid = g();
+    expect(grid.setSize(14, 8)).toBe(true);
+    expect(grid.w).toBe(14);
+    expect(grid.h).toBe(8);
+    expect(grid.charAt(2, 1)).toBe('S');
+    expect(grid.charAt(7, 1)).toBe('G');
+    expect(grid.rows[7]).toBe('.'.repeat(14));
+    expect(validateLevel(grid.rows)).toEqual([]);
+  });
+
+  it('crops from the right and the bottom', () => {
+    const grid = g();
+    expect(grid.setSize(8, 3)).toBe(true);
+    expect(grid.w).toBe(8);
+    expect(grid.h).toBe(3);
+    for (const row of grid.rows) {
+      expect(row).toHaveLength(8);
+    }
+  });
+
+  it('agrees with the equivalent pair of delta resizes', () => {
+    const viaDelta = g();
+    viaDelta.resize('right', 5);
+    viaDelta.resize('bottom', -2);
+    const viaSize = g();
+    viaSize.setSize(15, 3);
+    expect(viaSize.rows).toEqual(viaDelta.rows);
+  });
+
+  it('is ONE undo step, not two, however many axes moved', () => {
+    // The whole point of the destination form: growing wider and shorter in one
+    // command must not cost two Ctrl+Z to take back.
+    const grid = g();
+    const before = grid.rows;
+    grid.setSize(20, 4);
+    expect(grid.undoDepth).toBe(1);
+    grid.undo();
+    expect(grid.rows).toEqual(before);
+  });
+
+  it('clamps to the caps and to a single row or column', () => {
+    const grid = g();
+    grid.setSize(EDITOR_MAX_W + 50, EDITOR_MAX_H + 50);
+    expect(grid.w).toBe(EDITOR_MAX_W);
+    expect(grid.h).toBe(EDITOR_MAX_H);
+    grid.setSize(0, -4);
+    expect(grid.w).toBe(1);
+    expect(grid.h).toBe(1);
+  });
+
+  it('reports a size that is already the current one as no edit at all', () => {
+    const grid = g();
+    expect(grid.setSize(grid.w, grid.h)).toBe(false);
+    expect(grid.undoDepth).toBe(0);
+  });
+
+  it('refuses a non-finite or fractional size rather than producing a ragged grid', () => {
+    const grid = g();
+    expect(grid.setSize(Number.NaN, 5)).toBe(false);
+    expect(grid.setSize(10, Number.POSITIVE_INFINITY)).toBe(false);
+    expect(grid.w).toBe(10);
+    expect(grid.h).toBe(5);
+    // Fractional is floored, not refused: it is a real destination.
+    expect(grid.setSize(12.9, 6.2)).toBe(true);
+    expect(grid.w).toBe(12);
+    expect(grid.h).toBe(6);
+  });
+
+  it('a crop that loses a marker is reported, not prevented — same as a delta resize', () => {
+    const grid = g();
+    grid.setSize(2, 5);
+    const errors = validateLevel(grid.rows);
+    expect(errors.some((e) => e.includes('found 0 goal markers'))).toBe(true);
+  });
+});
+
+describe('parsing a typed size', () => {
+  // The editor's size field. Pure, so the scene owns no parsing of its own.
+
+  it('reads the W X H the status line prints', () => {
+    expect(parseSizeInput('60X20')).toEqual({ w: 60, h: 20 });
+  });
+
+  it('accepts the separators an author will actually type', () => {
+    for (const text of ['60x20', '60 X 20', '60*20', '60,20', ' 60 20 ']) {
+      expect(parseSizeInput(text)).toEqual({ w: 60, h: 20 });
+    }
+  });
+
+  it('rejects anything that is not two whole numbers', () => {
+    for (const text of ['', '60', 'X', '60X', 'AXB', '60X20X5', '-6X20', '6.5X20']) {
+      expect(parseSizeInput(text)).toBeNull();
+    }
   });
 });

@@ -13,6 +13,7 @@ import {
   LOOKAHEAD_TIME,
   RUN_SPEED,
   STEP,
+  TILE,
   VIEW_H,
   VIEW_W,
 } from '../src/constants';
@@ -271,5 +272,94 @@ describe('Camera bounce', () => {
     const before = c.y;
     c.clampY(3000);
     expect(c.y).toBe(before);
+  });
+});
+
+describe('Camera on maps of arbitrary size', () => {
+  // The view is 960 x 540 and nothing in the level format bounds a grid to it,
+  // so both clamps have to hold at every scale. The three interesting regimes
+  // are "smaller than the view", "exactly the view" and "much larger", and the
+  // boundary case is the one a `<` instead of a `<=` would silently break.
+  const wideW = 200 * TILE;
+  const tallH = 60 * TILE;
+
+  it('puts a map exactly VIEW_W wide at x = 0, from either side', () => {
+    // mapWpx === VIEW_W satisfies both branches, and they agree: the centring
+    // formula gives (VIEW_W - VIEW_W) / 2 = 0 and the clamp gives [0, 0].
+    const left = new Camera();
+    left.snapTo(-9999, 0);
+    left.clampX(VIEW_W);
+    expect(left.x).toBe(0);
+
+    const right = new Camera();
+    right.snapTo(9999, 0);
+    right.clampX(VIEW_W);
+    expect(right.x).toBe(0);
+  });
+
+  it('puts a map exactly VIEW_H tall at y = 0, with no slack either side', () => {
+    // The slack is an allowance to see past a real edge; a map the size of the
+    // view has nowhere to see past, so it centres and the slack never applies.
+    const up = new Camera();
+    up.snapTo(0, -9999);
+    up.clampY(VIEW_H);
+    expect(up.y).toBe(0);
+
+    const down = new Camera();
+    down.snapTo(0, 9999);
+    down.clampY(VIEW_H);
+    expect(down.y).toBe(0);
+  });
+
+  it('clamps a 200-tile-wide map to [0, mapWpx - VIEW_W] and leaves the middle be', () => {
+    const before = new Camera();
+    before.snapTo(-50000, 0);
+    before.clampX(wideW);
+    expect(before.x).toBe(0);
+
+    const after = new Camera();
+    after.snapTo(50000, 0);
+    after.clampX(wideW);
+    expect(after.x).toBe(wideW - VIEW_W);
+
+    // Interior: the clamp is a bound, not a snap — it must not move a view that
+    // is already legal.
+    const inside = new Camera();
+    inside.snapTo(wideW / 2, 0);
+    const was = inside.x;
+    inside.clampX(wideW);
+    expect(inside.x).toBe(was);
+    expect(inside.x).toBeGreaterThan(0);
+    expect(inside.x).toBeLessThan(wideW - VIEW_W);
+  });
+
+  it('clamps a 60-tile-tall map to [-CAMERA_VSLACK, mapHpx - VIEW_H + CAMERA_VSLACK]', () => {
+    const top = new Camera();
+    top.snapTo(0, -50000);
+    top.clampY(tallH);
+    expect(top.y).toBe(-CAMERA_VSLACK);
+
+    const bottom = new Camera();
+    bottom.snapTo(0, 50000);
+    bottom.clampY(tallH);
+    expect(bottom.y).toBe(tallH - VIEW_H + CAMERA_VSLACK);
+
+    const inside = new Camera();
+    inside.snapTo(0, tallH / 2);
+    const was = inside.y;
+    inside.clampY(tallH);
+    expect(inside.y).toBe(was);
+  });
+
+  it('centres a one-tile map — the smallest grid the format can express', () => {
+    // A 1x1 grid is a legal level (one row, one character); it is also the
+    // extreme of the narrower-than-view branch, where the centred origin is
+    // nearly half a view negative rather than a rounding error.
+    const c = new Camera();
+    c.snapTo(9999, 9999);
+    c.clampX(TILE);
+    c.clampY(TILE);
+    expect(c.x).toBe((TILE - VIEW_W) / 2);
+    expect(c.y).toBe((TILE - VIEW_H) / 2);
   });
 });
