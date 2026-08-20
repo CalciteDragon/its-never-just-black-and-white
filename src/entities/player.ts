@@ -473,6 +473,13 @@ export class Player {
     }
     if (dir.dy !== 0) {
       b.vy = dir.dy * PAD_IMPULSE;
+      // SPEND the pending jump cut. `jumpCutDone` is cleared by a jump and set
+      // by the release that cuts it, so a player who jumps, holds all the way
+      // into a pad, and only then lets go still had a cut owed — and the cut
+      // fires on the pad's vy instead of the jump's, turning a 820 launch into
+      // a 369 hop. A pad launch is not cuttable (see the cut above), and that
+      // is only true if firing one settles the debt the jump left open.
+      this.jumpCutDone = true;
     }
     const rx = c.x - b.x;
     const ry = c.y - b.y;

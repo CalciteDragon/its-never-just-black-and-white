@@ -497,6 +497,36 @@ describe('jump pads (GAME-DESIGN §5, decision 4)', () => {
     expect(slow.body.vy).toBe(-PAD_IMPULSE);
   });
 
+  it('a pad launch is NOT cuttable by a jump held into it and released after', () => {
+    // The bug: `jumpCutDone` is cleared by a jump and set by the release that
+    // cuts it, so holding jump all the way into a pad leaves the cut still
+    // owed — and it then spent itself on the PAD's vy. 820 became 369, a fifth
+    // of the launch height: "sometimes it's only a small bounce".
+    const m = new TileMap(40, 14);
+    m.fillRect(0, 10, 40, 4, Tile.Solid);
+    for (let x = 0; x <= 4; x++) {
+      m.set(x, 10, Tile.PadUp);
+    }
+    const w = world(m);
+    const p = grounded(m, 8);
+    // Jump and hold, drifting left onto the pads, so the cut is still pending
+    // when the pad fires.
+    p.update(STEP, inp({ jumpPressed: true, jumpHeld: true, left: true }), w);
+    let fired = false;
+    for (let i = 0; i < 200; i++) {
+      p.update(STEP, inp({ jumpHeld: true, left: true }), w);
+      if (Math.abs(p.body.vy + PAD_IMPULSE) < 1) {
+        fired = true;
+        break;
+      }
+    }
+    expect(fired).toBe(true);
+    // Release while still rising on the pad's launch: one frame of gravity is
+    // the only thing allowed to touch it.
+    p.update(STEP, inp({ left: true }), w);
+    expect(p.body.vy).toBeLessThan(-PAD_IMPULSE * 0.9);
+  });
+
   it('a down-pad along gravity is a slam: the clamp catches it at MAX_FALL_SPEED', () => {
     // Struck from below, so the launch carries the body away from the pad
     // rather than back into it. Pointing WITH gravity the pad still hands over
