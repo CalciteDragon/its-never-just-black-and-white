@@ -42,7 +42,7 @@ function boxes(sign: Sign): { x0: number; y0: number; x1: number; y1: number }[]
 
 describe('signsFor', () => {
   it('has captions for the tutorial and nothing else', () => {
-    expect(signsFor('00-tutorial').length).toBe(5);
+    expect(signsFor('00-tutorial').length).toBe(6);
     for (const level of LEVELS) {
       if (level.id !== '00-tutorial') {
         expect(signsFor(level.id)).toEqual([]);
@@ -56,13 +56,14 @@ describe('signsFor', () => {
 });
 
 describe('the tutorial signs', () => {
-  it('teach the four verbs and the goal, in play order', () => {
+  it('teach the four verbs, the pads and the goal, in play order', () => {
     const said = signsFor('00-tutorial').map((s) => s.lines.join(' '));
     expect(said[0]).toContain('A AND D');
     expect(said[1]).toContain('W TO JUMP');
     expect(said[2]).toContain('SPACE TO FLIP');
     expect(said[3]).toContain('DIAMOND');
-    expect(said[4]).toContain('FINISH');
+    expect(said[4]).toContain('JUMP PAD ALSO RECHARGES FLIP');
+    expect(said[5]).toContain('FINISH');
   });
 
   it('reads left to right: each sign starts after the one before it', () => {

@@ -45,14 +45,21 @@ export interface Sign {
 }
 
 /**
- * The tutorial's five captions, in the order the level is played:
+ * The tutorial's six captions, in the order the level is played:
  *
  * 1. the run, over the flat opening ground;
  * 2. the jump, over the first gap;
  * 3. the flip, in the shaft under the first upside-down platform — the pit
  *    below it has no floor, so the caption is the only way across;
  * 4. the pickup, above the first diamond;
- * 5. the goal, pointing at it.
+ * 5. the pads, in the pit facing the padded wall that closes the level;
+ * 6. the goal, pointing at it.
+ *
+ * 5 is the newest and teaches the rule the 0.2 playtest amended in — a pad
+ * hands the flip straight back, so a pad chain is a chain of choices
+ * (`entities/player.ts`). It is placed in the open pit rather than on the wall
+ * because the wall is where the pads are, and a caption drawn over them would
+ * be the one bit of ink the player is trying to read the shape of.
  */
 const TUTORIAL_SIGNS: readonly Sign[] = [
   { lines: ['USE A AND D TO MOVE LEFT AND RIGHT'], x: 336, y: 544 },
@@ -64,10 +71,15 @@ const TUTORIAL_SIGNS: readonly Sign[] = [
     y: 384,
   },
   {
+    lines: ['TOUCHING A JUMP PAD', 'ALSO RECHARGES FLIP'],
+    x: 3760,
+    y: 528,
+  },
+  {
     lines: ['FINISH THE TUTORIAL'],
-    x: 3343,
-    y: 208,
-    arrow: { x0: 3472, y0: 215, x1: 3504, y1: 215 },
+    x: 4207,
+    y: 400,
+    arrow: { x0: 4336, y0: 407, x1: 4368, y1: 407 },
   },
 ];
 
