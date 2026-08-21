@@ -1,21 +1,35 @@
 # it's never just black and white
 
-A minimalist momentum platformer built from scratch with **TypeScript and the Canvas API**. You are a square. The world is two colours. Press space and both of them — along with gravity — turn inside out.
+**[▶ Play it in your browser — neverbnw.calcitedev.me](https://neverbnw.calcitedev.me)**
 
-**Zero runtime dependencies**: every level is readable JSON, every sound is synthesised WebAudio, every pixel is drawn by hand from two hex values.
+A minimalist momentum platformer built from scratch in **TypeScript on the Canvas API**, with **zero runtime dependencies**. You are a square. The world is two colours. Press space and both of them — along with gravity — turn inside out.
 
-![The first level mid-flip: gravity is up, so paper and ink have swapped and the square is hanging under a ceiling slab, warm accent sparks trailing behind it, chromatic fringing on every edge and the vignette closing in at speed.](docs/screenshot.png)
+No engine, no framework, no asset pipeline: the physics is a hand-written rigid-body solver, the soundtrack is synthesised WebAudio, the font is a 5×7 bitmap, the art is two hex values, and the twenty campaign levels are JSON grids authored in an editor that ships inside the game.
 
-> **0.2, and the overhaul is done.** This is a total rebuild of Pixel Quest — the dungeon platformer this repo used to hold, preserved in git history before `d7a54ff` — remade from the loop up in seven phases. All seven have landed: the square is a real rigid body that tumbles and catches on corners and rights itself, the world inverts on a keypress, four layers of synthesised techno arrive as you get fast, and levels are drawn in a browser editor that exports, imports and shares JSON. What is left is **levels**, which is the work the editor exists to enable. See [docs/PHASES.md](docs/PHASES.md) for the plan and everything that was learned building it.
+![Level one after a flip: gravity is up, so paper and ink have swapped — the world is white, the geometry black — and the square is running along the underside of a ceiling slab with a spark trail behind it, chromatic fringing splitting every edge and the vignette drawn in at speed.](docs/screenshot.png)
+
+> ⚠️ The game inverts the whole screen between black and white on a keypress, and shakes the view at speed. It warns you on the title screen; if you are photosensitive, please take that seriously.
+
+## At a glance
+
+| | |
+| --- | --- |
+| **Live** | [neverbnw.calcitedev.me](https://neverbnw.calcitedev.me) — no install, no login |
+| **Stack** | TypeScript (strict), HTML5 Canvas 2D, WebAudio, Vite, Vitest |
+| **Runtime dependencies** | 0 — dev deps are `typescript`, `vite`, `vitest` and nothing else |
+| **Size** | ~226 kB bundle, **43 kB gzipped**, including all 20 levels |
+| **Tests** | 813 unit tests across 29 files, headless node, ~1.4 s |
+| **CI** | GitHub Actions: typecheck → test → build on every push and PR |
+| **Source** | ~14,400 lines under `src/`, ~12,700 lines under `tests/` |
+| **Content** | 20 hand-authored levels, plus an in-browser editor with import/export/share |
 
 ## Play
 
 ```bash
-npm install
-npm run dev
+npm install && npm run dev
 ```
 
-Then open http://localhost:5173.
+Then open http://localhost:5173 — or just use the [live build](https://neverbnw.calcitedev.me).
 
 ### Controls
 
@@ -31,51 +45,48 @@ Then open http://localhost:5173.
 | Custom levels | `C` from the level select, or its pinned first row |
 | — on that screen | `Enter` play · `E` export · `D` edit · `X` delete |
 
-There is no double jump. The flip is the air move — and **it only recharges when you touch ground**, so every gap is a jump, a flip, or a jump-then-flip.
+There is no double jump. The flip is the air move — and **it only recharges when you touch ground**, so every gap is a jump, a flip, or a jump-then-flip. Reach the goal; the only hazard is leaving the world vertically, and since gravity flips, both directions are lethal. Levels also carry jump pads, which throw you along their facing, and a **flip recharge** pickup — the flip's own charge as a placeable object, which is how a level says "here, have a second one".
 
-### Rules
+## Engineering highlights
 
-Reach the goal. The only hazard is leaving the world vertically, and since gravity flips, both directions are lethal. No enemies, no score, no lives. Death costs you about half a second. The one thing there is to collect is a **flip recharge** — the flip's own charge as a placeable object, which is how a level says "here, you get a second one"; it has no collision and comes back three seconds after it is taken.
+These are the parts worth reading the code for.
 
-## What makes it interesting
+**A rigid-body solver, written by hand.** The square carries angular velocity, its corners genuinely collide with the world through SAT, off-centre impacts spin it, and it can land tilted and settle. Nothing is animated — every frame you see is the simulation. But linear motion stays deliberately arcade: left and right set velocity directly, and the velocity component into a surface is clamped dead on contact, so spin supplies all the drama and never decides where you land. [docs/PHYSICS.md](docs/PHYSICS.md) has the impulse math and the one line that joins the two models.
 
-**The square is a real rigid body.** It carries angular velocity, its corners genuinely collide with geometry via SAT, off-centre impacts spin it, and it can land tilted and settle. Nothing is animated — every frame you see is the simulation.
+**Determinism, enforced by test.** Fixed 60 Hz timestep, no wall-clock reads on a logic path, and all randomness routed through a seeded `Rng`. The same start state plus the same input sequence produces a bit-identical trajectory over hundreds of steps, and a test asserts it — so accidental non-determinism surfaces as an immediate red instead of a physics bug found three phases later.
 
-But linear motion stays arcade: left and right set velocity directly, and the velocity component into a surface is clamped dead on contact. Spin supplies all the drama and none of the frustration, because it never decides where you land — only how you look getting there. [docs/PHYSICS.md](docs/PHYSICS.md) has the equations and the one line that joins the two models.
+**Logic never touches the DOM.** Physics, entities, level parsing, scenes and editor state import no browser APIs at all; only the bootstrap, renderer, audio, storage/clipboard IO and `Input.attach` may, and even those are importable in node. The whole suite therefore runs headless with no jsdom and no shim — 813 assertions in under two seconds. `Input.attach` owns the pointer and converts it to view space on the way in, which is why the editor can be unit-tested *with the mouse*: a test paints a stroke, undoes it, resizes the grid, playtests it, and never constructs a canvas.
 
-**Two colours, enforced structurally.** `paper` and `ink`, and the flip swaps which hex each resolves to. No hex literal exists anywhere outside `engine/palette.ts`, so the flip is a single field assignment and no draw call ever branches on phase. Colour survives in exactly three sanctioned places — particles, the vignette, and chromatic fringing at speed — which is what will make the final level's ending land.
+**Two colours, enforced structurally.** `paper` and `ink`, and the flip swaps which hex each resolves to. No hex literal exists anywhere outside `engine/palette.ts`, so the flip is a single field assignment and no draw call ever branches on the current phase — particles composite an inversion of the frame rather than wearing a colour. That discipline is what lets the final level break the rule on purpose and have it land.
 
-**One number drives the whole feel.** Normalised speed closes the vignette, splits the colour channels, bounces the screen, and gates four layers of synthesised techno. They share an input, so they arrive together: the game visibly and audibly opens up as you get fast.
+**One number drives the whole feel.** Normalised speed closes the vignette, splits the colour channels, bounces the screen, and gates four layers of synthesised techno. Because they share an input, they arrive together: the game visibly and audibly opens up as you get fast.
 
-**Levels are drawn in the browser.** `E` opens a picker — new level, import, every work-in-progress draft, every shipped level — and a shipped level opens as a *copy* with an id of its own, because a level in `src/levels/` is a file under version control. The editor itself is a scene inside the game, not a separate tool, and it edits the level's *characters* rather than a parsed model — so validation, exporting and playtesting are the same three functions the game already had, and playtest hands the grid to the real `PlayScene` with no second parser and no preview mode.
+**The level editor is a scene, not a side tool.** `E` opens a picker — new level, import, every autosaved draft, every shipped level (which opens as a *copy* with an id of its own, because a level in `src/levels/` is a file under version control). It edits the level's *characters* rather than a parsed model, so validation, serialisation and playtesting are the same three functions the game already had, and playtest hands the grid straight to the real `PlayScene` — no second parser, no preview mode. Drafts autosave every stroke and show up under CUSTOM LEVELS ready to play with no import step; `Ctrl+S` exports `<id>.json` byte-identical to what `serializeLevel` writes, and dropping a `.json` on the window imports it — validated by the same function the editor's error panel uses, and renamed rather than overwritten on an id clash. The shipped campaign levels were built in it start to finish, without opening a text editor. That was the point.
 
-**And they can be shared.** The editor **autosaves** every stroke to a shelf of drafts, and every draft shows up under LEVELS → CUSTOM LEVELS ready to play, with no import step — a level you made here is already here. `Ctrl+S` is **export**, which is a different act: it downloads `<id>.json`, byte-identical to what `serializeLevel` writes, so the file can be sent to somebody or committed to `src/levels/` verbatim. `E` on a CUSTOM LEVELS row does the same thing without opening the editor. Going the other way, drop a `.json` anywhere on the window (or press Enter on `+ IMPORT A LEVEL`) and it lands on the shelf — validated by the same function the editor's own error panel uses, and **renamed rather than overwritten** if the id is taken. A custom level records a best time and never touches campaign progress.
-
-The shipped `02-second-nature` was built in it, start to finish, without opening a text editor. That was the point.
-
-**The editor unit-tests with the mouse.** A press arrives as `Input.onPointerDown(vx, vy, button)` in view space — `attach` runs the letterbox inverse on the way in — so the pure core never learns that a scale exists, and a test paints a stroke, undoes it, resizes the grid, playtests it and comes back with no canvas anywhere.
+**Assets are code.** Two hex values, a 5×7 bitmap font, oscillator envelopes and JSON grids. No binary game assets, which is how twenty levels of content fit in a 43 kB gzipped bundle that loads instantly on a cold cache.
 
 ## Development
 
 ```bash
-npm run dev
-npm test
-npm run typecheck
-npm run build
+npm run dev        # vite dev server on :5173
+npm test           # vitest — 813 tests, node environment
+npm run typecheck  # tsc --noEmit
+npm run build      # typecheck + production build
 ```
+
+CI runs typecheck, tests and the production build on every push and pull request — [.github/workflows/ci.yml](.github/workflows/ci.yml).
 
 ### Dev URL params
 
-Both are read once in [src/main.ts](src/main.ts) and work on the dev server or a
-production build — append them to the page URL, e.g. `http://localhost:5173/?tune=1`.
+Each is read once in [src/main.ts](src/main.ts) and works on the dev server or a production build — append it to the page URL, e.g. `http://localhost:5173/?tune=1`.
 
 | Param | What it does |
 | --- | --- |
 | `?editor=1` | Boots straight into the editor's picker instead of the title screen — new level, import, every draft, every shipped level. Skips the title/level-select walk when you are authoring. |
-| `?tune=1` | Mounts the [dev tuner](src/devtuner.ts) over the canvas: live sliders for the wind-up escalation numbers and the whole lead-synth instrument, with AUDITION to force the bed to full intensity from any scene. Each section's COPY puts paste-ready `constants.ts` lines on the clipboard — the tuner writes to `engine/tuning.ts` and never edits the game. Dynamically imported, so a session that never asks for it never loads the panel. |
+| `?tune=1` | Mounts the [dev tuner](src/devtuner.ts) over the canvas: live sliders for the wind-up escalation numbers and the whole lead-synth instrument, with AUDITION to force the bed to full intensity from any scene. Each section's COPY puts paste-ready `constants.ts` lines on the clipboard — the tuner writes to `engine/tuning.ts` and never edits the game. |
+| `?perf=1` | Mounts the [performance monitor](src/devperf.ts) and turns the profiler on: per-phase frame timings in a panel, plus a `window.__perf` scripting API for recording a session. |
 
-There is also `window.__bw = { game }` in every build, which is the live `Game`
-from the console — handy for `__bw.game.setScene(...)`.
+Both panels are dynamically imported behind their flag, so a player's bundle never contains them and the instrumentation in the loop costs one boolean test per frame when it is off. `window.__bw = { game }` exposes the live `Game` in every build — handy for `__bw.game.setScene(...)` from the console.
 
 ### Project structure
 
@@ -84,14 +95,16 @@ src/
   constants.ts     every tuning number, commented with units
   game.ts          fixed-timestep loop (60 Hz) + scene management
   main.ts          browser bootstrap (canvas, resize, fullscreen)
-  engine/          rng, input, font, palette, renderer, audio, save, particles, levelio
+  engine/          rng, input, font, palette, renderer, audio, save,
+                   particles, levelio, link, perf, tuning
   world/           tiles, obb, physics, level, camera
-  entities/        player
-  scenes/          title, level select, play, results, editor + its picker
-                   and controls panel, menu, tiledraw
+  entities/        player — the only entity
+  scenes/          title, level select, play, results, credits, finale,
+                   in-world signs, editor + its picker and controls panel,
+                   custom levels, and the shared menu and tile drawing
   editor/          pure grid model, undo, validation, warnings, the draft
                    shelf, the zoom ladder
-  levels/          hand-authored level JSON, one file per level
+  levels/          20 hand-authored levels, one JSON file each
 tests/             vitest, node environment — no DOM required
 docs/              design doc, build plan, architecture and physics deep-dives
 ```
@@ -99,15 +112,17 @@ docs/              design doc, build plan, architecture and physics deep-dives
 ### Docs
 
 - [docs/GAME-DESIGN.md](docs/GAME-DESIGN.md) — the design source of truth: palette, mechanics, tuning targets, level format, module contracts
-- [docs/PHASES.md](docs/PHASES.md) — the seven-phase build plan and what's landed
+- [docs/PHASES.md](docs/PHASES.md) — the seven-phase build plan, each phase's *as built* notes, and the post-0.2 amendments
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — module graph, game loop, rendering pipeline, testing strategy
 - [docs/PHYSICS.md](docs/PHYSICS.md) — the SAT rigid-body solver, the impulse math, and the numbers
 
-### The three load-bearing decisions
+## History
 
-1. **Logic never touches the DOM.** Physics, entities, level parsing, and editor state import no browser APIs, so the entire suite runs in plain node with no shim. A rigid-body solver with angular impulses has far more room for subtle error than an AABB sweep, and a few hundred headless assertions running in milliseconds is the only affordable way to pin it down.
-2. **Determinism, re-pointed.** The old build needed it to reproduce a dungeon from a seed. This one needs it so that the same start state plus the same inputs produce a bit-identical trajectory over hundreds of steps — which a test asserts, turning any accidental non-determinism into an immediate red rather than a physics bug found three phases later.
-3. **Assets are code.** Two hex values, a 5×7 bitmap font, oscillator envelopes, and JSON grids. No binary game assets, and the production build is a single small bundle.
+This repo used to hold **Pixel Quest**, a procedural dungeon platformer. Version 0.2 is a total rebuild from the game loop up, planned and executed in seven phases; nothing of the old build survives in `src/`, and it is preserved in git history before `d7a54ff`. All seven phases have landed, the twenty-level campaign and its colour ending have shipped, and the editor exists so that the work from here is levels.
+
+## Author
+
+Built by **CalciteDragon** — [calcitedev.me](https://calcitedev.me) · [Ko-fi](https://ko-fi.com/calcitedragon)
 
 ## License
 
