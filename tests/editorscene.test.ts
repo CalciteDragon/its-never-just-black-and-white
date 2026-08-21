@@ -387,6 +387,32 @@ describe('naming', () => {
     expect(scene.state.mode).toBe('paint');
   });
 
+  it('reports textEntry() while a field is open, so F stops meaning fullscreen', () => {
+    // main.ts's fullscreen toggle is a bare-letter keybind on the window, and
+    // it reads exactly this. A name with an F in it used to fling the page
+    // into fullscreen mid-word.
+    const { h, scene } = open();
+    expect(scene.textEntry()).toBe(false);
+    tap(h, scene, 'KeyN');
+    expect(scene.textEntry()).toBe(true); // the id field
+    tap(h, scene, 'Enter');
+    expect(scene.textEntry()).toBe(true); // the name field
+    for (const code of ['KeyF', 'KeyF']) {
+      tap(h, scene, code);
+    }
+    expect(scene.state.mode).toBe('name');
+    tap(h, scene, 'Enter');
+    expect(scene.textEntry()).toBe(false);
+    expect(scene.state.name).toBe('TEST LEVELFF');
+  });
+
+  it('reports textEntry() false for the help panel, which types nothing', () => {
+    const { h, scene } = open();
+    tap(h, scene, 'KeyH');
+    expect(scene.state.mode).toBe('help');
+    expect(scene.textEntry()).toBe(false);
+  });
+
   it('THE TEXT FIELD SWALLOWS EVERY KEY, including the ones that paint', () => {
     // The classic modal bug: typing a name and finding you have painted a
     // level's worth of tiles behind the dialog.

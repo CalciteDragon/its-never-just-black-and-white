@@ -183,7 +183,7 @@ The four vertical menus are one function. `updateMenu(game, index, count)` in `s
 
 Every shell scene calls `palette.reset()` in `enter`. The palette is the only readout of gravity there is (GAME-DESIGN §2) and a menu has no gravity, so a screen that inherited the phase from however the last run happened to end would be showing a readout of nothing — and would look different on every visit.
 
-The title's controls footer is built from `BINDINGS` through `bindingLabel`, not from a hardcoded string, so a rebinding cannot leave the front door of the game lying about which key does what. `fullscreen` is in that table for the label alone — no scene reads the action, because the toggle is pure browser chrome and lives on a raw keydown listener in `main.ts`. A verb the player is told about has to come from the same table as the verbs the player presses, or the footer is a second source of truth pretending to be a view of the first.
+The title's controls footer is built from `BINDINGS` through `bindingLabel`, not from a hardcoded string, so a rebinding cannot leave the front door of the game lying about which key does what. `fullscreen` is in that table for the label alone — no scene reads the action, because the toggle is pure browser chrome and lives on a raw keydown listener in `main.ts` — which asks `game.textEntry` first, so a scene typing letters into a field (the editor's id, name and size) keeps its F rather than losing it to the window. A verb the player is told about has to come from the same table as the verbs the player presses, or the footer is a second source of truth pretending to be a view of the first.
 
 ## The editor
 

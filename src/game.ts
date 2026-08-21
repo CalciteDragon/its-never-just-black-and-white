@@ -17,6 +17,15 @@ export interface Scene {
   exit?(game: Game): void;
   update(dt: number, game: Game): void;
   render(r: Renderer, game: Game): void;
+  /**
+   * True while the scene is reading letters as TEXT rather than as commands —
+   * the editor's id, name and size fields. Browser chrome bound to a bare
+   * letter (fullscreen on F, in main.ts) has to stand down for exactly that
+   * window, or typing a level name flings the page into fullscreen. Declared
+   * here rather than sniffed off the editor because the reader is the
+   * bootstrap, which must not know which scenes have fields.
+   */
+  textEntry?(): boolean;
 }
 
 /**
@@ -93,6 +102,11 @@ export class Game {
    */
   get activeScene(): Scene | null {
     return this.scene;
+  }
+
+  /** Is the scene on screen typing into a field? See `Scene.textEntry`. */
+  get textEntry(): boolean {
+    return this.scene?.textEntry?.() ?? false;
   }
 
   setScene(s: Scene): void {

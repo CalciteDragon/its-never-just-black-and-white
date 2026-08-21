@@ -485,6 +485,15 @@ export class EditorScene implements Scene {
   // have different jobs: one becomes a filename and a save key, the other is
   // drawn by a font with no lowercase glyphs. ---
 
+  /**
+   * `Scene.textEntry`: is a field open? Every key belongs to the buffer while
+   * it is, including the ones bound elsewhere — which is why main.ts's
+   * fullscreen toggle asks before acting on F.
+   */
+  textEntry(): boolean {
+    return this.mode === 'id' || this.mode === 'name' || this.mode === 'size';
+  }
+
   private beginTextEntry(mode: 'id' | 'name' | 'size'): void {
     // A field swallows every key including the release edge of a drag, so the
     // drag has to end here rather than be left for a pointer-up that the field
@@ -850,7 +859,7 @@ export class EditorScene implements Scene {
   }
 
   private headerLine(): string {
-    return this.mode === 'id' || this.mode === 'name' || this.mode === 'size'
+    return this.textEntry()
       ? `${this.mode.toUpperCase()}: ${this.buffer}_`
       : `${this.id}  ·  ${this.name}`;
   }
@@ -1071,7 +1080,7 @@ export class EditorScene implements Scene {
    * not.
    */
   private exportShortcut(game: Game): void {
-    if (this.mode === 'id' || this.mode === 'name' || this.mode === 'size') {
+    if (this.textEntry()) {
       // The buffer is not the level's id yet, and exporting mid-rename would
       // write a file named after the id being replaced. Say which key ends the
       // field instead of exporting something the author did not ask for.

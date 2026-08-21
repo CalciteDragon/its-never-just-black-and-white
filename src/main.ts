@@ -39,9 +39,12 @@ window.addEventListener('resize', fit);
 new ResizeObserver(fit).observe(document.documentElement);
 fit();
 
-// Fullscreen on F (kept out of scenes: it's pure browser chrome).
+// Fullscreen on F (kept out of scenes: it's pure browser chrome). It defers to
+// a scene that is typing — the editor's id, name and size fields — because an
+// F in a level name is a letter, not a command, and a page that jumps to
+// fullscreen mid-word is the worst possible answer to a keystroke.
 window.addEventListener('keydown', (e: KeyboardEvent) => {
-  if (e.code !== 'KeyF' || e.repeat) {
+  if (e.code !== 'KeyF' || e.repeat || game.textEntry) {
     return;
   }
   if (document.fullscreenElement) {
