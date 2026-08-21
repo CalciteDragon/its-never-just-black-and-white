@@ -31,16 +31,42 @@ describe('computeScale', () => {
     expect(computeScale(960, 540)).toEqual({ scale: 1, offX: 0, offY: 0 });
   });
 
-  it('1000×600 → scale 1 with letterbox offsets (20, 30)', () => {
+  it('1000×600 → snaps back to 1×, letterboxed on both axes', () => {
+    // Fits 1.04×; the quarter below that is 1× exactly.
     expect(computeScale(1000, 600)).toEqual({ scale: 1, offX: 20, offY: 30 });
   });
 
-  it('windows smaller than the view still get scale 1 (never 0)', () => {
-    const fit = computeScale(959, 539);
-    expect(fit.scale).toBe(1);
-    expect(fit.offX).toBeLessThanOrEqual(0);
-    expect(fit.offY).toBeLessThanOrEqual(0);
-    expect(computeScale(1, 1).scale).toBe(1);
+  it('snaps a magnifying scale down to a quarter step', () => {
+    expect(computeScale(1920, 940).scale).toBe(1.5); // fits 1.74
+    expect(computeScale(2560, 1253).scale).toBe(2.25); // fits 2.32
+    expect(computeScale(1366, 768).scale).toBe(1.25); // fits 1.42
+    expect(computeScale(2560, 1440).scale).toBe(2.5); // fits 2.67
+  });
+
+  it('leaves sub-1× scales unsnapped — a shrunk frame has no pixels to spare', () => {
+    expect(computeScale(480, 270).scale).toBeCloseTo(0.5, 9);
+    expect(computeScale(900, 600).scale).toBeCloseTo(900 / VIEW_W, 9);
+  });
+
+  it('windows smaller than the view shrink to fit rather than cropping', () => {
+    const fit = computeScale(480, 270);
+    expect(fit.scale).toBeCloseTo(0.5, 9);
+    expect(fit.offX).toBe(0);
+    expect(fit.offY).toBe(0);
+  });
+
+  it('lands on a whole scale when the window is close to a multiple of the view', () => {
+    // The crisp cases: `present` blits these unsmoothed.
+    expect(computeScale(1920, 1080).scale).toBe(2); // fullscreen 1080p, on the nose
+    expect(computeScale(1000, 600).scale).toBe(1); // fits 1.04
+    expect(computeScale(2900, 1650).scale).toBe(3); // fits 3.02
+  });
+
+  it('never returns a scale of 0, however degenerate the canvas', () => {
+    // screenToView divides by this. A detached or zero-sized canvas must not
+    // hand it a divisor of zero.
+    expect(computeScale(0, 0).scale).toBeGreaterThan(0);
+    expect(computeScale(1, 1).scale).toBeGreaterThan(0);
   });
 
   it('1920×1080 → scale 2 fullscreen', () => {
@@ -54,7 +80,50 @@ describe('computeScale', () => {
   it('scale is limited by the tighter axis and offsets stay integers', () => {
     // Width would allow 4×, height only 2×.
     expect(computeScale(3840, 1080)).toEqual({ scale: 2, offX: 960, offY: 0 });
-    expect(computeScale(965, 545)).toEqual({ scale: 1, offX: 2, offY: 2 });
+    expect(computeScale(965, 545)).toEqual({ scale: 1, offX: 3, offY: 3 });
+  });
+
+  // The bug this function was rewritten for. Flooring to a whole multiple made
+  // the frame's size a step function of the window: a browser windowed on a
+  // 1080p display (~940 px of viewport height) fits 1.74× and floored to 1,
+  // while the same window on a 1440p display fits 2.41× and floored to 2 --
+  // half the linear size on one display for no reason a player could see.
+  describe('fills the window consistently across displays', () => {
+    const COVERAGE = (winW: number, winH: number): number =>
+      (VIEW_H * computeScale(winW, winH).scale) / winH;
+
+    it('has no cliff between a 1080p and a 1440p browser window', () => {
+      // Floored to whole multiples these were 0.57 and 0.86 -- the same window
+      // drawn at half the linear size on one of the two displays. What is left
+      // is the quarter-step shortfall, bounded by 0.25/raw and shrinking as the
+      // display grows, which is a trim rather than a cliff.
+      const hd = COVERAGE(1920, 940);
+      const qhd = COVERAGE(2560, 1253);
+      expect(hd).toBeGreaterThan(0.85);
+      expect(qhd).toBeGreaterThan(0.85);
+      expect(Math.abs(hd - qhd)).toBeLessThan(0.15);
+    });
+
+    it('never overflows, and never leaves a whole step on the table', () => {
+      for (const [w, h] of [
+        [1920, 940],
+        [1600, 900],
+        [1366, 768],
+        [1920, 1080],
+        [2560, 1440],
+        [3440, 1440],
+      ] as const) {
+        const { scale } = computeScale(w, h);
+        expect(VIEW_W * scale).toBeLessThanOrEqual(w);
+        expect(VIEW_H * scale).toBeLessThanOrEqual(h);
+        // One more quarter step would not have fitted -- the shortfall is the
+        // snap, never slack.
+        const next = scale + 0.25;
+        expect(VIEW_W * next > w || VIEW_H * next > h).toBe(true);
+        // And the snap costs at most a seventh of the window.
+        expect(Math.max((VIEW_W * scale) / w, (VIEW_H * scale) / h)).toBeGreaterThan(0.85);
+      }
+    });
   });
 });
 
@@ -161,7 +230,7 @@ describe('tintAmount', () => {
  * that happen to letterbox at zero would let the naive `clientX / scale` pass.
  */
 describe('screenToView', () => {
-  /** What `present` does: blit the buffer at (offX, offY) at integer scale. */
+  /** What `present` does: blit the buffer at (offX, offY), scaled to fit. */
   function present(winW: number, winH: number, vx: number, vy: number): [number, number] {
     const { scale, offX, offY } = computeScale(winW, winH);
     return [offX + vx * scale, offY + vy * scale];
@@ -170,13 +239,13 @@ describe('screenToView', () => {
   const WINDOWS: readonly (readonly [number, number])[] = [
     [960, 540], // exact fit, scale 1
     [1920, 1080], // exact fit, scale 2
-    [1920, 1000], // scale 1, offX 480 offY 230 -- the loud one
-    [1000, 600], // scale 1, small letterbox
-    [1280, 800], // scale 1, offX 160 offY 130
-    [2560, 1440], // scale 2, offX 320 offY 180
+    [1920, 1000], // fractional scale, the awkward one
+    [1000, 600], // fractional, small letterbox
+    [1280, 800], // fractional, both axes odd against the view
+    [2560, 1440], // 1440p fullscreen, fractional
     [3840, 1080], // scale 2, offX 960 offY 0 -- pillarbox only
-    [1366, 768], // scale 1, odd numbers on both axes
-    [965, 545], // scale 1, a 2px border
+    [1366, 768], // odd numbers on both axes
+    [965, 545], // a hair over the view
   ];
 
   const POINTS: readonly (readonly [number, number])[] = [
@@ -200,33 +269,35 @@ describe('screenToView', () => {
   });
 
   it('THE LETTERBOX OFFSET IS A 15-TILE ERROR, not a sub-pixel one', () => {
-    // The prediction this test is watched failing against. At 1920x1000
-    // computeScale gives scale 1, offX 480, offY 230 -- so a naive
-    // `clientX / scale` lands 480 px right and 230 px down: 15 tiles across and
-    // 7.2 rows down, on a 32 px grid.
-    const fit = computeScale(1920, 1000);
-    expect(fit).toEqual({ scale: 1, offX: 480, offY: 230 });
-    const naive = screenToView(1920, 1000, 480, 230);
+    // The prediction this test is watched failing against. At 3840x1080
+    // computeScale gives scale 2 and offX 960 -- so a naive `clientX / scale`
+    // lands 480 view px to the right: 15 tiles across, on a 32 px grid.
+    const fit = computeScale(3840, 1080);
+    expect(fit).toEqual({ scale: 2, offX: 960, offY: 0 });
+    const naive = screenToView(3840, 1080, 960, 0);
     expect(naive.vx).toBe(0);
     expect(naive.vy).toBe(0);
-    expect(480 / 32).toBe(15);
-    expect(230 / 32).toBeCloseTo(7.1875, 4);
+    expect(960 / fit.scale / 32).toBe(15);
   });
 
   it('reports a point in the letterbox as out of frame rather than clamping', () => {
-    const inBar = screenToView(1920, 1000, 100, 500); // left bar, 380 px in
+    // Pillarboxed: 3840x1080 fills the height, leaving 960 px bars either side.
+    const inBar = screenToView(3840, 1080, 100, 500); // left bar, 860 px in
     expect(inBar.inFrame).toBe(false);
     expect(inBar.vx).toBeLessThan(0); // NOT clamped to 0
-    const below = screenToView(1920, 1000, 960, 990);
+    // Letterboxed: 1000x1080 fills the width, leaving 258 px bars top and bottom.
+    const below = screenToView(1000, 1080, 500, 1070);
     expect(below.inFrame).toBe(false);
     expect(below.vy).toBeGreaterThan(VIEW_H);
   });
 
   it('the frame is half-open: the far edge is out, the pixel before it is in', () => {
     const fit = computeScale(1000, 600);
-    const last = screenToView(1000, 600, fit.offX + VIEW_W - 1, fit.offY + VIEW_H - 1);
+    const w = VIEW_W * fit.scale;
+    const h = VIEW_H * fit.scale;
+    const last = screenToView(1000, 600, fit.offX + w - 1, fit.offY + h - 1);
     expect(last.inFrame).toBe(true);
-    const past = screenToView(1000, 600, fit.offX + VIEW_W, fit.offY + VIEW_H);
+    const past = screenToView(1000, 600, fit.offX + w, fit.offY + h);
     expect(past.inFrame).toBe(false);
   });
 

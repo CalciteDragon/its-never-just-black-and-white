@@ -4,7 +4,7 @@
  * appends it.
  */
 
-/** Internal render resolution (px). The world renders at this size, then integer-scales up. */
+/** Internal render resolution (px). The world renders at this size, then scales up to fit. */
 export const VIEW_W = 960;
 export const VIEW_H = 540;
 

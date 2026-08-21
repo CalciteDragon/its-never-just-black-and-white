@@ -1,5 +1,5 @@
 /**
- * Offscreen VIEW_W×VIEW_H canvas, integer-scaled to the visible canvas with
+ * Offscreen VIEW_W×VIEW_H canvas, scaled to fit the visible canvas with
  * letterboxing. Constructing a Renderer requires a DOM (browser only), but
  * computeScale and the post ramps are pure and node-tested.
  *
@@ -35,13 +35,62 @@ export interface ScaleFit {
   offY: number;
 }
 
-/** Largest integer scale of VIEW_W×VIEW_H fitting winW×winH, centered. Never 0. */
+/**
+ * Smallest scale below which the frame stops shrinking (a window this small has
+ * no usable game in it either way). It exists only so `screenToView` can never
+ * divide by zero on a zero-sized or detached canvas.
+ */
+const MIN_SCALE = 0.05;
+
+/**
+ * Steps per 1× that a magnifying scale snaps down to. Quarters, and the
+ * quarters are load-bearing in both directions: coarser is a cliff (halves put
+ * a 1366×768 window on 1×, at 70% of the height it could have used), and
+ * finer stops buying anything — the point of snapping is that a scale of n/4
+ * resamples on a repeating four-pixel pattern instead of an irrational-looking
+ * one, and 2.32× does not.
+ */
+const SCALE_STEPS = 4;
+
+/**
+ * Largest scale of VIEW_W×VIEW_H fitting winW×winH, centered. Never 0.
+ *
+ * **Continuous in the window, snapped in quarters.** Snapping to whole
+ * multiples looks tidy and reads consistently until you notice it is a cliff: a
+ * windowed browser on a 1080p display has about 940 px of viewport height, so
+ * it fits 1.74× and floored to 1 — half the linear size the same window gets
+ * on a 1440p display, which fits 2.41× and floored to 2. One display got a
+ * 960×540 stamp in a sea of letterbox; the other got a frame filling three
+ * quarters of its width.
+ *
+ * Filling the window exactly fixes that and overcorrects: an arbitrary scale is
+ * an arbitrary resample, and the frame goes soft in proportion to how odd the
+ * ratio is. Quarter steps keep the fit within about 14% of the window on every
+ * common size — no cliff — while landing on a rational magnification, and on
+ * an exact whole one whenever the window is close to a multiple of the view
+ * (fullscreen 1080p is 2× on the nose, and `present` blits that unsmoothed).
+ *
+ * Below 1× the scale is left alone. Snapping is about magnifying cleanly, and
+ * a window smaller than the view is already resampling everything it draws;
+ * quantising there would only throw away pixels it cannot spare.
+ *
+ * Offsets stay integers. The letterbox edge is the one hard edge in the blit,
+ * and there is no reason to land it on a half pixel. They ROUND rather than
+ * floor: `VIEW_W * (winW / VIEW_W)` is not exactly `winW` in binary floating
+ * point, so on the axis the fit is tight against, the remaining gap is a few
+ * ulps either side of zero — and flooring turns the negative half of that into
+ * an off-by-one pixel that shifts the whole frame left or up.
+ */
 export function computeScale(winW: number, winH: number): ScaleFit {
-  const scale = Math.max(1, Math.floor(Math.min(winW / VIEW_W, winH / VIEW_H)));
+  const raw = Math.min(winW / VIEW_W, winH / VIEW_H);
+  const fitted = raw >= 1 ? Math.floor(raw * SCALE_STEPS) / SCALE_STEPS : raw;
+  const scale = fitted > MIN_SCALE ? fitted : MIN_SCALE;
   return {
+    // `|| 0` only normalises -0, which those same ulps produce and which reads
+    // as a different value to every deep-equality check that ever looks at it.
+    offX: Math.round((winW - VIEW_W * scale) / 2) || 0,
+    offY: Math.round((winH - VIEW_H * scale) / 2) || 0,
     scale,
-    offX: Math.floor((winW - VIEW_W * scale) / 2),
-    offY: Math.floor((winH - VIEW_H * scale) / 2),
   };
 }
 
@@ -59,10 +108,10 @@ export interface ViewPoint {
  * lives — and the one place it can be wrong.
  *
  * **Dropping the offset is a fifteen-tile error, not a sub-pixel one.** At a
- * 1920×1000 window `computeScale` gives scale 1, offX 480, offY 230, so the
- * naive `clientX / scale` lands 480 px right and 230 px down — 15 tiles across
- * on a 32 px grid. That failure reads as "the editor feels off" rather than as
- * an arithmetic bug, which is why the round-trip test picks window sizes that
+ * 3840×1080 window `computeScale` gives scale 2 and offX 960, so the naive
+ * `clientX / scale` lands 480 view px to the right — 15 tiles across on a 32 px
+ * grid. That failure reads as "the editor feels off" rather than as an
+ * arithmetic bug, which is why the round-trip test picks window sizes that
  * deliberately do not fit exactly.
  *
  * It reports `inFrame` rather than clamping. A press in the letterbox is not a
@@ -538,14 +587,17 @@ export class Renderer {
     return this.postBuffers;
   }
 
-  /** Blit the offscreen buffer to the visible canvas at integer scale. */
+  /** Blit the offscreen buffer to the visible canvas, centered and letterboxed. */
   present(): void {
     this.drawCalls += 2;
     const { scale, offX, offY } = computeScale(this.visible.width, this.visible.height);
     const vctx = this.visibleCtx;
-    // Off, and it stays off: smoothing an integer-scaled blit would soften the
-    // whole frame. The only place softness is wanted is inside the post pass.
-    vctx.imageSmoothingEnabled = false;
+    // Smoothing is decided by the scale, not by preference. At a whole-number
+    // scale every source pixel lands on a whole block of destination pixels and
+    // smoothing could only soften a frame that is already exact; at a fractional
+    // scale it is the difference between a resampled frame and a frame with
+    // ragged, unevenly-doubled rows through it.
+    vctx.imageSmoothingEnabled = !Number.isInteger(scale);
     // The letterbox is the background continuing past the frame, so it tracks
     // the palette rather than being a colour of its own.
     vctx.fillStyle = palette.paper;
