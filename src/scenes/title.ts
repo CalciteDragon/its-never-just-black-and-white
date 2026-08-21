@@ -139,7 +139,12 @@ export class TitleScene implements Scene {
       // Deliberately no scene change and no return: the tab opens beside the
       // game, and the menu below carries on as if nothing happened.
     }
-    const step = updateMenu(game, this.index, ITEMS.length);
+    const step = updateMenu(game, this.index, ITEMS.length, {
+      top: 270,
+      rowHeight: 50,
+      left: 300,
+      right: VIEW_W - 300,
+    });
     this.index = step.index;
     if (!step.picked) {
       return;

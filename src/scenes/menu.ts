@@ -10,7 +10,18 @@
  * calls: `AudioSys` under node is a total no-op.
  */
 
+import { MOUSE_LEFT } from '../engine/input';
 import type { Game } from '../game';
+
+/** View-space geometry for the currently visible slice of a vertical menu. */
+export interface MenuRows {
+  readonly top: number;
+  readonly rowHeight: number;
+  readonly left: number;
+  readonly right: number;
+  readonly first?: number;
+  readonly visible?: number;
+}
 
 export interface MenuStep {
   /** The selection after this frame, wrapped into range. */
@@ -28,17 +39,58 @@ export interface MenuStep {
  * Space; Space is also `flip`, which is harmless on every screen that has no
  * player to flip.
  */
-export function updateMenu(game: Game, index: number, count: number): MenuStep {
+export function updateMenu(
+  game: Game,
+  index: number,
+  count: number,
+  rows?: MenuRows,
+): MenuStep {
   const input = game.input;
   let next = index;
-  if (count > 0 && (input.pressed('up') || input.pressed('down'))) {
+  let moved = false;
+  let picked = false;
+
+  if (
+    count > 0 &&
+    input.controlSource === 'keyboard' &&
+    (input.pressed('up') || input.pressed('down'))
+  ) {
     const dir = input.pressed('up') ? -1 : 1;
     next = (index + dir + count) % count;
+    moved = true;
+  } else if (count > 0 && input.controlSource === 'pointer') {
+    if (input.wheelSteps !== 0) {
+      const dir = input.wheelSteps < 0 ? -1 : 1;
+      next = (index + dir + count) % count;
+      moved = true;
+    } else if (rows && (input.pointerMoved || input.pointerPressed(MOUSE_LEFT))) {
+      const hot = menuRowAt(input.pointerX, input.pointerY, count, rows);
+      if (hot !== -1) {
+        moved = hot !== index;
+        next = hot;
+        picked = input.pointerPressed(MOUSE_LEFT);
+      }
+    }
+  }
+  if (moved) {
     game.audio.play('menuMove');
   }
-  const picked = input.pressed('confirm');
+  if (input.controlSource === 'keyboard' && input.pressed('confirm')) {
+    picked = true;
+  }
   if (picked) {
     game.audio.play('menuPick');
   }
   return { index: next, picked };
+}
+
+/** The visible row containing a point, using mid-gaps as row boundaries. */
+export function menuRowAt(x: number, y: number, count: number, rows: MenuRows): number {
+  if (x < rows.left || x >= rows.right) {
+    return -1;
+  }
+  const first = rows.first ?? 0;
+  const visible = Math.min(rows.visible ?? count, count - first);
+  const slot = Math.floor((y - rows.top + rows.rowHeight / 2) / rows.rowHeight);
+  return slot >= 0 && slot < visible ? first + slot : -1;
 }

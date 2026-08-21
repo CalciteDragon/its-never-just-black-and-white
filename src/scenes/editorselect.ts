@@ -139,7 +139,14 @@ export class EditorSelectScene implements Scene {
       this.askDelete(game);
       return;
     }
-    const step = updateMenu(game, this.index, this.rows.length);
+    const step = updateMenu(game, this.index, this.rows.length, {
+      top: TOP,
+      rowHeight: ROW_H,
+      left: LEFT - 40,
+      right: RIGHT + 40,
+      first: this.scroll,
+      visible: VISIBLE,
+    });
     if (step.index !== this.index) {
       this.index = step.index;
       this.clampScroll();

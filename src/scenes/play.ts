@@ -467,7 +467,12 @@ export class PlayScene implements Scene {
   }
 
   private updatePauseMenu(game: Game): void {
-    const step = updateMenu(game, this.pauseIndex, PAUSE_ITEMS.length);
+    const step = updateMenu(game, this.pauseIndex, PAUSE_ITEMS.length, {
+      top: 260,
+      rowHeight: 44,
+      left: 300,
+      right: VIEW_W - 300,
+    });
     this.pauseIndex = step.index;
     if (!step.picked) {
       return;

@@ -39,7 +39,7 @@ import type { PlayContext } from '../src/scenes/play';
 import { ResultsScene } from '../src/scenes/results';
 import { TitleScene } from '../src/scenes/title';
 import type { Level } from '../src/world/level';
-import { fakeGame, step, tap, tinyLevel } from './harness';
+import { click, fakeGame, step, tap, tinyLevel } from './harness';
 import type { Harness } from './harness';
 
 const CAMPAIGN_0: PlayContext = { kind: 'campaign', index: 0 };
@@ -548,6 +548,15 @@ describe('pause', () => {
     tap(h, scene, 'ArrowDown'); // RESUME -> RESTART -> QUIT
     tap(h, scene, 'Enter');
     expect(h.scenes).toHaveLength(1);
+    expect(h.scenes[0]).toBeInstanceOf(TitleScene);
+  });
+
+  it('allows the pause menu to be clicked', () => {
+    const h = fakeGame();
+    const scene = new PlayScene(LEVELS[0], { kind: 'campaign', index: 0 });
+    scene.enter(h.game);
+    tap(h, scene, 'Escape');
+    click(h, scene, 480, 348); // QUIT
     expect(h.scenes[0]).toBeInstanceOf(TitleScene);
   });
 

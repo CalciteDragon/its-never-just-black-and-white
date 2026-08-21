@@ -74,7 +74,12 @@ export class ResultsScene implements Scene {
       this.goBack(game);
       return;
     }
-    const step = updateMenu(game, this.index, this.items.length);
+    const step = updateMenu(game, this.index, this.items.length, {
+      top: 330,
+      rowHeight: 46,
+      left: 300,
+      right: VIEW_W - 300,
+    });
     this.index = step.index;
     if (!step.picked) {
       return;

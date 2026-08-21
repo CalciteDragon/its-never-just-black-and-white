@@ -132,7 +132,14 @@ export class LevelSelectScene implements Scene {
       game.setScene(new EditorScene(init));
       return;
     }
-    const step = updateMenu(game, this.index, this.rowCount);
+    const step = updateMenu(game, this.index, this.rowCount, {
+      top: TOP,
+      rowHeight: ROW_H,
+      left: 160,
+      right: VIEW_W - 120,
+      first: this.scroll,
+      visible: VISIBLE,
+    });
     if (step.index !== this.index) {
       this.index = step.index;
       this.clampScroll();

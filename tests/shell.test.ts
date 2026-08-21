@@ -74,6 +74,38 @@ describe('TitleScene', () => {
     expect(h2.scenes[0]).toBeInstanceOf(EditorSelectScene);
   });
 
+  it('clicks menu rows and navigates them with the wheel', () => {
+    const clicked = fakeGame();
+    click(clicked, new TitleScene(), 480, 320);
+    expect(clicked.scenes[0]).toBeInstanceOf(LevelSelectScene);
+
+    const wheeled = fakeGame();
+    const scene = new TitleScene();
+    wheeled.input.onWheel(480, 270, 100);
+    step(wheeled, scene);
+    tap(wheeled, scene, 'Enter');
+    expect(wheeled.scenes[0]).toBeInstanceOf(LevelSelectScene);
+  });
+
+  it('does not let a stationary mouse fight keyboard navigation', () => {
+    const h = fakeGame();
+    const scene = new TitleScene();
+    h.input.onPointerMove(480, 370); // EDITOR owns the highlight.
+    step(h, scene);
+    tap(h, scene, 'ArrowUp'); // Keyboard takes it to LEVELS.
+    step(h, scene, 3); // A stationary cursor must not take EDITOR back.
+    tap(h, scene, 'Enter');
+    expect(h.scenes[0]).toBeInstanceOf(LevelSelectScene);
+
+    const h2 = fakeGame();
+    const s2 = new TitleScene();
+    tap(h2, s2, 'ArrowDown'); // LEVELS by keyboard.
+    h2.input.onPointerMove(480, 370); // Real movement hands back to mouse.
+    step(h2, s2);
+    tap(h2, s2, 'Enter');
+    expect(h2.scenes[0]).toBeInstanceOf(EditorSelectScene);
+  });
+
   it('the corner links open a tab and leave the menu where it was', () => {
     const g = globalThis as { open?: unknown };
     const before = g.open;
@@ -90,7 +122,7 @@ describe('TitleScene', () => {
       expect(opened).toEqual(['https://ko-fi.com/calcitedragon']);
 
       opened.length = 0;
-      click(h, scene, 480, 270); // the middle of the screen is neither
+      click(h, scene, 480, 450); // below the menu is neither link nor item
       expect(opened).toEqual([]);
 
       // A link is not a menu item: none of that navigated anywhere in-game.

@@ -6,7 +6,7 @@ A minimalist momentum platformer built from scratch in **TypeScript on the Canva
 
 No engine, no framework, no asset pipeline: the physics is a hand-written rigid-body solver, the soundtrack is synthesised WebAudio, the font is a 5×7 bitmap, the art is two hex values, and the twenty campaign levels are JSON grids authored in an editor that ships inside the game.
 
-![Level one after a flip: gravity is up, so paper and ink have swapped — the world is white, the geometry black — and the square is running along the underside of a ceiling slab with a spark trail behind it, chromatic fringing splitting every edge and the vignette drawn in at speed.](docs/screenshot.png)
+![Gameplay from Black and White: the square jumps between stark white platforms and a jump pad against the black world.](public/gameplay.png)
 
 > ⚠️ The game inverts the whole screen between black and white on a keypress, and shakes the view at speed. It warns you on the title screen; if you are photosensitive, please take that seriously.
 

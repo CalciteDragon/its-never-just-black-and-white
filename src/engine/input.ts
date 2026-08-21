@@ -144,6 +144,9 @@ export const MOUSE_LEFT = 0;
 export const MOUSE_MIDDLE = 1;
 export const MOUSE_RIGHT = 2;
 
+/** The device whose most recent event should own menu navigation this step. */
+export type ControlSource = 'keyboard' | 'pointer';
+
 export class Input {
   /** code -> actions it drives. */
   private readonly codeMap = new Map<string, readonly Action[]>();
@@ -164,6 +167,9 @@ export class Input {
   private readonly btnDown = new Set<number>();
   private readonly btnPressed = new Set<number>();
   private readonly btnReleased = new Set<number>();
+  private pointerMovedEdge = false;
+  private wheelStepCount = 0;
+  private source: ControlSource = 'keyboard';
 
   constructor() {
     const map = new Map<string, Action[]>();
@@ -192,6 +198,7 @@ export class Input {
   onKey(code: string, down: boolean): void {
     if (down) {
       if (!this.codeDownSet.has(code)) {
+        this.source = 'keyboard';
         this.codeDownSet.add(code);
         this.codePressedSet.add(code);
       }
@@ -233,6 +240,8 @@ export class Input {
     this.codePressedSet.clear();
     this.btnPressed.clear();
     this.btnReleased.clear();
+    this.pointerMovedEdge = false;
+    this.wheelStepCount = 0;
   }
 
   /** Is the action currently held? */
@@ -295,6 +304,21 @@ export class Input {
     return this.pIn;
   }
 
+  /** Did a real pointer-move event arrive since the last consumed step? */
+  get pointerMoved(): boolean {
+    return this.pointerMovedEdge;
+  }
+
+  /** Signed wheel notches accumulated since the last consumed step. */
+  get wheelSteps(): number {
+    return this.wheelStepCount;
+  }
+
+  /** Last event source, used to resolve keyboard/pointer events in one step. */
+  get controlSource(): ControlSource {
+    return this.source;
+  }
+
   /**
    * A press. **A press in the letterbox is not a press at all** — it is not a
    * press on the edge tile, which is what clamping would make it, and what
@@ -305,12 +329,25 @@ export class Input {
     if (!this.pIn || this.btnDown.has(button)) {
       return;
     }
+    this.source = 'pointer';
     this.btnDown.add(button);
     this.btnPressed.add(button);
   }
 
   onPointerMove(vx: number, vy: number): void {
     this.movePointer(vx, vy);
+    this.pointerMovedEdge = true;
+    this.source = 'pointer';
+  }
+
+  /** A wheel event in view space. Magnitude is deliberately one menu step. */
+  onWheel(vx: number, vy: number, deltaY: number): void {
+    this.movePointer(vx, vy);
+    if (!this.pIn || deltaY === 0) {
+      return;
+    }
+    this.wheelStepCount += Math.sign(deltaY);
+    this.source = 'pointer';
   }
 
   /**
@@ -403,6 +440,17 @@ export class Input {
       const { vx, vy } = toView(e);
       this.onPointerUp(vx, vy, e.button);
     });
+    canvas.addEventListener(
+      'wheel',
+      (e: WheelEvent) => {
+        const { vx, vy } = toView(e);
+        this.onWheel(vx, vy, e.deltaY);
+        if (this.pointerIn) {
+          e.preventDefault();
+        }
+      },
+      { passive: false },
+    );
     // Right-drag is the editor's erase, so the context menu has to go.
     canvas.addEventListener('contextmenu', (e: Event) => {
       e.preventDefault();

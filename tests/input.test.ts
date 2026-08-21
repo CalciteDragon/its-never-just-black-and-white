@@ -278,6 +278,35 @@ describe('Input pointer', () => {
     expect(input.pointerDown(0)).toBe(false);
     expect(input.pointerDown(2)).toBe(true);
   });
+
+  it('tracks pointer motion and wheel edges for one consumed step', () => {
+    const input = new Input();
+    input.onPointerMove(100, 200);
+    expect(input.pointerMoved).toBe(true);
+    expect(input.controlSource).toBe('pointer');
+    input.onWheel(100, 200, 120);
+    input.onWheel(100, 200, 40);
+    expect(input.wheelSteps).toBe(2);
+    input.update();
+    expect(input.pointerMoved).toBe(false);
+    expect(input.wheelSteps).toBe(0);
+  });
+
+  it('uses event order to hand control seamlessly between pointer and keyboard', () => {
+    const input = new Input();
+    input.onPointerMove(100, 200);
+    input.onKey('ArrowDown', true);
+    expect(input.controlSource).toBe('keyboard');
+    input.onPointerDown(100, 200, 0);
+    expect(input.controlSource).toBe('pointer');
+  });
+
+  it('ignores wheel events in the letterbox', () => {
+    const input = new Input();
+    input.onWheel(-1, 200, 100);
+    expect(input.wheelSteps).toBe(0);
+    expect(input.controlSource).toBe('keyboard');
+  });
 });
 
 describe('binding labels', () => {
