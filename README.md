@@ -4,7 +4,7 @@
 
 A minimalist momentum platformer built from scratch in **TypeScript on the Canvas API**, with **zero runtime dependencies**. You are a square. The world is two colours. Press space and both of them — along with gravity — turn inside out.
 
-No engine, no framework, no asset pipeline: the physics is a hand-written rigid-body solver, the soundtrack is synthesised WebAudio, the font is a 5×7 bitmap, the art is two hex values, and the twenty campaign levels are JSON grids authored in an editor that ships inside the game.
+No third-party engine, framework, or asset pipeline: the physics is a hand-written rigid-body solver, the soundtrack is synthesised WebAudio, the font is a 5×7 bitmap, the art is two hex values, and the twenty campaign levels are JSON grids authored in an editor that ships inside the game.
 
 ![Gameplay from Black and White: the square jumps between stark white platforms and a jump pad against the black world.](public/gameplay.png)
 
