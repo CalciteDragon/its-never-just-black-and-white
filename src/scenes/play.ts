@@ -44,6 +44,7 @@ import type { Input } from '../engine/input';
 import { INVERT_MASK, palette } from '../engine/palette';
 import type { Phase } from '../engine/palette';
 import { ParticleSystem, spawnRing, spawnStream } from '../engine/particles';
+import { perf } from '../engine/perf';
 import type { Renderer } from '../engine/renderer';
 import { Rng } from '../engine/rng';
 import { SAVE_KEYS } from '../engine/save';
@@ -707,6 +708,12 @@ export class PlayScene implements Scene {
   }
 
   render(r: Renderer, game: Game): void {
+    // Levels the performance monitor watches for. Both are no-ops unless
+    // `?perf=1` turned it on, and both are things the frame cost depends on
+    // that a frame time alone cannot explain: how much of the post pass is
+    // running, and how much of the pool is alive.
+    perf.gauge('particles', this.particles.aliveCount);
+    perf.gauge('speed', this.speedNorm);
     const vx = this.camera.viewX;
     const vy = this.camera.viewY;
     r.setCamera(vx, vy);

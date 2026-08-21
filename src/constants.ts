@@ -788,3 +788,22 @@ export const CREDITS_SCRIM = 0.45;
  * It is done well before the first line has climbed out of the bottom fade.
  */
 export const CREDITS_SCRIM_FADE = 1.2;
+
+// --- Performance monitor (src/engine/perf.ts, src/devperf.ts) -------------
+// Dev-only numbers. They tune no gameplay and no draw; they decide what the
+// profiler calls "too slow" and how much history it keeps. They live here
+// anyway, because "ALL tuning numbers in constants.ts" is not a rule with a
+// carve-out for the numbers that were inconvenient.
+/**
+ * The frame budget, in ms of CPU. 16.667 is one 60 Hz vsync, which is the
+ * refresh this game's fixed 60 Hz step is built around — a frame that costs
+ * more than this cannot be sustained even in principle, whatever the monitor
+ * reports as an average.
+ */
+export const PERF_BUDGET_MS = 1000 / 60;
+/**
+ * Frames of history the ring buffer keeps: 30 s at 60 fps. Long enough that a
+ * whole level attempt fits in one window, short enough that the buffer and its
+ * per-frame gauge objects stay a few hundred KB.
+ */
+export const PERF_HISTORY = 1800;

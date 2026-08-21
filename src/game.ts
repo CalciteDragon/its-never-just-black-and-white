@@ -8,6 +8,7 @@ import { STEP } from './constants';
 import { AudioSys } from './engine/audio';
 import { Input } from './engine/input';
 import { FileDropbox } from './engine/levelio';
+import { perf } from './engine/perf';
 import { Renderer } from './engine/renderer';
 import { SAVE_KEYS, SaveStore } from './engine/save';
 
@@ -111,17 +112,30 @@ export class Game {
    */
   stepFrame(elapsedSec: number): void {
     const scene = this.scene;
-    if (scene) {
-      this.stepper.advance(elapsedSec, (dt) => {
-        scene.update(dt, this);
-        this.time += dt;
-        // Edges clear after EACH consumed step: a two-step frame must not
-        // double-fire pressed(); a zero-step frame must not drop presses.
-        this.input.update();
-      });
-      scene.render(this.renderer, this);
-      this.renderer.present();
+    if (!scene) {
+      return;
     }
+    // The profiler is a no-op — one boolean test per call — until `?perf=1`
+    // mounts the monitor and turns it on. See `engine/perf.ts`.
+    perf.beginFrame(elapsedSec);
+    perf.begin('update');
+    this.stepper.advance(elapsedSec, (dt) => {
+      scene.update(dt, this);
+      this.time += dt;
+      perf.count('steps');
+      // Edges clear after EACH consumed step: a two-step frame must not
+      // double-fire pressed(); a zero-step frame must not drop presses.
+      this.input.update();
+    });
+    perf.end('update');
+    perf.begin('render');
+    scene.render(this.renderer, this);
+    perf.end('render');
+    perf.begin('present');
+    this.renderer.present();
+    perf.end('present');
+    perf.count('draws', this.renderer.takeDrawCalls());
+    perf.endFrame();
   }
 
   /** Start the requestAnimationFrame loop (browser only; call once). */

@@ -24,7 +24,7 @@ The design source of truth is `docs/GAME-DESIGN.md`. Read it before writing code
 - `src/scenes/` — title, levelselect, play, results, credits, editor, plus `menu.ts` (one shared vertical menu) and `tiledraw.ts` (the draws play and the editor share). `finale.ts` is the colour ending and the swirl the credits roll on.
 - `src/editor/` — pure grid model over `readonly string[]`: paint, flood, resize, stroke-scoped undo, warnings.
 - `src/levels/` — hand-authored level JSON, one file per level.
-- `src/game.ts` — fixed-timestep loop + scene management. `src/main.ts` — browser bootstrap. `src/devtuner.ts` — dev-only wind-up tuner, mounted only behind `?tune=1`.
+- `src/game.ts` — fixed-timestep loop + scene management. `src/main.ts` — browser bootstrap. `src/devtuner.ts` — dev-only wind-up tuner, mounted only behind `?tune=1`; `src/devperf.ts` — dev-only performance monitor (panel + `window.__perf` scripting API), mounted only behind `?perf=1`, measuring half in `src/engine/perf.ts`.
 - `tests/` — vitest unit tests, node environment (no DOM).
 
 ## Hard rules

@@ -64,6 +64,14 @@ const wantsEditor = params.get('editor') === '1';
 if (params.get('tune') === '1') {
   void import('./devtuner').then(({ mountDevTuner: mount }) => mount(game, document, window));
 }
+// `?perf=1` mounts the performance monitor (src/devperf.ts) and turns the
+// profiler on. Flagged and dynamically imported for the same two reasons: the
+// panel's DOM stays out of a player's bundle, and `perf.enabled` stays false in
+// every build nobody asked for it in — which is what keeps the instrumentation
+// in the loop down to a boolean test per frame.
+if (params.get('perf') === '1') {
+  void import('./devperf').then(({ mountDevPerf: mount }) => mount(game, document, window));
+}
 // `?editor=1` lands on the picker rather than on a level: which level to work
 // on is a question the editor cannot answer for you now that there can be more
 // than one draft.

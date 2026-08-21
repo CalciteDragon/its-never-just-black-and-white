@@ -146,6 +146,18 @@ export class Renderer {
   private camY = 0;
 
   /**
+   * Canvas operations issued since the last `takeDrawCalls`, for the
+   * performance monitor (`engine/perf.ts`). Counted UNCONDITIONALLY — an
+   * increment is cheaper than the branch that would skip it, and a counter
+   * that only runs under a flag is a counter that rots.
+   *
+   * It counts real context operations, not calls to this class: the post pass
+   * is fourteen of them behind one method, and a monitor that reported it as
+   * "1" would send an optimisation pass looking at the tile loop instead.
+   */
+  private drawCalls = 0;
+
+  /**
    * Post-pass scratch canvases, allocated on the first frame that actually
    * needs one — a player who never gets fast and never finishes the last level
    * never pays the ~4 MB. Shared by the aberration and by `blurScreen`; they
@@ -203,13 +215,27 @@ export class Renderer {
     this.camY = Math.round(y);
   }
 
+  /**
+   * Read the draw-call count and zero it. Read-and-clear rather than a getter
+   * plus a `resetDrawCalls`, because two callers reading the same running total
+   * would each see the other's frame; there is exactly one consumer per frame
+   * and taking the number is what ends the frame's count.
+   */
+  takeDrawCalls(): number {
+    const n = this.drawCalls;
+    this.drawCalls = 0;
+    return n;
+  }
+
   clear(color: string): void {
+    this.drawCalls++;
     this.ctx.fillStyle = color;
     this.ctx.fillRect(0, 0, VIEW_W, VIEW_H);
   }
 
   /** Axis-aligned fill, world space unless ui. Floats survive: this antialiases. */
   rect(x: number, y: number, w: number, h: number, color: string, ui = false): void {
+    this.drawCalls++;
     const dx = ui ? x : x - this.camX;
     const dy = ui ? y : y - this.camY;
     this.ctx.fillStyle = color;
@@ -231,6 +257,7 @@ export class Renderer {
     color: string,
     ui = false,
   ): void {
+    this.drawCalls++;
     const ctx = this.ctx;
     ctx.save();
     ctx.translate(ui ? cx : cx - this.camX, ui ? cy : cy - this.camY);
@@ -255,6 +282,7 @@ export class Renderer {
     lineWidth = 1,
     ui = false,
   ): void {
+    this.drawCalls++;
     const ctx = this.ctx;
     ctx.save();
     ctx.translate(ui ? cx : cx - this.camX, ui ? cy : cy - this.camY);
@@ -293,6 +321,7 @@ export class Renderer {
     if (radius <= 0) {
       return;
     }
+    this.drawCalls++;
     const ctx = this.ctx;
     const dx = ui ? cx : cx - this.camX;
     const dy = ui ? cy : cy - this.camY;
@@ -322,6 +351,7 @@ export class Renderer {
     if (px <= 0) {
       return;
     }
+    this.drawCalls += 2;
     const { pristine, pctx } = this.ensurePostBuffers();
     pctx.filter = 'none';
     pctx.globalCompositeOperation = 'copy';
@@ -350,6 +380,7 @@ export class Renderer {
     if (alpha <= 0 || stops.length < 2) {
       return;
     }
+    this.drawCalls++;
     const ctx = this.ctx;
     const g = ctx.createConicGradient(angle, cx, cy);
     for (let i = 0; i < stops.length; i++) {
@@ -368,6 +399,9 @@ export class Renderer {
    * (GAME-DESIGN §2) and antialiasing it would throw away the signature.
    */
   text(str: string, x: number, y: number, color: string, scale = 1, ui = true): void {
+    // One per GLYPH: the 5x7 font fills a rect per lit pixel, so a line of
+    // text is not one operation and must not be counted as one.
+    this.drawCalls += str.length;
     const dx = Math.round(ui ? x : x - this.camX);
     const dy = Math.round(ui ? y : y - this.camY);
     drawText(this.ctx, str, dx, dy, color, scale);
@@ -375,6 +409,7 @@ export class Renderer {
 
   /** Bitmap text centered on cx. UI space by default. Rounds, as above. */
   textCentered(str: string, cx: number, y: number, color: string, scale = 1, ui = true): void {
+    this.drawCalls += str.length;
     const dx = Math.round(ui ? cx : cx - this.camX);
     const dy = Math.round(ui ? y : y - this.camY);
     drawTextCentered(this.ctx, str, dx, dy, color, scale);
@@ -408,6 +443,8 @@ export class Renderer {
    * whatever the background.
    */
   private aberrate(off: number): void {
+    // 1 copy + 1 fill + 4 per channel pass.
+    this.drawCalls += 14;
     const { pristine, pctx, staging, sctx } = this.ensurePostBuffers();
     pctx.globalCompositeOperation = 'copy';
     pctx.drawImage(this.offscreen, 0, 0);
@@ -444,6 +481,7 @@ export class Renderer {
 
   /** Radial paper darkening, plus the ink tint over the top half of the range. */
   private vignette(speedNorm: number): void {
+    this.drawCalls += tintAmount(speedNorm) > 0 ? 2 : 1;
     this.ensureGradients();
     const ctx = this.ctx;
     ctx.save();
@@ -502,6 +540,7 @@ export class Renderer {
 
   /** Blit the offscreen buffer to the visible canvas at integer scale. */
   present(): void {
+    this.drawCalls += 2;
     const { scale, offX, offY } = computeScale(this.visible.width, this.visible.height);
     const vctx = this.visibleCtx;
     // Off, and it stays off: smoothing an integer-scaled blit would soften the
