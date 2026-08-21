@@ -251,9 +251,9 @@ Added in phase 4. These are not feel knobs — each one is the answer to a speci
 | `SPEED_SMOOTH_RATE` | 6 /s | exponential lag on `speedNorm`, so one frame of contact can't strobe |
 | `CA_THRESHOLD` | 0.45 | normalised speed where aberration becomes visible |
 | `CA_MAX_OFFSET` | 3.0 px | channel split at normalised speed 1 |
-| `VIGNETTE_MIN` / `VIGNETTE_MAX` | 0.15 / 0.55 | alpha at rest / at full speed |
+| `VIGNETTE_MIN` / `VIGNETTE_MAX` | 0.075 / 0.275 | alpha at rest / at full speed |
 | `VIGNETTE_INNER` | 0.45 | fraction of the radius left fully clear at the centre |
-| `VIGNETTE_TINT_MAX` | 0.22 | peak alpha of the ink tint over the vignette |
+| `VIGNETTE_TINT_MAX` | 0.11 | peak alpha of the ink tint over the vignette |
 | `SPEED_WINDUP_MIN` | 0.7 | normalised speed at or above which the wind-up bank fills |
 | `SPEED_WINDUP_DELAY` | 2.0 s | banked speed before any effect is non-zero |
 | `SPEED_WINDUP_RAMP` | 7.0 s | from the gate opening to full strength |

@@ -234,12 +234,12 @@ export const CA_THRESHOLD = 0.45;
 /** Channel split at speedNorm 1 (px). */
 export const CA_MAX_OFFSET = 3.0;
 /** Vignette alpha at rest / at full speed. */
-export const VIGNETTE_MIN = 0.15;
-export const VIGNETTE_MAX = 0.55;
+export const VIGNETTE_MIN = 0.075;
+export const VIGNETTE_MAX = 0.275;
 /** Fraction of the radius that stays fully clear at the gradient's centre. */
 export const VIGNETTE_INNER = 0.45;
 /** Peak alpha of the ink tint layered over the vignette at speedNorm 1. */
-export const VIGNETTE_TINT_MAX = 0.22;
+export const VIGNETTE_TINT_MAX = 0.11;
 /** Screen bounce amplitude at full speed (px). */
 export const BOUNCE_AMP = 2.5;
 /** Screen bounce frequency at full speed (rad/s). */
