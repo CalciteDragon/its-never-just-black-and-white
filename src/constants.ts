@@ -615,7 +615,7 @@ export const EDITOR_NAME_MAX = 40;
 /* ------------------------------------------------------------------ signs -- */
 
 /**
- * In-world tutorial signs (`scenes/signs.ts`): text painted into the level's
+ * In-world teaching signs (`scenes/signs.ts`): text painted into a level's
  * empty space, in `ink`, at the place the thing it teaches happens.
  *
  * Scale 2 is the HUD's size, which is the point — a sign is the game talking,

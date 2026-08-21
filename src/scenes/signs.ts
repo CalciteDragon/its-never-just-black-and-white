@@ -8,7 +8,9 @@
  * and the warnings panel — a whole authoring feature, built so that one level
  * can say PRESS W TO JUMP. The tutorial is the only level that teaches the
  * controls, so its captions live here as data beside the grid rather than in
- * it. A level with no entry draws nothing and pays one map lookup.
+ * it. The handful of level-specific teaching captions live here as data beside
+ * the grid rather than in it. A level with no entry draws nothing and pays one
+ * map lookup.
  *
  * Positions are world pixels, not tiles, because a caption is placed against
  * the geometry it explains rather than snapped to a cell: `x` centres the
@@ -83,9 +85,25 @@ const TUTORIAL_SIGNS: readonly Sign[] = [
   },
 ];
 
-/** Level id → its signs. Only the tutorial has any. */
+/** The setup for the corner hop that opens Selfish and Selfless. */
+const SELFISH_AND_SELFLESS_SIGNS: readonly Sign[] = [
+  {
+    lines: [
+      'CORNER HOP FOR EXTRA MOMENTUM',
+      '1. LINE UP HALFWAY OFF THE EDGE',
+      '2. TAP W FOR A SMALL JUMP',
+      '3. RIGHT BEFORE YOU LAND HOLD RIGHT, AND JUMP ON THE CORNER',
+    ],
+    x: 320,
+    y: 232,
+    arrow: { x0: 320, y0: 332, x1: 320, y1: 400 },
+  },
+];
+
+/** Level id → its signs. */
 const SIGNS: Readonly<Record<string, readonly Sign[]>> = {
   '00-tutorial': TUTORIAL_SIGNS,
+  '11-selfish-and-selfless': SELFISH_AND_SELFLESS_SIGNS,
 };
 
 /** The signs for a level, or an empty list. Never null — the caller loops. */

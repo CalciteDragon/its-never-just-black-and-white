@@ -16,12 +16,20 @@ import type { Level } from '../src/world/level';
  */
 
 const TUTORIAL = LEVELS.find((l) => l.id === '00-tutorial');
+const SELFISH_AND_SELFLESS = LEVELS.find((l) => l.id === '11-selfish-and-selfless');
 
 function tutorial(): Level {
   if (!TUTORIAL) {
     throw new Error('the tutorial is not registered in LEVELS');
   }
   return TUTORIAL;
+}
+
+function selfishAndSelfless(): Level {
+  if (!SELFISH_AND_SELFLESS) {
+    throw new Error('Selfish and Selfless is not registered in LEVELS');
+  }
+  return SELFISH_AND_SELFLESS;
 }
 
 /** A line's box in world pixels, the way `textCentered` lays it out. */
@@ -41,10 +49,11 @@ function boxes(sign: Sign): { x0: number; y0: number; x1: number; y1: number }[]
 }
 
 describe('signsFor', () => {
-  it('has captions for the tutorial and nothing else', () => {
+  it('has captions for the two teaching levels and nothing else', () => {
     expect(signsFor('00-tutorial').length).toBe(6);
+    expect(signsFor('11-selfish-and-selfless').length).toBe(1);
     for (const level of LEVELS) {
-      if (level.id !== '00-tutorial') {
+      if (level.id !== '00-tutorial' && level.id !== '11-selfish-and-selfless') {
         expect(signsFor(level.id)).toEqual([]);
       }
     }
@@ -52,6 +61,59 @@ describe('signsFor', () => {
 
   it('returns an empty list for an unknown id rather than null', () => {
     expect(signsFor('a-level-that-does-not-exist')).toEqual([]);
+  });
+});
+
+describe('the Selfish and Selfless sign', () => {
+  it('explains the corner hop directly', () => {
+    const said = signsFor('11-selfish-and-selfless')[0].lines.join(' ');
+    expect(said).toContain('CORNER HOP');
+    expect(said).toContain('HALFWAY OFF THE EDGE');
+    expect(said).toContain('TAP W');
+    expect(said).toContain('RIGHT BEFORE YOU LAND HOLD RIGHT, AND JUMP ON THE CORNER');
+    expect(signsFor('11-selfish-and-selfless')[0].lines.slice(1)).toEqual([
+      '1. LINE UP HALFWAY OFF THE EDGE',
+      '2. TAP W FOR A SMALL JUMP',
+      '3. RIGHT BEFORE YOU LAND HOLD RIGHT, AND JUMP ON THE CORNER',
+    ]);
+  });
+
+  it('fits above the opening platform without touching solid tiles', () => {
+    const level = selfishAndSelfless();
+    const sign = signsFor(level.id)[0];
+    for (const b of boxes(sign)) {
+      expect(b.x0).toBeGreaterThanOrEqual(0);
+      expect(b.y0).toBeGreaterThanOrEqual(0);
+      expect(b.x1).toBeLessThanOrEqual(level.map.widthPx);
+      expect(b.y1).toBeLessThanOrEqual(level.map.heightPx);
+      for (let ty = Math.floor(b.y0 / TILE); ty <= Math.floor((b.y1 - 1) / TILE); ty++) {
+        for (let tx = Math.floor(b.x0 / TILE); tx <= Math.floor((b.x1 - 1) / TILE); tx++) {
+          expect(isBlocking(level.map.get(tx, ty))).toBe(false);
+        }
+      }
+    }
+  });
+
+  it('points right at the upper corner of the first platform', () => {
+    const sign = signsFor('11-selfish-and-selfless')[0];
+    const arrow = sign.arrow;
+    if (!arrow) {
+      throw new Error('the corner-hop sign has no arrow');
+    }
+    const cornerX = 10 * TILE;
+    const cornerY = 13 * TILE;
+    expect(arrow.x1).toBe(arrow.x0);
+    expect(arrow.x1).toBe(cornerX);
+    expect(arrow.y1).toBeGreaterThan(arrow.y0);
+    expect(Math.hypot(cornerX - arrow.x1, cornerY - arrow.y1)).toBeLessThan(TILE);
+  });
+
+  it('uses only characters the 5x7 font actually has', () => {
+    for (const line of signsFor('11-selfish-and-selfless')[0].lines) {
+      for (const ch of line) {
+        expect(glyphFor(ch)).not.toBe(FALLBACK_GLYPH);
+      }
+    }
   });
 });
 
