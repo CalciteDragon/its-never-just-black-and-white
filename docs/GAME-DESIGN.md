@@ -52,6 +52,7 @@ The core is also where the "recharged" state shows: charged reads as a solid cor
 ### Rendering style
 
 - Geometry: flat `ink` rectangles, merged into runs per row so a 40-tile floor is one `fillRect`, not 40. No outlines, no texture, no gradients.
+- Out-of-bounds space: a faint, staggered field of `ink` dots outside the level rectangle. It marks every place the player cannot enter, including the solid side edges, the lethal top and bottom edges, and the margins around a level smaller than the view. The field is anchored in world space so camera movement never makes it swim.
 - Jump pads: an `ink` slab with an animated chevron of particles streaming in the pad's direction (§5).
 - Goal: an `ink` square outline that pulses in scale, with a slow particle drift toward its centre.
 - Bitmap font stays — the 5×7 grid from the old build, drawn as fill-rects, scaled ×2 or ×3. It's the one deliberately low-res element and it earns its place as a signature.
@@ -285,6 +286,8 @@ Added in phase 5. Cosmetic, but real tuning numbers, so they live in `constants.
 | `GOAL_PULSE_AMP` / `GOAL_PULSE_FREQ` | 0.12 / 3.0 rad/s | scale pulse of that outline |
 | `GOAL_HOLD` | 1.2 s | how long the frozen winning frame holds before the results screen |
 | `PAUSE_DIM` | 0.6 | alpha of the `paper` veil under the pause overlay |
+| `OUT_OF_BOUNDS_DOT_SIZE` / `_SPACING` | 2 / 16 px | square-dot edge and lattice pitch outside the level footprint; rows stagger by half the pitch |
+| `OUT_OF_BOUNDS_DOT_ALPHA` | 0.22 | faint enough to stay behind solid geometry while making the boundary unmistakable |
 
 > *(Amended in phase 7.)* `GOAL_HOLD` was "how long the completion readout holds before the level advances". The readout moved to `ResultsScene` and the constant did **not** go with it: it is the punctuation on the frame the player just earned, and it belongs to the scene that froze it. `ResultsScene` owns no clock at all.
 >

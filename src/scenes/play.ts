@@ -62,7 +62,7 @@ import { ResultsScene } from './results';
 import type { ResultsStats } from './results';
 import { CreditsScene } from './credits';
 import { drawFinaleBloom, drawFinaleGoal, drawFinaleVeil, FINALE_LEVEL_ID } from './finale';
-import { drawGoal, drawPickup, drawTileRuns } from './tiledraw';
+import { drawGoal, drawOutOfBounds, drawPickup, drawTileRuns } from './tiledraw';
 import { TitleScene } from './title';
 
 /**
@@ -718,6 +718,7 @@ export class PlayScene implements Scene {
       // end of this method, is the half that goes over the top.
       drawFinaleBloom(r, ...this.goalOnScreen(vx, vy), this.clock, this.finaleProgress());
     }
+    drawOutOfBounds(r, this.level.map, vx, vy);
     drawTileRuns(r, this.level.map, vx, vy);
     // Under everything that moves: a sign is painted on the level, and the
     // player passing over its text is the reading order that implies.

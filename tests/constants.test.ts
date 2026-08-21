@@ -55,6 +55,9 @@ import {
   MUSIC_LOOKAHEAD,
   MUSIC_PATTERN_STEPS,
   MUSIC_SIXTEENTH,
+  OUT_OF_BOUNDS_DOT_ALPHA,
+  OUT_OF_BOUNDS_DOT_SIZE,
+  OUT_OF_BOUNDS_DOT_SPACING,
   PAD_IMPULSE,
   PAD_SPIN_MAX,
   PAD_STREAM_INTERVAL,
@@ -139,6 +142,14 @@ describe('constants', () => {
   it('vertical slack is real but under a tile-and-a-half', () => {
     expect(CAMERA_VSLACK).toBeGreaterThan(0);
     expect(CAMERA_VSLACK).toBeLessThanOrEqual(TILE * 2);
+  });
+
+  it('the out-of-bounds dots read as a field behind the tile geometry', () => {
+    expect(OUT_OF_BOUNDS_DOT_SIZE).toBeGreaterThan(0);
+    expect(OUT_OF_BOUNDS_DOT_SIZE).toBeLessThan(OUT_OF_BOUNDS_DOT_SPACING);
+    expect(TILE % OUT_OF_BOUNDS_DOT_SPACING).toBe(0);
+    expect(OUT_OF_BOUNDS_DOT_ALPHA).toBeGreaterThan(0);
+    expect(OUT_OF_BOUNDS_DOT_ALPHA).toBeLessThan(0.5);
   });
 
   it('the speed smoothing lag is short enough to feel immediate', () => {

@@ -17,6 +17,9 @@
 
 import {
   GOAL_OUTLINE_WIDTH,
+  OUT_OF_BOUNDS_DOT_ALPHA,
+  OUT_OF_BOUNDS_DOT_SIZE,
+  OUT_OF_BOUNDS_DOT_SPACING,
   PAD_CHEVRON_LEN,
   PAD_CHEVRON_WIDTH,
   PICKUP_CORE_FRACTION,
@@ -32,6 +35,47 @@ import { palette } from '../engine/palette';
 import type { Renderer } from '../engine/renderer';
 import { forEachRun, padDirection, toTile } from '../world/tiles';
 import type { PadDir, TileMap } from '../world/tiles';
+
+/**
+ * A world-anchored field of faint ink dots outside the level rectangle.
+ *
+ * The physics gives the four map edges two different meanings — the sides are
+ * solid and the top/bottom are lethal — but they share one player-facing fact:
+ * none of that space belongs to the level. Marking the whole exterior makes
+ * that fact visible on every map size, including small maps centred in the
+ * frame and the vertical slack shown just before an out-of-bounds death.
+ *
+ * The lattice is anchored to world coordinates rather than the camera. Rows
+ * are staggered by half a pitch so this reads as a dotted field instead of a
+ * second tile grid, and camera motion reveals dots instead of sliding them.
+ */
+export function drawOutOfBounds(
+  r: Renderer,
+  map: TileMap,
+  viewX: number,
+  viewY: number,
+): void {
+  const x1 = viewX + VIEW_W;
+  const y1 = viewY + VIEW_H;
+  const color = palette.inkRgba(OUT_OF_BOUNDS_DOT_ALPHA);
+  const firstRow = Math.ceil(viewY / OUT_OF_BOUNDS_DOT_SPACING);
+
+  for (let row = firstRow; row * OUT_OF_BOUNDS_DOT_SPACING < y1; row++) {
+    const y = row * OUT_OF_BOUNDS_DOT_SPACING;
+    const offset = Math.abs(row % 2) * (OUT_OF_BOUNDS_DOT_SPACING / 2);
+    const firstCol = Math.ceil((viewX - offset) / OUT_OF_BOUNDS_DOT_SPACING);
+    for (
+      let col = firstCol;
+      col * OUT_OF_BOUNDS_DOT_SPACING + offset < x1;
+      col++
+    ) {
+      const x = col * OUT_OF_BOUNDS_DOT_SPACING + offset;
+      if (x < 0 || x >= map.widthPx || y < 0 || y >= map.heightPx) {
+        r.rect(x, y, OUT_OF_BOUNDS_DOT_SIZE, OUT_OF_BOUNDS_DOT_SIZE, color);
+      }
+    }
+  }
+}
 
 /**
  * A pad's two `paper` bars, forming a chevron pointing the way it fires. One

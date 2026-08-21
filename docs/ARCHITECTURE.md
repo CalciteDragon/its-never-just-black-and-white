@@ -98,12 +98,13 @@ What delivers that is the **coordinate policy**, not `imageSmoothingEnabled` —
 `PlayScene`'s draw order per frame:
 
 1. Clear to `paper`.
-2. World geometry in `ink`, camera-translated, through `drawTileRuns` — per-row run merging, so a 40-tile floor is one `fillRect`.
-3. The goal outline, then the player as a rotated rect plus its `paper` core.
-4. Particles — the only pass that composites rather than paints (`difference`, restored to `source-over` on the way out).
-5. HUD in `ink`, untranslated.
-6. `applyPost(speedNorm)` — vignette always, chromatic aberration only above `CA_THRESHOLD`.
-7. The death fade, and the pause overlay if it is up — **after** the post pass, so a frozen menu is crisp rather than wearing the aberration of whatever speed the frame was carrying.
+2. A world-anchored, staggered field of faint `ink` dots wherever the view extends outside the level rectangle.
+3. World geometry in `ink`, camera-translated, through `drawTileRuns` — per-row run merging, so a 40-tile floor is one `fillRect`.
+4. The goal outline, then the player as a rotated rect plus its `paper` core.
+5. Particles — the only pass that composites rather than paints (`difference`, restored to `source-over` on the way out).
+6. HUD in `ink`, untranslated.
+7. `applyPost(speedNorm)` — vignette always, chromatic aberration only above `CA_THRESHOLD`.
+8. The death fade, and the pause overlay if it is up — **after** the post pass, so a frozen menu is crisp rather than wearing the aberration of whatever speed the frame was carrying.
 
 The two veils are opposite colours on purpose. Death fades to `ink`; the pause dims with `paper` at `PAUSE_DIM`, because it is the background flooding back in and the menu then reads in `ink` like text on every other screen. `ink` there would be exactly backwards — in phase A ink is near-white, so the dim would wash a black frame to grey and leave the white geometry indistinguishable from it.
 

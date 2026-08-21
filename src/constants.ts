@@ -177,6 +177,15 @@ export const LOOKAHEAD_RATE = 3;
  */
 export const CAMERA_VSLACK = 64;
 
+// --- Level boundary feedback (scenes/tiledraw.ts). Units: px. ---
+
+/** Edge of each square dot marking space outside the authored level footprint. */
+export const OUT_OF_BOUNDS_DOT_SIZE = 2;
+/** Centre-to-centre pitch of the boundary pattern; half a tile keeps it readable at speed. */
+export const OUT_OF_BOUNDS_DOT_SPACING = TILE / 2;
+/** Ink alpha of the dots, visible without competing with solid level geometry. */
+export const OUT_OF_BOUNDS_DOT_ALPHA = 0.22;
+
 // --- Feel & effects (GAME-DESIGN §6/§7). One speedNorm drives all of them. ---
 
 /** Speed (px/s) that normalises to speedNorm 1.0 for every effect. */
