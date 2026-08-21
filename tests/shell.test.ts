@@ -18,7 +18,8 @@ import { PlayScene } from '../src/scenes/play';
 import { ResultsScene } from '../src/scenes/results';
 import type { ResultsStats } from '../src/scenes/results';
 import { TitleScene, controlsFooter } from '../src/scenes/title';
-import { fakeGame, step, tap } from './harness';
+import { openExternal } from '../src/engine/link';
+import { click, fakeGame, step, tap } from './harness';
 import type { Harness } from './harness';
 
 function enter<T extends { enter?(game: never): void }>(h: Harness, scene: T): T {
@@ -71,6 +72,32 @@ describe('TitleScene', () => {
     tap(h2, s2, 'ArrowUp'); // wraps PLAY -> EDITOR
     tap(h2, s2, 'Enter');
     expect(h2.scenes[0]).toBeInstanceOf(EditorSelectScene);
+  });
+
+  it('the corner links open a tab and leave the menu where it was', () => {
+    const g = globalThis as { open?: unknown };
+    const before = g.open;
+    const opened: string[] = [];
+    g.open = (url: string) => opened.push(url);
+    try {
+      const h = fakeGame();
+      const scene = new TitleScene();
+      click(h, scene, 20, 18); // top-left: the author's site
+      expect(opened).toEqual(['https://calcitedev.me']);
+
+      opened.length = 0;
+      click(h, scene, 940, 18); // top-right: the tip jar
+      expect(opened).toEqual(['https://ko-fi.com/calcitedragon']);
+
+      opened.length = 0;
+      click(h, scene, 480, 270); // the middle of the screen is neither
+      expect(opened).toEqual([]);
+
+      // A link is not a menu item: none of that navigated anywhere in-game.
+      expect(h.scenes).toHaveLength(0);
+    } finally {
+      g.open = before;
+    }
   });
 
   it('E opens the editor directly, as GAME-DESIGN §4 has always said', () => {
@@ -220,5 +247,31 @@ describe('ResultsScene', () => {
     const scene = new ResultsScene(stats());
     step(h, scene, 600); // ten seconds
     expect(h.scenes).toHaveLength(0);
+  });
+});
+
+describe('openExternal', () => {
+  it('reports false rather than throwing where there is no window.open', () => {
+    const g = globalThis as { open?: unknown };
+    const before = g.open;
+    g.open = undefined;
+    try {
+      expect(openExternal('https://calcitedev.me')).toBe(false);
+    } finally {
+      g.open = before;
+    }
+  });
+
+  it('opens in a new tab with the opener severed', () => {
+    const g = globalThis as { open?: unknown };
+    const before = g.open;
+    const calls: string[][] = [];
+    g.open = (...args: string[]) => calls.push(args);
+    try {
+      expect(openExternal('https://calcitedev.me')).toBe(true);
+      expect(calls).toEqual([['https://calcitedev.me', '_blank', 'noopener,noreferrer']]);
+    } finally {
+      g.open = before;
+    }
   });
 });
