@@ -89,9 +89,17 @@ function readIndex(save: SaveStore): string[] {
   }
 }
 
-function writeIndex(save: SaveStore, ids: readonly string[]): void {
-  save.setText(SAVE_KEYS.editorDrafts, JSON.stringify(ids));
+function writeIndex(save: SaveStore, ids: readonly string[]): boolean {
+  return save.setText(SAVE_KEYS.editorDrafts, JSON.stringify(ids));
 }
+
+/**
+ * What a write to the shelf did. Three outcomes rather than a boolean, because
+ * "the id belongs to another draft" and "the browser refused to store this" are
+ * different problems with different answers — pick another id, and get the file
+ * out of the browser before it is lost.
+ */
+export type DraftWriteResult = 'ok' | 'taken' | 'failed';
 
 /**
  * Import the pre-multi-draft single draft, once. Idempotent twice over: the
@@ -132,37 +140,59 @@ export function draftExists(save: SaveStore, id: string): boolean {
   return readIndex(save).includes(id);
 }
 
-/** Upsert. The autosave path, so it is called on every stroke end. */
-export function writeDraft(save: SaveStore, rec: DraftRecord): void {
-  save.setText(SAVE_KEYS.draft(rec.id), encode(rec));
-  const ids = readIndex(save);
-  if (!ids.includes(rec.id)) {
-    ids.push(rec.id);
-    writeIndex(save, ids);
+/**
+ * Upsert. The autosave path, so it is called on every stroke end.
+ *
+ * Reports whether the draft is really on the shelf, and **both halves have to
+ * land**: a record written under an id the index never gained is a level that
+ * exists in storage and appears nowhere, which is indistinguishable from lost
+ * to the only person who cares. The caller is expected to say so out loud.
+ */
+export function writeDraft(save: SaveStore, rec: DraftRecord): boolean {
+  if (!save.setText(SAVE_KEYS.draft(rec.id), encode(rec))) {
+    return false;
   }
+  const ids = readIndex(save);
+  if (ids.includes(rec.id)) {
+    return true;
+  }
+  ids.push(rec.id);
+  return writeIndex(save, ids);
 }
 
 /**
  * Move a draft to a new id, taking its record with it. Refuses — reporting
- * `false` — when something already lives at the destination, because the only
+ * `'taken'` — when something already lives at the destination, because the only
  * other options are silently merging two levels or silently losing one.
+ *
+ * **The order of the three writes is the whole of the failure story.** The new
+ * record goes down first, then the index, and the old record is blanked last
+ * and only once both have stuck: a storage refusal at any point therefore
+ * leaves the draft readable under one id or the other, never under neither.
+ * The old order blanked the source before writing the destination, so a quota
+ * error in between deleted the level outright.
  */
-export function renameDraft(save: SaveStore, from: string, rec: DraftRecord): boolean {
+export function renameDraft(save: SaveStore, from: string, rec: DraftRecord): DraftWriteResult {
   if (rec.id !== from && draftExists(save, rec.id)) {
-    return false;
+    return 'taken';
   }
   const ids = readIndex(save);
   const at = ids.indexOf(from);
   if (at === -1) {
-    writeDraft(save, rec);
-    return true;
+    return writeDraft(save, rec) ? 'ok' : 'failed';
+  }
+  if (!save.setText(SAVE_KEYS.draft(rec.id), encode(rec))) {
+    return 'failed';
   }
   // In place, so a rename does not shuffle the picker's rows under the author.
   ids[at] = rec.id;
-  writeIndex(save, ids);
-  save.setText(SAVE_KEYS.draft(from), '');
-  save.setText(SAVE_KEYS.draft(rec.id), encode(rec));
-  return true;
+  if (!writeIndex(save, ids)) {
+    return 'failed';
+  }
+  if (rec.id !== from) {
+    save.setText(SAVE_KEYS.draft(from), '');
+  }
+  return 'ok';
 }
 
 /**

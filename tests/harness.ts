@@ -64,11 +64,27 @@ export class SpyAudio extends AudioSys {
 export class FakeStorage implements StorageLike {
   readonly map = new Map<string, string>();
 
+  /**
+   * How this storage refuses a write, or null for one that works. **Both shapes
+   * are real browsers**: `throw` is a quota error, and `silent` is the private
+   * mode that accepts every write and keeps none. The second is the reason
+   * `SaveStore.setText` reads the value back instead of trusting `setItem` to
+   * have thrown — a draft that silently failed to save is a level's worth of
+   * work gone with the tab.
+   */
+  refuse: 'throw' | 'silent' | null = null;
+
   getItem(k: string): string | null {
     return this.map.has(k) ? (this.map.get(k) as string) : null;
   }
 
   setItem(k: string, v: string): void {
+    if (this.refuse === 'throw') {
+      throw new Error('quota exceeded');
+    }
+    if (this.refuse === 'silent') {
+      return;
+    }
     this.map.set(k, v);
   }
 }

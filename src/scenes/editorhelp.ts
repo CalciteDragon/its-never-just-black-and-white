@@ -92,8 +92,8 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     entries: [
       { keys: 'N', text: 'RENAME: THE ID FIRST, WHICH IS THE FILENAME, THEN THE TITLE.' },
       { keys: 'ENTER', text: 'PLAYTEST. ESC IN PLAY COMES BACK WITH EVERY EDIT INTACT.' },
-      { keys: 'CTRL+S', text: 'EXPORT THE .JSON TO YOUR DOWNLOADS. A BUILT-IN EXPORTS AS A COPY.' },
-      { keys: 'AUTOSAVE', text: 'EVERY STROKE, TO LEVELS - CUSTOM LEVELS. DROP A .JSON THERE TO IMPORT.' },
+      { keys: 'CTRL+S', text: 'EXPORT THE .JSON. IF NOTHING DOWNLOADS, CTRL+SHIFT+S COPIES IT AS TEXT.' },
+      { keys: 'AUTOSAVE', text: 'EVERY STROKE, TO LEVELS - CUSTOM LEVELS. A BUILT-IN SAVES AS A COPY.' },
       // Two keys on one line: the panel has to fit the frame, and these are the
       // two entries an author needs least often.
       { keys: 'H AND M', text: 'THIS PANEL - THE BAR BUTTON OPENS IT TOO - AND MUTE.' },

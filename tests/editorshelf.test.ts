@@ -77,7 +77,7 @@ describe('the draft shelf', () => {
     writeDraft(h.save, rec('one'));
     writeDraft(h.save, rec('two'));
     writeDraft(h.save, rec('three'));
-    expect(renameDraft(h.save, 'two', rec('middle'))).toBe(true);
+    expect(renameDraft(h.save, 'two', rec('middle'))).toBe('ok');
     // In place: a rename that shuffled the rows would move every other level
     // under the cursor of whoever is looking at the picker.
     expect(listDrafts(h.save).map((d) => d.id)).toEqual(['one', 'middle', 'three']);
@@ -88,9 +88,52 @@ describe('the draft shelf', () => {
     const h = fakeGame();
     writeDraft(h.save, rec('one'));
     writeDraft(h.save, rec('two'));
-    expect(renameDraft(h.save, 'one', rec('two'))).toBe(false);
+    expect(renameDraft(h.save, 'one', rec('two'))).toBe('taken');
     expect(listDrafts(h.save).map((d) => d.id)).toEqual(['one', 'two']);
     expect(readDraft(h.save, 'one')?.id).toBe('one');
+  });
+
+  // --- Storage that says no. The bug this guards: a draft that did not save,
+  // and nothing anywhere saying so. ---
+
+  it('REPORTS a write the browser refused, in both of the shapes a browser refuses one', () => {
+    for (const refuse of ['throw', 'silent'] as const) {
+      const h = fakeGame();
+      h.storage.refuse = refuse;
+      expect(writeDraft(h.save, rec('cellar')), refuse).toBe(false);
+      // And nothing is half-written: no record, and no id on the index for a
+      // record that is not there.
+      expect(listDrafts(h.save), refuse).toEqual([]);
+    }
+  });
+
+  it('reports a refused write even when only the INDEX fails, so no draft is invisible', () => {
+    const h = fakeGame();
+    // The record lands, the index does not: without the check this is a level
+    // that exists in storage and appears on no screen, which from the author's
+    // side is indistinguishable from lost.
+    let writes = 0;
+    const real = h.storage.setItem.bind(h.storage);
+    h.storage.setItem = (k: string, v: string): void => {
+      if (++writes > 1) {
+        return;
+      }
+      real(k, v);
+    };
+    expect(writeDraft(h.save, rec('cellar'))).toBe(false);
+  });
+
+  it('a rename that storage refuses leaves the draft READABLE UNDER ITS OLD ID', () => {
+    const h = fakeGame();
+    writeDraft(h.save, rec('one'));
+    h.storage.refuse = 'silent';
+    expect(renameDraft(h.save, 'one', rec('two'))).toBe('failed');
+    h.storage.refuse = null;
+    // The old order blanked the source first, so a refusal in the middle
+    // deleted the level outright. Now the source is blanked last and only once
+    // both other writes have stuck.
+    expect(readDraft(h.save, 'one')?.name).toBe(rec('one').name);
+    expect(listDrafts(h.save).map((d) => d.id)).toEqual(['one']);
   });
 
   it('deletes one without disturbing the others', () => {

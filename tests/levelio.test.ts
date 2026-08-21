@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { FALLBACK_GLYPH, glyphFor } from '../src/engine/font';
 import {
   buildLevelPayload,
+  copyLevelToClipboard,
   exportLevel,
   FileDropbox,
   isValidLevelId,
@@ -141,6 +142,55 @@ describe('buildLevelPayload', () => {
     );
     // Nothing but id/name/rows reaches the file, whatever the caller passes.
     expect(Object.keys(JSON.parse(text) as object)).toEqual(['id', 'name', 'rows']);
+  });
+});
+
+describe('copyLevelToClipboard, the route an author takes when no file arrived', () => {
+  // A browser can refuse to start a download without telling the page, and an
+  // anchor click reports nothing either way. So the second route cannot be a
+  // fallback that waits for the first to admit failure — it has to be a key.
+  it('puts exactly the file bytes on the clipboard, and never starts a download', async () => {
+    const copied: string[] = [];
+    const calls: DownloadCall[] = [];
+    const out = await copyLevelToClipboard(payload(), {
+      download: fakeDownload(true, calls),
+      storage: new FakeStorage(),
+      clipboard: (t) => {
+        copied.push(t);
+        return Promise.resolve();
+      },
+    });
+
+    expect(out).toMatchObject({ ok: true, transport: 'clipboard' });
+    expectRenderable(out.message);
+    expect(out.message).toContain('02-TEST-BED.JSON');
+    expect(copied).toEqual([buildLevelPayload(payload())]);
+    expect(calls).toEqual([]);
+  });
+
+  it('falls back to storage, and then says plainly that it failed', async () => {
+    const storage = new FakeStorage();
+    const refuse = (): Promise<void> => Promise.reject(new Error('no gesture'));
+    const stored = await copyLevelToClipboard(payload(), { storage, clipboard: refuse });
+    expect(stored).toMatchObject({ ok: true, transport: 'storage' });
+    expect(storage.getItem(SAVE_KEYS.editorDraft)).toBe(buildLevelPayload(payload()));
+
+    const sealed: StorageLike = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error('quota exceeded');
+      },
+    };
+    const nothing = await copyLevelToClipboard(payload(), { storage: sealed, clipboard: refuse });
+    expect(nothing.ok).toBe(false);
+    expectRenderable(nothing.message);
+    expect(nothing.message).toContain('CTRL+S');
+  });
+
+  it('refuses a bad id, like every other route out of the editor', async () => {
+    const out = await copyLevelToClipboard({ ...payload(), id: '../evil' });
+    expect(out.ok).toBe(false);
+    expect(out.message).toContain('BAD ID');
   });
 });
 

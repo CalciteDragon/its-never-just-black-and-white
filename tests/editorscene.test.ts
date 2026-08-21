@@ -26,7 +26,7 @@ import { EditorSelectScene } from '../src/scenes/editorselect';
 import { PlayScene } from '../src/scenes/play';
 import { LEVELS } from '../src/levels/index';
 import { levelRows, parseLevel, validateLevel } from '../src/world/level';
-import { fakeGame, step, tap } from './harness';
+import { click, fakeGame, step, tap } from './harness';
 import type { Harness } from './harness';
 
 /** A 10x5 stage, small enough to sit whole in the frame at either zoom. */
@@ -1261,3 +1261,77 @@ describe('a selection that outlives what it selected', () => {
   });
 });
 
+/**
+ * The guards on the two ways an author loses a level: an autosave that did not
+ * happen, and an export that did not arrive. Both used to fail in silence, and
+ * silence is the whole bug — the editor kept reading exactly as it does when
+ * everything works.
+ */
+describe('the editor when saving fails', () => {
+  /** Hold Ctrl for one tap, the way the shortcut actually arrives. */
+  function ctrlTap(h: Harness, scene: EditorScene, code: string, shift = false): void {
+    h.input.onKey('ControlLeft', true);
+    if (shift) {
+      h.input.onKey('ShiftLeft', true);
+    }
+    tap(h, scene, code);
+    h.input.onKey('ControlLeft', false);
+    if (shift) {
+      h.input.onKey('ShiftLeft', false);
+    }
+  }
+
+  it('SAYS SO when the browser refuses the draft, rather than painting on as if kept', () => {
+    for (const refuse of ['throw', 'silent'] as const) {
+      const { h, scene } = open();
+      h.storage.refuse = refuse;
+      click(h, scene, ...cellCentre(scene, 5, 2));
+      expect(scene.state.saveFailed, refuse).toBe(true);
+      expect(scene.state.status, refuse).toContain('NOT SAVED');
+      // And it names the way out, because the level is still in this tab and
+      // Ctrl+S is the only act that can get it out of one.
+      expect(scene.state.status, refuse).toContain('CTRL+S');
+      expect(h.audio.calls, refuse).toContain('sfx:death');
+    }
+  });
+
+  it('clears the warning once a write sticks again', () => {
+    const { h, scene } = open();
+    h.storage.refuse = 'silent';
+    click(h, scene, ...cellCentre(scene, 5, 2));
+    expect(scene.state.saveFailed).toBe(true);
+    h.storage.refuse = null;
+    click(h, scene, ...cellCentre(scene, 6, 2));
+    expect(scene.state.saveFailed).toBe(false);
+    expect(readDraft(h.game.save, 'test-level')?.rows[2]).toContain('#');
+  });
+
+  it('EXPORTS FROM THE HELP PANEL, which used to swallow Ctrl+S whole', () => {
+    const { h, scene } = open();
+    tap(h, scene, 'KeyH');
+    expect(scene.state.mode).toBe('help');
+    ctrlTap(h, scene, 'KeyS');
+    // The panel closes and the export runs: no file arrives under node, but the
+    // status line proves the key was READ, which is what it never was.
+    expect(scene.state.mode).toBe('paint');
+    expect(scene.state.status).toBe('EXPORTING...');
+  });
+
+  it('does not type an S into an open field, and says which key ends it', () => {
+    const { h, scene } = open();
+    tap(h, scene, 'KeyN');
+    const buffer = scene.state.buffer;
+    ctrlTap(h, scene, 'KeyS');
+    // The old behaviour: no export, no message, and an "s" appended to the id.
+    expect(scene.state.buffer).toBe(buffer);
+    expect(scene.state.mode).toBe('id');
+    expect(scene.state.status).toContain('ENTER');
+    expect(scene.state.status).toContain('ESC');
+  });
+
+  it('offers the clipboard as a deliberate second route, for a download that never lands', () => {
+    const { h, scene } = open();
+    ctrlTap(h, scene, 'KeyS', true);
+    expect(scene.state.status).toBe('COPYING...');
+  });
+});

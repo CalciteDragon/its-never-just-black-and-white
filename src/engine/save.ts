@@ -127,11 +127,28 @@ export class SaveStore {
     }
   }
 
-  setText(key: string, value: string): void {
+  /**
+   * Reports whether the value actually stuck, and **reads it back to find
+   * out**. Every other write here is best-effort because losing a best time
+   * costs a number; this one carries the editor's autosave, and a draft that
+   * silently failed to save is a level's worth of work gone with the tab.
+   *
+   * The read-back is not paranoia about `setItem` throwing — that is the easy
+   * half, and it is caught below. It is the other half: a quota-exceeded write
+   * in some browsers, and a write in some private modes, resolves without
+   * throwing and stores nothing. The only way to know a draft is on the shelf
+   * is to ask the shelf.
+   */
+  setText(key: string, value: string): boolean {
     try {
       this.storage.setItem(key, value);
     } catch {
-      // Best-effort, like every other write here.
+      return false;
+    }
+    try {
+      return this.storage.getItem(key) === value;
+    } catch {
+      return false;
     }
   }
 

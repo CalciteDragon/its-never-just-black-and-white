@@ -55,7 +55,7 @@ import { draftExists, renameDraft, uniqueDraftId, writeDraft } from '../editor/d
 import { zoomLabel, zoomRange } from '../editor/zoom';
 import { measureText } from '../engine/font';
 import { MOUSE_LEFT, MOUSE_MIDDLE, MOUSE_RIGHT } from '../engine/input';
-import { exportLevel } from '../engine/levelio';
+import { copyLevelToClipboard, exportLevel } from '../engine/levelio';
 import { LEVEL_ID_PATTERN } from '../engine/levelio';
 import { palette } from '../engine/palette';
 import type { Renderer } from '../engine/renderer';
@@ -139,6 +139,14 @@ const HELP_LABEL = 'CONTROLS AND TOOLS  (H)';
 /** `Digit1`…`Digit8`, in palette order. */
 const DIGIT_CODES: readonly string[] = GRID_CHARS.map((_, i) => `Digit${i + 1}`);
 
+/**
+ * What the status line says when the shelf refuses the draft. It names the way
+ * out rather than only the problem: the level is still in this tab's memory,
+ * and Ctrl+S is the one act that can get it somewhere the tab cannot take it.
+ * Exactly 70 characters, which is what the status line fits before truncating.
+ */
+const DRAFT_SAVE_FAILED = 'NOT SAVED! BROWSER STORAGE REFUSED IT. PRESS CTRL+S TO EXPORT THE FILE';
+
 /** Longest line the validation panel can show at scale 1 before it clips. */
 const PANEL_COLS = 74;
 /** How many errors and warnings the panel lists before saying "and N more". */
@@ -192,6 +200,13 @@ export class EditorScene implements Scene {
   private readonly copyOf: string | null;
   /** The id the draft is filed under. Moves with the id, via `renameDraft`. */
   private draftKey: string;
+  /**
+   * Is the autosave currently NOT keeping this level? Sticky, and printed on
+   * the header rather than only on the status line, because the status line is
+   * the last thing that happened and this is a standing fact about the session:
+   * every stroke from here is being drawn into memory and nowhere else.
+   */
+  private saveFailed = false;
 
   constructor(init?: EditorInit) {
     this.id = init?.id ?? 'untitled';
@@ -233,8 +248,10 @@ export class EditorScene implements Scene {
     errors: readonly string[];
     warnings: readonly string[];
     status: string;
+    saveFailed: boolean;
   } {
     return {
+      saveFailed: this.saveFailed,
       mode: this.mode,
       id: this.id,
       name: this.name,
@@ -255,6 +272,16 @@ export class EditorScene implements Scene {
 
   update(dt: number, game: Game): void {
     const input = game.input;
+    // EXPORT FIRST, ahead of the modal dispatch, because it is the one key an
+    // author presses when they want the level OUT of this browser — and the
+    // panel and the text fields below both return before `updateKeys` ever sees
+    // it. Ctrl+S with a field open used to do nothing whatever except type an
+    // "s" into the field, which is the worst of all answers: no file, no
+    // message, and a corrupted id.
+    if (input.ctrlDown && input.codePressed('KeyS')) {
+      this.exportShortcut(game);
+      return;
+    }
     // The panel and the text fields FIRST and unconditionally, because they
     // swallow everything — including `Escape`, which means four different
     // things across four scenes and must be read by exactly one reader in each.
@@ -314,9 +341,8 @@ export class EditorScene implements Scene {
         this.selection = null;
         this.afterEdit(game, this.grid.redo() ? 'REDO' : 'NOTHING TO REDO');
       }
-      if (input.codePressed('KeyS')) {
-        this.exportFile(game);
-      }
+      // Ctrl+S is NOT here: `update` takes it before the modal dispatch, so it
+      // works from the help panel too. A second reader here would double-fire.
       return;
     }
     for (let i = 0; i < DIGIT_CODES.length; i++) {
@@ -493,7 +519,11 @@ export class EditorScene implements Scene {
         this.buffer = this.buffer.slice(0, -1);
         continue;
       }
-      const ch = this.charForCode(code);
+      // A shortcut is not a keystroke. Ctrl+Z in an open field used to append a
+      // "z" to the id, and Ctrl+S an "s" — the modifier is invisible in the
+      // buffer, so the author sees a letter they did not type and an export
+      // that never happened.
+      const ch = game.input.ctrlDown ? null : this.charForCode(code);
       if (ch !== null) {
         this.buffer += ch;
       }
@@ -835,9 +865,13 @@ export class EditorScene implements Scene {
     // about the level: a built-in was opened, and it will be saved BESIDE the
     // level it came from, never over it.
     const copy = this.copyOf === null ? '' : `   COPY OF ${this.copyOf.toUpperCase()}`;
+    // And the one thing worth more than any of it: whether what is on screen is
+    // being kept. It rides on the header because the header is always there —
+    // the status line is one keystroke from saying something else.
+    const unsaved = this.saveFailed ? '   ! NOT SAVED - CTRL+S' : '';
     return (
       `${this.grid.w} X ${this.grid.h}   ZOOM ${zoomLabel(this.zoom)}   ` +
-      `UNDO ${this.grid.undoDepth}   ${this.tool.toUpperCase()}${copy}`
+      `UNDO ${this.grid.undoDepth}   ${this.tool.toUpperCase()}${copy}${unsaved}`
     );
   }
 
@@ -923,22 +957,58 @@ export class EditorScene implements Scene {
    */
   private writeDraft(game: Game): void {
     if (isBuiltinId(this.id)) {
+      // Autosave is OFF, and silence here is exactly the shape of "my level did
+      // not save": nothing on the shelf may shadow a shipped level, so the
+      // stroke that just happened is being kept nowhere at all. Unreachable by
+      // the ordinary route, which is why it has to announce itself if it ever
+      // becomes reachable rather than quietly dropping the session's work.
+      this.reportSaveFailure(game, 'NOT AUTOSAVING: THAT ID IS A BUILT-IN. PRESS N FOR ANOTHER');
       return;
     }
     const rec = { id: this.id, name: this.name, rows: this.grid.rows };
     if (this.draftKey !== this.id) {
-      if (!renameDraft(game.save, this.draftKey, rec)) {
+      const moved = renameDraft(game.save, this.draftKey, rec);
+      if (moved === 'taken') {
         // `commitTextEntry` refuses an id another draft holds, so this is only
-        // reachable if a second tab claimed it in between. The work is safe
-        // under the old key, and the id goes back to matching where it is.
+        // reachable if a second tab claimed it in between. The id goes back to
+        // matching where the work lives — and the work is then written THERE,
+        // rather than the message being taken on trust.
         this.id = this.draftKey;
+        if (!writeDraft(game.save, { ...rec, id: this.draftKey })) {
+          this.reportSaveFailure(game, DRAFT_SAVE_FAILED);
+          return;
+        }
+        this.saveFailed = false;
         this.status = `THAT ID IS ALREADY A DRAFT: STILL SAVED AS ${this.draftKey.toUpperCase()}`;
         return;
       }
+      if (moved === 'failed') {
+        this.reportSaveFailure(game, DRAFT_SAVE_FAILED);
+        return;
+      }
       this.draftKey = this.id;
+      this.saveFailed = false;
       return;
     }
-    writeDraft(game.save, rec);
+    if (!writeDraft(game.save, rec)) {
+      this.reportSaveFailure(game, DRAFT_SAVE_FAILED);
+      return;
+    }
+    this.saveFailed = false;
+  }
+
+  /**
+   * The autosave did not happen. Say so on the status line AND on the header,
+   * and make a noise the first time: a warning an author reads once and then
+   * paints over is a warning they will not have when they close the tab.
+   */
+  private reportSaveFailure(game: Game, message: string): void {
+    this.status = message;
+    if (this.saveFailed) {
+      return;
+    }
+    this.saveFailed = true;
+    game.audio.play('death');
   }
 
   private playtest(game: Game): void {
@@ -965,7 +1035,7 @@ export class EditorScene implements Scene {
    * how does this level leave this browser — to be committed to `src/levels/`,
    * or sent to somebody who drops it back onto an import row.
    */
-  private exportFile(game: Game): void {
+  private exportFile(game: Game, toClipboard = false): void {
     this.revalidate();
     // The copy rule, enforced where it bites. Unreachable by the ordinary route
     // — a built-in is opened under a copy's id and the id field refuses to type
@@ -978,14 +1048,38 @@ export class EditorScene implements Scene {
       this.status = `CANNOT EXPORT: ${this.errors[0]}`;
       return;
     }
-    this.status = 'EXPORTING...';
+    this.status = toClipboard ? 'COPYING...' : 'EXPORTING...';
     const payload = { id: this.id, name: this.name, rows: this.grid.rows };
-    // `exportLevel` never rejects — it reports which transport it took — so the
-    // only thing to do with the promise is show what it says.
-    void exportLevel(payload).then((outcome) => {
+    // Neither one rejects — both report which transport they took — so the only
+    // thing to do with the promise is show what it says.
+    const run = toClipboard ? copyLevelToClipboard(payload) : exportLevel(payload);
+    void run.then((outcome) => {
       this.status = outcome.message;
       game.audio.play(outcome.ok ? 'goal' : 'death');
     });
+  }
+
+  /**
+   * Ctrl+S from ANY mode, and Ctrl+Shift+S for the copy.
+   *
+   * The second one is the guard on a download that never arrives. A browser can
+   * refuse to start one without telling the page — a blocked automatic
+   * download, a full or unwritable downloads folder — and `exportLevel` cannot
+   * tell that from a download that landed, because a click on an anchor reports
+   * nothing either way. So the author gets a second route they can take
+   * deliberately, rather than a message insisting the file is somewhere it is
+   * not.
+   */
+  private exportShortcut(game: Game): void {
+    if (this.mode === 'id' || this.mode === 'name' || this.mode === 'size') {
+      // The buffer is not the level's id yet, and exporting mid-rename would
+      // write a file named after the id being replaced. Say which key ends the
+      // field instead of exporting something the author did not ask for.
+      this.status = 'FINISH THE FIELD FIRST: ENTER KEEPS IT, ESC CANCELS';
+      return;
+    }
+    this.mode = 'paint'; // the help panel closes, like it does on any other key
+    this.exportFile(game, game.input.shiftDown);
   }
 
   // --- Rendering. The grid owns the whole frame; the panels sit over it. ---

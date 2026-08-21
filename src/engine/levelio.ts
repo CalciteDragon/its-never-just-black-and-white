@@ -152,6 +152,14 @@ function detectStorage(): StorageLike | null {
  * The anchor goes into the document before the click and out after it: Firefox
  * ignores a click on an element that is not in the tree, which is the kind of
  * difference that only ever shows up in the browser nobody tested in.
+ *
+ * **`true` means the download was STARTED, not that a file arrived.** Nothing
+ * here can tell the difference: `click()` reports nothing, and a browser that
+ * blocks the download (an \"automatic downloads\" permission set to block, a
+ * downloads folder that is full or unwritable, an extension in the way) does so
+ * silently and after this function has returned. That is why the message the
+ * caller prints says CHECK IT ARRIVED rather than claiming the file is there,
+ * and why `copyLevelToClipboard` exists as a route an author can take instead.
  */
 export function detectDownload(): DownloadLike | null {
   try {
@@ -299,7 +307,7 @@ export async function exportLevel(p: LevelPayload, deps: LevelIoDeps = {}): Prom
   const download = deps.download ?? detectDownload();
 
   if (download !== null && tryDownload(download, file, body)) {
-    return { ok: true, transport: 'download', message: `EXPORTED ${shown} TO YOUR DOWNLOADS` };
+    return { ok: true, transport: 'download', message: `SENT ${shown} TO YOUR DOWNLOADS - CHECK IT ARRIVED` };
   }
 
   if (await copyToClipboard(deps.clipboard ?? detectClipboard(), body)) {
@@ -322,6 +330,41 @@ export async function exportLevel(p: LevelPayload, deps: LevelIoDeps = {}): Prom
     ok: false,
     transport: 'download',
     message: 'EXPORT FAILED: NO DOWNLOAD, NO CLIPBOARD. THE DRAFT IS STILL SAVED.',
+  };
+}
+
+/**
+ * The same level, onto the clipboard, because the author asked for the
+ * clipboard. The guard on a download that never arrived: a browser can refuse
+ * to start one without saying so and without any way for the page to find out,
+ * so the second route has to be one a person can choose rather than a fallback
+ * that only fires when the first route admits it failed.
+ *
+ * Never rejects, like `exportLevel`, and reports the same shape.
+ */
+export async function copyLevelToClipboard(
+  p: LevelPayload,
+  deps: LevelIoDeps = {},
+): Promise<ExportOutcome> {
+  if (!isValidLevelId(p.id)) {
+    return { ok: false, transport: 'clipboard', message: BAD_ID_MESSAGE };
+  }
+  const body = buildLevelPayload(p);
+  const shown = levelFileName(p.id).toUpperCase();
+  if (await copyToClipboard(deps.clipboard ?? detectClipboard(), body)) {
+    return { ok: true, transport: 'clipboard', message: `JSON COPIED - PASTE IT INTO ${shown}` };
+  }
+  if (writeFallbackCopy(deps.storage ?? detectStorage(), body)) {
+    return {
+      ok: true,
+      transport: 'storage',
+      message: `NO CLIPBOARD HERE - JSON IS IN ${SAVE_KEYS.editorDraft.toUpperCase()}`,
+    };
+  }
+  return {
+    ok: false,
+    transport: 'clipboard',
+    message: 'COPY FAILED: THIS BROWSER REFUSED THE CLIPBOARD. TRY CTRL+S.',
   };
 }
 
