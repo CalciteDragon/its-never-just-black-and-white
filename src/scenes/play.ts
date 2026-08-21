@@ -41,7 +41,7 @@ import {
   VIEW_W,
 } from '../constants';
 import type { Input } from '../engine/input';
-import { palette } from '../engine/palette';
+import { INVERT_MASK, palette } from '../engine/palette';
 import type { Phase } from '../engine/palette';
 import { ParticleSystem, spawnRing, spawnStream } from '../engine/particles';
 import type { Renderer } from '../engine/renderer';
@@ -797,8 +797,13 @@ export class PlayScene implements Scene {
   }
 
   private renderHud(r: Renderer, game: Game): void {
-    r.text(this.level.name, 16, 16, palette.ink, 2);
-    r.text(formatTime(this.timeSec * 1000), 16, 44, palette.ink, 2);
+    // Like particles, the run HUD is defined by the frame beneath it rather
+    // than by the current palette phase. A white operand under `difference`
+    // makes each glyph invert whatever level geometry it crosses.
+    r.ctx.globalCompositeOperation = 'difference';
+    r.text(this.level.name, 16, 16, INVERT_MASK, 2);
+    r.text(formatTime(this.timeSec * 1000), 16, 44, INVERT_MASK, 2);
+    r.ctx.globalCompositeOperation = 'source-over';
     if (game.audio.muted) {
       r.text('MUTED', 16, VIEW_H - 24, palette.ink);
     }
