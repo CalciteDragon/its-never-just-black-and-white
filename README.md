@@ -111,4 +111,4 @@ docs/              design doc, build plan, architecture and physics deep-dives
 
 ## License
 
-[MIT](LICENSE)
+This project is **source-available, not open source**. You may view and study the source, but reuse, modification, redistribution, incorporation into another project, and commercial use require prior written permission. See [LICENSE](LICENSE) for the full terms.
