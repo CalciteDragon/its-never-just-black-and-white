@@ -27,6 +27,18 @@ const ITEMS: readonly string[] = ['PLAY', 'LEVELS', 'EDITOR'];
  */
 const FOOTER: readonly Action[] = ['jump', 'flip', 'restart', 'pause', 'mute', 'fullscreen'];
 
+/**
+ * Photosensitivity warning. The flip inverts the whole screen in one frame and
+ * can be spammed as fast as the player can press the key, which is exactly the
+ * full-field luminance flicker that triggers seizures — so this is on the front
+ * door, static (a flashing warning about flashing would be a joke at the
+ * expense of the people it is for), and shown before anything can be started.
+ */
+const WARNING: readonly string[] = [
+  'PHOTOSENSITIVITY WARNING: FLIPPING INVERTS THE',
+  'ENTIRE SCREEN AND MAY CAUSE RAPID FULL-FIELD FLASHING.',
+];
+
 /** e.g. `SPACE FLIP · R RESTART`. Derived, so it cannot drift from BINDINGS. */
 export function controlsFooter(): string {
   return FOOTER.map((a) => `${bindingLabel(a)} ${a.toUpperCase()}`).join('  ·  ');
@@ -95,6 +107,10 @@ export class TitleScene implements Scene {
       // in which nothing at all looks selected.
       const cursor = selected && Math.floor(this.t * 2) % 2 === 0 ? '>' : ' ';
       r.textCentered(`${cursor} ${ITEMS[i]}`, VIEW_W / 2, 270 + i * 50, palette.ink, 3);
+    }
+
+    for (let i = 0; i < WARNING.length; i++) {
+      r.textCentered(WARNING[i], VIEW_W / 2, VIEW_H - 90 + i * 14, palette.ink);
     }
 
     r.textCentered(controlsFooter(), VIEW_W / 2, VIEW_H - 40, palette.ink);
