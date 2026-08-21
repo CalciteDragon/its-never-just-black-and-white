@@ -64,7 +64,7 @@ export const CREDITS_SCRIPT: readonly CreditStanza[] = [
   { scale: 5, lines: ["IT'S NEVER JUST", "BLACK AND WHITE"] },
   { scale: 3, lines: ["NOTHING EVER HAS", "JUST TWO SIDES"] },
   { scale: 3, lines: ["MADE BY TYLER HAWTHORN", "AKA CALCITE"] },
-  { scale: 2, lines: ["MADE WITH VITE + NODE"] },
+  { scale: 2, lines: ["MADE WITH VITE + TYPESCRIPT"] },
   { scale: 4, lines: ["THANKS FOR PLAYING"] },
 ];
 
