@@ -12,7 +12,7 @@ import type { DownloadLike, LevelPayload } from '../src/engine/levelio';
 import { SAVE_KEYS } from '../src/engine/save';
 import type { StorageLike } from '../src/engine/save';
 import { parseLevel, serializeLevel } from '../src/world/level';
-import firstSteps from '../src/levels/01-first-steps.json';
+import whiteAndBlack from '../src/levels/01-white-and-black.json';
 
 class FakeStorage implements StorageLike {
   readonly map = new Map<string, string>();
@@ -125,7 +125,7 @@ describe('buildLevelPayload', () => {
   });
 
   it('reproduces the shipped level file byte for byte', () => {
-    const text = buildLevelPayload(firstSteps);
+    const text = buildLevelPayload(whiteAndBlack);
     const parsed = parseLevel(JSON.parse(text));
     if (!parsed.ok) {
       throw new Error(parsed.errors.join('\n'));

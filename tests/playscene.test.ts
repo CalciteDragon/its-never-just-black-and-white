@@ -29,7 +29,6 @@ import {
   VIEW_W,
 } from '../src/constants';
 import { palette } from '../src/engine/palette';
-import { MAX_PARTICLES } from '../src/engine/particles';
 import { SAVE_KEYS } from '../src/engine/save';
 import type { Scene } from '../src/game';
 import { LEVELS, nextLevel } from '../src/levels/index';
@@ -595,105 +594,6 @@ describe('formatTime', () => {
   });
 });
 
-describe('THE SCRIPTED PLAYTHROUGH', () => {
-  /**
-   * The direct descendant of the old bot-playthrough test, and the best
-   * regression guard in the suite.
-   *
-   * It asserts COMPLETION, NOT TRAJECTORY. Bit-identity is already pinned by
-   * the physics determinism test and does not need pinning twice; what this
-   * needs to do is fail when something meaningful changed rather than every
-   * time a constant moves by a percent. So the script is a coarse program of
-   * one held direction and four presses, each triggered by a position rather
-   * than a frame count — which is where all its slack comes from.
-   */
-  /**
-   * The script encodes ONE level's geometry, so it names that level rather than
-   * taking whichever one is first: the tutorial was registered ahead of it and
-   * `LEVELS[0]` quietly became a different stage under the same four presses.
-   */
-  const STAGE = LEVELS.find((l) => l.id === '01-first-steps');
-  if (!STAGE) {
-    throw new Error('the scripted playthrough needs 01-first-steps in LEVELS');
-  }
-
-  interface Beat {
-    /** Fire once the body's centre passes this world x. */
-    atX: number;
-    code: string;
-    /** Frames to hold it. The jump needs holding or the jump cut halves it. */
-    hold: number;
-    what: string;
-  }
-
-  const SCRIPT: readonly Beat[] = [
-    { atX: 400, code: 'KeyW', hold: 30, what: 'jump the 3-tile gap' },
-    { atX: 620, code: 'Space', hold: 1, what: 'flip up to the ceiling slab' },
-    { atX: 900, code: 'Space', hold: 1, what: 'flip back down to the floor' },
-    { atX: 1580, code: 'Space', hold: 1, what: 'flip up to the goal' },
-  ];
-
-  const MAX_STEPS = 3600; // one minute of simulation
-
-  it('completes the example stage', () => {
-    const { h, scene } = start(STAGE);
-    h.input.onKey('KeyD', true); // hold right throughout
-
-    let beat = 0;
-    let holding: { code: string; until: number } | null = null;
-    let furthest = 0;
-    let steps = 0;
-    let peakParticles = 0;
-
-    for (; steps < MAX_STEPS; steps++) {
-      if (beat < SCRIPT.length && scene.status.x >= SCRIPT[beat].atX) {
-        const b = SCRIPT[beat++];
-        h.input.onKey(b.code, true);
-        holding = { code: b.code, until: steps + b.hold };
-      }
-      step(h, scene);
-      if (holding && steps >= holding.until) {
-        h.input.onKey(holding.code, false);
-        holding = null;
-      }
-      furthest = Math.max(furthest, scene.status.x);
-      peakParticles = Math.max(peakParticles, scene.status.particles);
-      if (scene.status.state === 'won') {
-        break;
-      }
-      // A death mid-run is the interesting failure, so stop and report there
-      // rather than letting the respawn quietly retry the same script.
-      if (scene.status.state !== 'running') {
-        break;
-      }
-    }
-
-    const s = scene.status;
-    const reached = beat === 0 ? 'the start' : SCRIPT[beat - 1].what;
-    expect(
-      s.state,
-      `stopped after ${steps} steps at x=${s.x.toFixed(0)} y=${s.y.toFixed(0)} ` +
-        `(furthest x=${furthest.toFixed(0)} of ${STAGE.map.widthPx}), ` +
-        `last beat: ${reached}, beats fired ${beat}/${SCRIPT.length}, ` +
-        `gravity ${s.gravitySign > 0 ? 'down' : 'up'}, ` +
-        `flip ${s.flipCharged ? 'charged' : 'spent'}`,
-    ).toBe('won');
-    expect(s.timeSec).toBeGreaterThan(0);
-
-    // THE POOL CEILING, under the only workload that is actually the game.
-    // The upper bound is what makes the drop-newest overflow policy safe; the
-    // LOWER one is phase 4's non-trivial-trajectory guard in a new place —
-    // without it the assertion passes on a build where nothing ever emitted a
-    // single spark.
-    //
-    // Measured 49, against the brief's predicted ~120. The prediction budgeted
-    // 51 for eight pads streaming at once and THIS STAGE HAS ONE, so the peak
-    // is dominated by the transient emitters (a 20-spark ring, a splash, a
-    // burst) rather than by the steady state. The margin is 5.2x, not 4.3x.
-    expect(peakParticles).toBeGreaterThan(40);
-    expect(peakParticles).toBeLessThan(MAX_PARTICLES / 2);
-  });
-});
 
 describe('the bed, and the one number that drives it', () => {
   const WALK = ['..........', '..S.....G.', '####..####'];

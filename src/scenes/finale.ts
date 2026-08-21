@@ -43,7 +43,7 @@ import { spectrum } from '../engine/palette';
 import type { Renderer } from '../engine/renderer';
 
 /** The level whose goal is the colour ending. */
-export const FINALE_LEVEL_ID = 'black-and-white';
+export const FINALE_LEVEL_ID = '19-black-and-white';
 
 /** 0 below `a`, 1 above `b`, smooth in between. No overshoot, unlike a cubic. */
 function smoothstep(a: number, b: number, x: number): number {

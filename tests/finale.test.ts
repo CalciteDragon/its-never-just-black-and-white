@@ -99,7 +99,7 @@ const SPAN = TILE * FINALE_GOAL_TILES;
 
 describe('the finale goal', () => {
   it('is keyed to the last level', () => {
-    expect(FINALE_LEVEL_ID).toBe('black-and-white');
+    expect(FINALE_LEVEL_ID).toBe('19-black-and-white');
   });
 
   it('draws the halo and every spiral cell, and nothing else', () => {
